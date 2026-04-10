@@ -126,7 +126,7 @@ export function SessionHeader({
         <input
           ref={fileInputRef}
           type="file"
-          accept=".xrk,.XRK"
+          accept=".xrk,.xrz,.XRK,.XRZ"
           className="hidden"
           onChange={handleFileChange}
           data-testid="input-file-hidden"

@@ -8,12 +8,10 @@ import io
 import csv
 import math
 import os
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 from fastapi import FastAPI, UploadFile, File, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -115,10 +113,20 @@ def _extract_session_info(log, filename: str) -> dict:
             if last_tc < 36_000_000 and last_tc > duration_ms:
                 duration_ms = last_tc
 
+        # Compute sample rate from timecodes if available
+        sample_rate_hz = 0
+        if n_rows >= 2 and not name.lower().startswith("gps"):
+            df = table.to_pandas() if 'df' not in dir() or df is None else df
+            tcs = table.to_pandas()['timecodes']
+            dt = float(tcs.iloc[-1] - tcs.iloc[0])
+            if dt > 0:
+                sample_rate_hz = round((n_rows - 1) / (dt / 1000), 1)
+
         channels.append({
             "name": name,
             "units": cm["units"],
             "sampleCount": n_rows,
+            "sampleRateHz": sample_rate_hz,
             "color": CHART_COLORS[i % len(CHART_COLORS)],
             "index": i,
         })
@@ -274,7 +282,7 @@ async def pull_from_aim(background_tasks: BackgroundTasks):
             )
             downloaded.append(entry["filename"])
         except Exception as e:
-            downloaded.append({"filename": aim_s["filename"], "error": str(e)})
+            downloaded.append(f"{aim_s['filename']} (error: {e})")
 
     # Background: sync with Railway to push new sessions
     if downloaded:
@@ -335,6 +343,14 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
     dest.write_bytes(content)
 
     meta = info["metadata"]
+    # Check for duplicate
+    existing = session_store.find_by_filename(file.filename)
+    if existing:
+        state.session_id = existing["id"]
+        if background_tasks:
+            background_tasks.add_task(_background_sync)
+        return info
+
     entry = session_store.add_session(
         filename=file.filename,
         source="manual_upload",

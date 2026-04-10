@@ -27,9 +27,14 @@ def _get_device_ip() -> str:
     return load_settings().get("aim_device_ip", "10.0.0.1")
 
 
+def _get_device_port() -> int:
+    return load_settings().get("aim_device_port", 2000)
+
+
 def _get_base_url() -> str:
     ip = _get_device_ip()
-    return f"http://{ip}"
+    port = _get_device_port()
+    return f"http://{ip}:{port}"
 
 
 def is_aim_connected() -> bool:
