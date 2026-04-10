@@ -19,6 +19,8 @@ export interface TimeRange {
 
 export type AnalysisTab = 'stats' | 'histogram' | 'xyplot' | 'lapanalysis' | 'gps';
 
+export type ChartMode = 'separate' | 'overlay';
+
 export interface DerivedChannel {
   id: number;
   name: string;
@@ -53,6 +55,9 @@ export interface AppState {
 
   // Cursor navigation
   cursorTime: number | null; // seconds
+
+  // Chart display mode
+  chartMode: ChartMode;
 
   // UI state
   leftSidebarOpen: boolean;
@@ -127,6 +132,7 @@ export function useAppState() {
     xyXChannelId: null,
     xyYChannelId: null,
     cursorTime: null,
+    chartMode: 'separate',
     leftSidebarOpen: true,
     rightSidebarOpen: true,
     channelSearch: '',
@@ -213,6 +219,10 @@ export function useAppState() {
 
   const setShowOnlyWithData = useCallback((show: boolean) => {
     setState(prev => ({ ...prev, showOnlyWithData: show }));
+  }, []);
+
+  const setChartMode = useCallback((mode: ChartMode) => {
+    setState(prev => ({ ...prev, chartMode: mode }));
   }, []);
 
   const toggleLeftSidebar = useCallback(() => {
@@ -363,6 +373,7 @@ export function useAppState() {
     setAnalysisTab,
     setChannelSearch,
     setShowOnlyWithData,
+    setChartMode,
     toggleLeftSidebar,
     toggleRightSidebar,
     setHistogramChannel,
