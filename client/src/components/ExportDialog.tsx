@@ -29,10 +29,11 @@ export function ExportDialog({
 }: ExportDialogProps) {
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => {
-    // Default: select all channels with data
+    // Default: select all channels that have data in the file
     const ids = new Set<number>();
     session.channels.forEach((ch) => {
-      if ((session.samples.get(ch.index) || []).length > 0) {
+      const fileCount = ch.fileSampleCount ?? (session.samples.get(ch.index) || []).length;
+      if (fileCount > 0) {
         ids.add(ch.index);
       }
     });
@@ -45,8 +46,8 @@ export function ExportDialog({
     const list: ExportChannel[] = [];
 
     session.channels.forEach((ch) => {
-      const count = (session.samples.get(ch.index) || []).length;
-      if (count === 0) return; // skip empty
+      const count = ch.fileSampleCount ?? (session.samples.get(ch.index) || []).length;
+      if (count === 0) return;
       list.push({
         id: ch.index,
         name: ch.shortName,
@@ -182,22 +183,16 @@ export function ExportDialog({
             />
           </div>
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={selectAll}
-                className="flex items-center gap-1 px-2 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
-              >
-                <CheckSquare className="w-3 h-3" />
-                Select All
-              </button>
-              <button
-                onClick={deselectAll}
-                className="flex items-center gap-1 px-2 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
-              >
-                <Square className="w-3 h-3" />
-                Deselect All
-              </button>
-            </div>
+            <button
+              onClick={selectedCount === allChannels.length ? deselectAll : selectAll}
+              className="flex items-center gap-1 px-2 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
+            >
+              {selectedCount === allChannels.length ? (
+                <><Square className="w-3 h-3" /> Deselect All</>
+              ) : (
+                <><CheckSquare className="w-3 h-3" /> Select All</>
+              )}
+            </button>
             <span className="text-xs text-muted-foreground">
               {selectedCount} / {allChannels.length} selected
             </span>

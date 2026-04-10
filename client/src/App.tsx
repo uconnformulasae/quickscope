@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { uploadFile, fetchChannelData } from './lib/api';
+import { uploadFile, fetchChannelData, loadSession, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import type { DerivedChannel } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
@@ -9,7 +9,11 @@ import { AnalysisPanel } from './components/AnalysisPanel';
 import { SessionHeader } from './components/SessionHeader';
 import { DerivedChannelDialog } from './components/DerivedChannelDialog';
 import { ExportDialog } from './components/ExportDialog';
+import { SessionBrowser } from './components/SessionBrowser';
+import { SettingsDialog } from './components/SettingsDialog';
 import { Upload } from 'lucide-react';
+
+type View = 'browser' | 'analysis';
 
 export default function App() {
   const {
@@ -36,15 +40,100 @@ export default function App() {
     previewDerivedChannel,
   } = useAppState();
 
+  // View state
+  const [view, setView] = useState<View>('browser');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   // Dialog state
   const [derivedDialogOpen, setDerivedDialogOpen] = useState(false);
   const [editingDerived, setEditingDerived] = useState<DerivedChannel | undefined>(undefined);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
 
-  // Drag over state for empty chart area
+  // Drag over state for chart area
   const [isDragOver, setIsDragOver] = useState(false);
 
+  /** Build XRKSession from backend SessionInfo and switch to analysis view */
+  const buildAndSetSession = useCallback(async (info: SessionInfo, fileName: string) => {
+    const nameMap = new Map<string, number>();
+    for (const ch of info.channels) {
+      nameMap.set(ch.name, ch.index);
+    }
 
+    const channels = new Map<number, ChannelDef>();
+    for (const ch of info.channels) {
+      channels.set(ch.index, {
+        index: ch.index,
+        shortName: ch.name,
+        longName: ch.name,
+        sampleRateRaw: ch.sampleRateHz > 0 ? Math.round(1e6 / ch.sampleRateHz) : 0,
+        sampleRateHz: ch.sampleRateHz,
+        dataType: 0,
+        dataSize: 0,
+        decoderType: 0,
+        scale: 0,
+        offset: 0,
+        units: ch.units,
+        color: ch.color,
+        fileSampleCount: ch.sampleCount,
+      });
+    }
+
+    const channelsWithData = info.channels.filter(ch => ch.sampleCount > 0);
+    const firstFive = channelsWithData.slice(0, 5).map(ch => ch.name);
+
+    const samples = new Map<number, ChannelSample[]>();
+    for (const ch of info.channels) {
+      samples.set(ch.index, []);
+    }
+
+    if (firstFive.length > 0) {
+      setProgress({ stage: 'Loading channel data...', percent: 70 });
+      const dataMap = await fetchChannelData(firstFive);
+      dataMap.forEach((data, name) => {
+        const idx = nameMap.get(name);
+        if (idx !== undefined) {
+          const channelSamples: ChannelSample[] = data.timestamps.map((t: number, i: number) => ({
+            timestamp: t,
+            value: data.values[i],
+          }));
+          samples.set(idx, channelSamples);
+        }
+      });
+    }
+
+    const session: XRKSession = {
+      metadata: {
+        vehicle: info.metadata.vehicle || 'Unknown',
+        driver: info.metadata.driver || 'Unknown',
+        date: info.metadata.date || 'Unknown',
+        time: info.metadata.time || 'Unknown',
+        venue: info.metadata.venue || 'Unknown',
+        championship: info.metadata.championship || 'Unknown',
+        sessionType: info.metadata.sessionType || 'Unknown',
+      },
+      channels,
+      samples,
+      lapMarkers: [],
+      durationMs: info.durationMs,
+      totalSamples: info.totalSamples,
+    };
+
+    setSession(session, fileName);
+    setView('analysis');
+  }, [setSession, setProgress]);
+
+  /** Called when session browser loads a session */
+  const handleSessionLoaded = useCallback(async (info: SessionInfo, _sessionId: string, fileName: string) => {
+    setLoading(true);
+    setProgress({ stage: 'Building session...', percent: 50 });
+    try {
+      await buildAndSetSession(info, fileName);
+    } catch (err) {
+      setError(`Failed to load session: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [buildAndSetSession, setLoading, setProgress, setError]);
+
+  /** Called when user uploads a file from the analysis view header */
   const handleFileSelected = useCallback(async (file: File) => {
     setLoading(true);
     setProgress({ stage: 'Uploading to backend...', percent: 10 });
@@ -53,98 +142,31 @@ export default function App() {
     try {
       const info = await uploadFile(file);
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
-
-      // Build name→index map for lazy loading
-      const nameMap = new Map<string, number>();
-      for (const ch of info.channels) {
-        nameMap.set(ch.name, ch.index);
-      }
-
-      // Build channels Map for XRKSession
-      const channels = new Map<number, ChannelDef>();
-      for (const ch of info.channels) {
-        channels.set(ch.index, {
-          index: ch.index,
-          shortName: ch.name,
-          longName: ch.name,
-          sampleRateRaw: ch.sampleRateHz > 0 ? Math.round(1e6 / ch.sampleRateHz) : 0,
-          sampleRateHz: ch.sampleRateHz,
-          dataType: 0,
-          dataSize: 0,
-          decoderType: 0,
-          scale: 0,
-          offset: 0,
-          units: ch.units,
-          color: ch.color,
-        });
-      }
-
-      // Fetch data for the first 5 channels with data (for auto-activation)
-      const channelsWithData = info.channels.filter(ch => ch.sampleCount > 0);
-      const firstFive = channelsWithData.slice(0, 5).map(ch => ch.name);
-
-      const samples = new Map<number, ChannelSample[]>();
-      // Initialize all channels with empty arrays
-      for (const ch of info.channels) {
-        samples.set(ch.index, []);
-      }
-
-      if (firstFive.length > 0) {
-        setProgress({ stage: 'Loading channel data...', percent: 70 });
-        const dataMap = await fetchChannelData(firstFive);
-        dataMap.forEach((data, name) => {
-          const idx = nameMap.get(name);
-          if (idx !== undefined) {
-            const channelSamples: ChannelSample[] = data.timestamps.map((t: number, i: number) => ({
-              timestamp: t,
-              value: data.values[i],
-            }));
-            samples.set(idx, channelSamples);
-          }
-        });
-      }
-
-
-      const session: XRKSession = {
-        metadata: {
-          vehicle: info.metadata.vehicle || 'Unknown',
-          driver: info.metadata.driver || 'Unknown',
-          date: info.metadata.date || 'Unknown',
-          time: info.metadata.time || 'Unknown',
-          venue: info.metadata.venue || 'Unknown',
-          championship: info.metadata.championship || 'Unknown',
-          sessionType: info.metadata.sessionType || 'Unknown',
-        },
-        channels,
-        samples,
-        lapMarkers: [],
-        durationMs: info.durationMs,
-        totalSamples: info.totalSamples,
-      };
-
-      setSession(session, file.name);
+      await buildAndSetSession(info, file.name);
     } catch (err) {
       setError(`Failed to parse XRK file: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [setLoading, setProgress, setSession, setError]);
+  }, [setLoading, setProgress, buildAndSetSession, setError]);
+
+  const handleBackToBrowser = useCallback(() => {
+    clearSession();
+    setView('browser');
+  }, [clearSession]);
 
   // Lazy fetch channel data when a channel is activated
   const handleToggleChannel = useCallback(async (channelId: number, color: string) => {
-    // Check if this channel is already active → just deactivate
     const isActive = state.activeChannels.some(c => c.channelId === channelId);
     if (isActive) {
       toggleChannel(channelId, color);
       return;
     }
 
-    // Check if we already have data
     const existingSamples = state.session?.samples.get(channelId);
     if (existingSamples && existingSamples.length > 0) {
       toggleChannel(channelId, color);
       return;
     }
 
-    // Need to fetch data for this channel from the backend
     const channelDef = state.session?.channels.get(channelId);
     if (!channelDef) {
       toggleChannel(channelId, color);
@@ -159,7 +181,6 @@ export default function App() {
           timestamp: t,
           value: data.values[i],
         }));
-        // Update the session samples in place
         state.session.samples.set(channelId, channelSamples);
       }
     } catch (err) {
@@ -184,7 +205,6 @@ export default function App() {
     setEditingDerived(undefined);
   }, []);
 
-  // Navigate chart cursor to a timestamp (in ms). Adjusts view range if needed.
   const handleNavigateToTime = useCallback((timestampMs: number) => {
     if (!state.session) return;
     const durationMs = state.session.durationMs;
@@ -214,7 +234,7 @@ export default function App() {
     return addDerivedChannel(def);
   }, [editingDerived, addDerivedChannel, updateDerivedChannel]);
 
-  // Drag-and-drop handlers for the chart area (used when no file loaded and also general)
+  // Drag-and-drop handlers for the chart area
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -233,13 +253,27 @@ export default function App() {
     e.stopPropagation();
     setIsDragOver(false);
     const file = e.dataTransfer.files?.[0];
-    if (file && (file.name.toLowerCase().endsWith('.xrk'))) {
+    if (file && (file.name.toLowerCase().endsWith('.xrk') || file.name.toLowerCase().endsWith('.xrz'))) {
       handleFileSelected(file);
     }
   }, [handleFileSelected]);
 
   const { session, activeChannels, leftSidebarOpen, rightSidebarOpen } = state;
 
+  // ─── Session Browser View ──────────────────────────────────────────────────
+  if (view === 'browser') {
+    return (
+      <div className="flex flex-col h-full bg-background dark overflow-hidden relative">
+        <SessionBrowser
+          onSessionLoaded={handleSessionLoaded}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+        {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      </div>
+    );
+  }
+
+  // ─── Analysis View (existing) ──────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full bg-background dark overflow-hidden">
       {/* Top bar */}
@@ -253,11 +287,12 @@ export default function App() {
         onFileSelected={handleFileSelected}
         onExportOpen={session ? () => setExportDialogOpen(true) : undefined}
         totalSamples={session?.totalSamples ?? 0}
+        onBack={handleBackToBrowser}
       />
 
       {/* Main layout */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Left sidebar — channel picker */}
+        {/* Left sidebar -- channel picker */}
         {leftSidebarOpen && (
           <div className="w-48 flex-shrink-0 overflow-hidden">
             {session ? (
@@ -302,7 +337,7 @@ export default function App() {
               onCursorTimeChange={setCursorTime}
             />
           ) : (
-            /* Empty state — no file loaded */
+            /* Empty state -- no file loaded */
             <div className={`flex-1 flex flex-col items-center justify-center gap-4 transition-colors ${isDragOver ? 'bg-primary/5' : ''}`}>
               {state.isLoading ? (
                 <div className="flex flex-col items-center gap-3">
@@ -348,7 +383,7 @@ export default function App() {
           )}
         </div>
 
-        {/* Right sidebar — analysis */}
+        {/* Right sidebar -- analysis */}
         {rightSidebarOpen && session && (
           <div className="w-72 flex-shrink-0 overflow-hidden">
             <AnalysisPanel

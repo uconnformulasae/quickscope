@@ -20,6 +20,7 @@ export interface ChannelDef {
   offset: number;        // cal_value_2
   units: string;
   color: string;
+  fileSampleCount?: number; // total samples in file (from backend), used to distinguish "not loaded" from "no data"
 }
 
 export interface ChannelSample {

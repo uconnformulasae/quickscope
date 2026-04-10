@@ -6,6 +6,29 @@ import type { ChannelSample } from '../lib/xrk-parser';
 import { BarChart3, Activity, ScatterChart, Timer, TrendingUp, Crosshair, MapPin } from 'lucide-react';
 import { GPSMapView } from './GPSMapView';
 
+// Load Plotly.js from CDN (shared by Histogram and XY Plot tabs)
+let plotlyLoading = false;
+function ensurePlotly(onReady: () => void) {
+  if ((window as any).Plotly) {
+    onReady();
+    return;
+  }
+  if (!plotlyLoading) {
+    plotlyLoading = true;
+    const script = document.createElement('script');
+    script.src = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
+    script.onload = () => onReady();
+    document.head.appendChild(script);
+  } else {
+    // Already loading, poll
+    const check = () => {
+      if ((window as any).Plotly) onReady();
+      else setTimeout(check, 100);
+    };
+    check();
+  }
+}
+
 interface AnalysisPanelProps {
   session: XRKSession;
   activeChannels: ActiveChannel[];
@@ -384,42 +407,48 @@ function HistogramTab({ session, activeChannels, channelId, onChannelChange, der
 
   // Load Plotly and render histogram
   useEffect(() => {
-    const Plotly = (window as any).Plotly;
-    if (!Plotly || !chartRef.current || !chan || !activeChan || !hasData) return;
+    if (!chartRef.current || !chan || !activeChan || !hasData) return;
 
-    const samples = resolveSamples(chan.index, session, derivedSamplesMap);
-    const values = samples.map(s => s.value);
+    const render = () => {
+      const Plotly = (window as any).Plotly;
+      if (!Plotly || !chartRef.current) return;
 
-    const trace = {
-      type: 'histogram',
-      x: values,
-      nbinsx: 50,
-      marker: { color: activeChan.color, opacity: 0.8, line: { width: 0 } },
-      name: chan.shortName,
+      const samples = resolveSamples(chan.index, session, derivedSamplesMap);
+      const values = samples.map(s => s.value);
+
+      const trace = {
+        type: 'histogram',
+        x: values,
+        nbinsx: 50,
+        marker: { color: activeChan.color, opacity: 0.8, line: { width: 0 } },
+        name: chan.shortName,
+      };
+
+      const layout = {
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        xaxis: {
+          title: `${chan.shortName}${chan.units ? ` (${chan.units})` : ''}`,
+          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
+          gridcolor: 'rgba(255,255,255,0.05)',
+        },
+        yaxis: {
+          title: 'Count',
+          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
+          gridcolor: 'rgba(255,255,255,0.05)',
+        },
+        margin: { l: 45, r: 15, t: 15, b: 45 },
+        bargap: 0.05,
+        font: { family: 'DM Sans', color: '#8b93a8', size: 11 },
+      };
+
+      Plotly.react(chartRef.current, [trace], layout, {
+        responsive: true, displayModeBar: false, displaylogo: false
+      });
+      setIsReady(true);
     };
 
-    const layout = {
-      paper_bgcolor: 'transparent',
-      plot_bgcolor: 'transparent',
-      xaxis: {
-        title: `${chan.shortName}${chan.units ? ` (${chan.units})` : ''}`,
-        tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-        gridcolor: 'rgba(255,255,255,0.05)',
-      },
-      yaxis: {
-        title: 'Count',
-        tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-        gridcolor: 'rgba(255,255,255,0.05)',
-      },
-      margin: { l: 45, r: 15, t: 15, b: 45 },
-      bargap: 0.05,
-      font: { family: 'DM Sans', color: '#8b93a8', size: 11 },
-    };
-
-    Plotly.react(chartRef.current, [trace], layout, {
-      responsive: true, displayModeBar: false, displaylogo: false
-    });
-    setIsReady(true);
+    ensurePlotly(render);
   }, [session, chan, activeChan]);
 
   return (
@@ -488,71 +517,74 @@ function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onChannelC
   const yAc = activeChannels.find(ac => ac.channelId === effectiveYId);
 
   useEffect(() => {
-    const Plotly = (window as any).Plotly;
-    if (!Plotly || !chartRef.current || !xChan || !yChan) return;
+    if (!chartRef.current || !xChan || !yChan) return;
 
-    const xSamplesRaw = resolveSamples(xChan.index, session, derivedSamplesMap);
-    const ySamplesRaw = resolveSamples(yChan.index, session, derivedSamplesMap);
-    // Skip render if either channel has no data
-    if (xSamplesRaw.length === 0 || ySamplesRaw.length === 0) return;
+    const render = () => {
+      const Plotly = (window as any).Plotly;
+      if (!Plotly || !chartRef.current) return;
 
-    const xSamples = lttbDownsample(xSamplesRaw, 3000);
-    const ySamples = ySamplesRaw;
+      const xSamplesRaw = resolveSamples(xChan.index, session, derivedSamplesMap);
+      const ySamplesRaw = resolveSamples(yChan.index, session, derivedSamplesMap);
+      if (xSamplesRaw.length === 0 || ySamplesRaw.length === 0) return;
 
-    // Interpolate y values at x timestamps
-    const xs: number[] = [];
-    const ys: number[] = [];
+      const xSamples = lttbDownsample(xSamplesRaw, 3000);
+      const ySamples = ySamplesRaw;
 
-    for (const xs_sample of xSamples) {
-      const ts = xs_sample.timestamp;
-      // Find nearest y sample
-      let lo = 0, hi = ySamples.length - 1;
-      while (lo < hi - 1) {
-        const mid = (lo + hi) >> 1;
-        if (ySamples[mid].timestamp <= ts) lo = mid;
-        else hi = mid;
+      const xs: number[] = [];
+      const ys: number[] = [];
+
+      for (const xs_sample of xSamples) {
+        const ts = xs_sample.timestamp;
+        let lo = 0, hi = ySamples.length - 1;
+        while (lo < hi - 1) {
+          const mid = (lo + hi) >> 1;
+          if (ySamples[mid].timestamp <= ts) lo = mid;
+          else hi = mid;
+        }
+        if (lo < ySamples.length) {
+          xs.push(xs_sample.value);
+          ys.push(ySamples[lo].value);
+        }
       }
-      if (lo < ySamples.length) {
-        xs.push(xs_sample.value);
-        ys.push(ySamples[lo].value);
-      }
-    }
 
-    const trace = {
-      type: 'scattergl',
-      mode: 'markers',
-      x: xs,
-      y: ys,
-      marker: {
-        color: yAc?.color || '#4361ee',
-        size: 3,
-        opacity: 0.6,
-      },
-      hovertemplate: `${xChan.shortName}: %{x:.2f}<br>${yChan.shortName}: %{y:.2f}<extra></extra>`,
+      const trace = {
+        type: 'scattergl',
+        mode: 'markers',
+        x: xs,
+        y: ys,
+        marker: {
+          color: yAc?.color || '#4361ee',
+          size: 3,
+          opacity: 0.6,
+        },
+        hovertemplate: `${xChan.shortName}: %{x:.2f}<br>${yChan.shortName}: %{y:.2f}<extra></extra>`,
+      };
+
+      const layout = {
+        paper_bgcolor: 'transparent',
+        plot_bgcolor: 'transparent',
+        xaxis: {
+          title: `${xChan.shortName}${xChan.units ? ` (${xChan.units})` : ''}`,
+          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
+          gridcolor: 'rgba(255,255,255,0.05)',
+          zeroline: false,
+        },
+        yaxis: {
+          title: `${yChan.shortName}${yChan.units ? ` (${yChan.units})` : ''}`,
+          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
+          gridcolor: 'rgba(255,255,255,0.05)',
+          zeroline: false,
+        },
+        margin: { l: 50, r: 15, t: 15, b: 50 },
+        font: { family: 'DM Sans', color: '#8b93a8', size: 11 },
+      };
+
+      Plotly.react(chartRef.current, [trace], layout, {
+        responsive: true, displayModeBar: false, displaylogo: false
+      });
     };
 
-    const layout = {
-      paper_bgcolor: 'transparent',
-      plot_bgcolor: 'transparent',
-      xaxis: {
-        title: `${xChan.shortName}${xChan.units ? ` (${xChan.units})` : ''}`,
-        tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-        gridcolor: 'rgba(255,255,255,0.05)',
-        zeroline: false,
-      },
-      yaxis: {
-        title: `${yChan.shortName}${yChan.units ? ` (${yChan.units})` : ''}`,
-        tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-        gridcolor: 'rgba(255,255,255,0.05)',
-        zeroline: false,
-      },
-      margin: { l: 50, r: 15, t: 15, b: 50 },
-      font: { family: 'DM Sans', color: '#8b93a8', size: 11 },
-    };
-
-    Plotly.react(chartRef.current, [trace], layout, {
-      responsive: true, displayModeBar: false, displaylogo: false
-    });
+    ensurePlotly(render);
   }, [session, xChan, yChan, yAc]);
 
   const chanOptions = activeChannels.map(ac => {

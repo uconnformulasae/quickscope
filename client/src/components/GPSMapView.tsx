@@ -80,13 +80,15 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
       const { lat, lon, speed, timestamps } = gpsData;
       if (lat.length === 0) return;
 
-      // Filter out zero/invalid coordinates
+      // Filter out zero/invalid coordinates, keeping timestamps in sync
       const coords: [number, number][] = [];
       const speeds: number[] = [];
+      const filteredTimes: number[] = [];
       for (let i = 0; i < lat.length; i++) {
         if (lat[i] !== 0 && lon[i] !== 0 && Math.abs(lat[i]) < 90 && Math.abs(lon[i]) < 180) {
           coords.push([lat[i], lon[i]]);
           speeds.push(speed ? speed[i] ?? 0 : 0);
+          filteredTimes.push(timestamps[i] ?? 0);
         }
       }
 
@@ -145,9 +147,9 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
       mapRef.current = map;
       markerRef.current = marker;
 
-      // Store coords for cursor updates
+      // Store filtered coords and times for cursor updates
       (mapRef.current as any)._gpsCoords = coords;
-      (mapRef.current as any)._gpsTimes = timestamps;
+      (mapRef.current as any)._gpsTimes = filteredTimes;
     };
 
     waitForLeaflet();
