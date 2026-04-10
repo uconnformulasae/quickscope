@@ -227,7 +227,7 @@ async def aim_status():
 async def list_aim_sessions():
     """List sessions available on the AiM device."""
     if not aim_connector.is_aim_connected():
-        return {"ok": False, "sessions": [], "error": "Not connected to AiM WiFi"}
+        return {"ok": False, "sessions": [], "error": "AiM device not reachable"}
 
     sessions = await aim_connector.list_aim_sessions()
 
@@ -245,7 +245,7 @@ async def list_aim_sessions():
 async def pull_from_aim(background_tasks: BackgroundTasks):
     """Download new sessions from AiM device, save locally, queue upload to Railway."""
     if not aim_connector.is_aim_connected():
-        raise HTTPException(400, "Not connected to AiM WiFi")
+        raise HTTPException(400, "AiM device not reachable")
 
     aim_sessions = await aim_connector.list_aim_sessions()
     local_sessions = session_store.list_sessions()

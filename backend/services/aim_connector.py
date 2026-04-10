@@ -1,15 +1,16 @@
 """
 AiM datalogger connector for QuickScope.
 
-Cross-platform WiFi detection and session download from AiM devices.
-Supports macOS (airport/networksetup) and Windows (netsh).
+Detects AiM device connectivity by probing its HTTP endpoint directly,
+then lists and downloads session files.
 
-Adapted from Data-Development's aim_connector.py.
+Works on any platform (macOS, Windows, Linux) without relying on
+OS-specific WiFi SSID detection, which breaks on modern macOS due
+to privacy restrictions that redact SSIDs from command output.
 """
 
 import logging
 import re
-import subprocess
 from pathlib import Path
 
 import httpx
@@ -17,10 +18,6 @@ import httpx
 from services.settings_store import load as load_settings
 
 logger = logging.getLogger(__name__)
-
-
-def _get_ssid() -> str:
-    return load_settings().get("aim_wifi_ssid", "")
 
 
 def _get_device_ip() -> str:
@@ -38,47 +35,21 @@ def _get_base_url() -> str:
 
 
 def is_aim_connected() -> bool:
-    """Check if currently connected to the AiM WiFi hotspot."""
-    ssid = _get_ssid()
-    if not ssid:
+    """Check if the AiM device is reachable by probing its HTTP endpoint.
+
+    This is more reliable than SSID detection because:
+    - Modern macOS redacts SSIDs in command output (privacy)
+    - The airport utility was removed in recent macOS versions
+    - It confirms actual device connectivity, not just WiFi network
+    """
+    base = _get_base_url()
+    try:
+        # Quick probe — short timeout since AiM is on local network
+        with httpx.Client(timeout=3) as client:
+            resp = client.get(f"{base}/sessions/")
+            return resp.status_code < 500
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError, OSError):
         return False
-
-    # macOS
-    try:
-        result = subprocess.run(
-            ["networksetup", "-getairportnetwork", "en0"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if ssid in result.stdout:
-            return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    # macOS fallback (airport utility)
-    try:
-        result = subprocess.run(
-            ["/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport", "-I"],
-            capture_output=True, text=True, timeout=5,
-        )
-        for line in result.stdout.splitlines():
-            if "SSID" in line and ssid in line:
-                return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    # Windows
-    try:
-        result = subprocess.run(
-            ["netsh", "wlan", "show", "interfaces"],
-            capture_output=True, text=True, timeout=5,
-        )
-        for line in result.stdout.splitlines():
-            if "SSID" in line and ssid in line:
-                return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    return False
 
 
 async def list_aim_sessions() -> list[dict]:
@@ -94,7 +65,7 @@ async def list_aim_sessions() -> list[dict]:
             logger.warning("Could not reach AiM device at %s: %s", base, exc)
             return sessions
 
-    # Parse Apache-style directory listing
+    # Parse directory listing — match links to session files
     for match in re.finditer(
         r'href="([^"]+\.(?:xdrk|drk|xrk|xrz))"',
         resp.text,
