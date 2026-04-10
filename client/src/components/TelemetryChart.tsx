@@ -612,8 +612,8 @@ export function TelemetryChart({
       ctx.fillRect(left, 0, right - left, axisY);
     }
 
-    // Draw cursor lines
-    const drawCursorLine = (t: number, color: string) => {
+    // Draw cursor lines with timestamp label at the bottom axis
+    const drawCursorLine = (t: number, color: string, showTimestamp = false) => {
       const x = Math.round(timeToX(t, xRange, plotW)) + 0.5;
       if (x < LEFT_MARGIN || x > w - RIGHT_MARGIN) return;
       ctx.strokeStyle = color;
@@ -622,11 +622,28 @@ export function TelemetryChart({
       ctx.moveTo(x, 0);
       ctx.lineTo(x, axisY);
       ctx.stroke();
+
+      if (showTimestamp) {
+        const label = formatTimeSec(t);
+        ctx.font = `10px ${MONO_FONT}`;
+        const tw = ctx.measureText(label).width;
+        const pillW = tw + 8;
+        const pillH = 16;
+        const pillX = Math.round(clamp(x - pillW / 2, LEFT_MARGIN, w - RIGHT_MARGIN - pillW));
+        const pillY = axisY + 2;
+        ctx.fillStyle = CURSOR_PILL_BG;
+        ctx.beginPath();
+        ctx.roundRect(pillX, pillY, pillW, pillH, 3);
+        ctx.fill();
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        ctx.fillText(label, pillX + pillW / 2, pillY + 12);
+      }
     };
 
     if (cursorA !== null) {
       const lineColor = cursorB !== null ? DELTA_LINE : CURSOR_COLOR;
-      drawCursorLine(cursorA, lineColor);
+      drawCursorLine(cursorA, lineColor, true);
 
       // Value readouts for cursor A
       for (const strip of strips) {
@@ -679,7 +696,7 @@ export function TelemetryChart({
     }
 
     if (cursorB !== null) {
-      drawCursorLine(cursorB, DELTA_LINE);
+      drawCursorLine(cursorB, DELTA_LINE, true);
     }
 
     // ── Hover crosshair (always visible when mouse is over canvas) ──
@@ -689,7 +706,7 @@ export function TelemetryChart({
       const isHoverSameAsCursorA = cursorA !== null && Math.abs(hoverT - cursorA) < (xRange[1] - xRange[0]) * 0.002;
       const isHoverSameAsCursorB = cursorB !== null && Math.abs(hoverT - cursorB) < (xRange[1] - xRange[0]) * 0.002;
       if (!isHoverSameAsCursorA && !isHoverSameAsCursorB) {
-        drawCursorLine(hoverT, 'rgba(255,255,255,0.25)');
+        drawCursorLine(hoverT, 'rgba(255,255,255,0.25)', true);
       }
 
       // Value readouts for hover in delta mode (when placed cursors exist)
