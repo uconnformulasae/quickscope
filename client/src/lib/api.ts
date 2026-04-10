@@ -148,9 +148,12 @@ export async function listAimSessions(): Promise<{ ok: boolean; sessions: AimSes
   return res.json();
 }
 
-export async function pullFromAim(): Promise<{ ok: boolean; downloaded: string[] }> {
+export async function pullFromAim(): Promise<{ ok: boolean; downloaded: string[]; errors?: string[]; error?: string; message?: string }> {
   const res = await fetch(`${API_BASE}/api/aim/pull`, { method: 'POST' });
-  if (!res.ok) throw new Error(`AiM pull failed: ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `AiM pull failed: ${res.status}`);
+  }
   return res.json();
 }
 

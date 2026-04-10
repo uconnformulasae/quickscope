@@ -105,8 +105,15 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
     setPullingAim(true);
     setError(null);
     try {
-      await pullFromAim();
+      const result = await pullFromAim();
       await refreshSessions();
+      if (result.error) {
+        setError(result.error);
+      } else if (result.errors?.length) {
+        setError(`Some downloads failed: ${result.errors.join('; ')}`);
+      } else if (result.downloaded?.length === 0) {
+        setError(result.message || 'No new sessions found on device');
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'AiM pull failed');
     } finally {

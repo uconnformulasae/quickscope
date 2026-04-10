@@ -6,6 +6,7 @@ Multi-session with local persistence and Railway/AiM sync.
 
 import io
 import csv
+import logging
 import math
 import os
 import tempfile
@@ -13,6 +14,13 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Query, HTTPException, BackgroundTasks
+
+# Configure logging so AiM connector debug output is visible
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger("quickscope")
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from libxrk import aim_xrk, ChannelMetadata
@@ -254,25 +262,39 @@ async def pull_from_aim(background_tasks: BackgroundTasks):
     if not aim_connector.is_aim_connected():
         raise HTTPException(400, "AiM device not reachable")
 
-    aim_sessions = aim_connector.list_aim_sessions()
+    logger.info("AiM pull: listing sessions on device...")
+    try:
+        aim_sessions = aim_connector.list_aim_sessions()
+    except Exception as e:
+        logger.error("AiM pull: failed to list sessions: %s", e, exc_info=True)
+        return {"ok": False, "error": f"Failed to list sessions: {e}", "downloaded": []}
+
+    logger.info("AiM pull: found %d sessions on device", len(aim_sessions))
+    if not aim_sessions:
+        return {"ok": True, "downloaded": [], "message": "No sessions found on device"}
+
     local_sessions = session_store.list_sessions()
     local_filenames = {s["filename"] for s in local_sessions}
+    new_sessions = [s for s in aim_sessions if s["filename"] not in local_filenames]
+    logger.info("AiM pull: %d new sessions to download (skipping %d already local)",
+                len(new_sessions), len(aim_sessions) - len(new_sessions))
 
     downloaded = []
-    for aim_s in aim_sessions:
-        if aim_s["filename"] in local_filenames:
-            continue
-
+    errors = []
+    for aim_s in new_sessions:
+        logger.info("AiM pull: downloading %s ...", aim_s["filename"])
         try:
             dest = session_store.session_file_path(aim_s["filename"])
             aim_connector.download_aim_session(aim_s["filename"], dest.parent)
+            logger.info("AiM pull: saved %s (%d bytes)", dest, dest.stat().st_size)
 
             # Parse to extract metadata
             try:
                 log = _parse_file(dest)
                 info = _extract_session_info(log, aim_s["filename"])
                 meta = info["metadata"]
-            except Exception:
+            except Exception as parse_err:
+                logger.warning("AiM pull: parse failed for %s: %s", aim_s["filename"], parse_err)
                 meta = {}
                 info = {"durationMs": 0, "lapCount": 0}
 
@@ -289,13 +311,14 @@ async def pull_from_aim(background_tasks: BackgroundTasks):
             )
             downloaded.append(entry["filename"])
         except Exception as e:
-            downloaded.append(f"{aim_s['filename']} (error: {e})")
+            logger.error("AiM pull: failed to download %s: %s", aim_s["filename"], e, exc_info=True)
+            errors.append(f"{aim_s['filename']}: {e}")
 
     # Background: sync with Railway to push new sessions
     if downloaded:
         background_tasks.add_task(_background_sync)
 
-    return {"ok": True, "downloaded": downloaded}
+    return {"ok": True, "downloaded": downloaded, "errors": errors}
 
 
 async def _background_sync():
