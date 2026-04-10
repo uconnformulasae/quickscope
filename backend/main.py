@@ -1,21 +1,25 @@
 """
 QuickScope — Python/libxrk backend
 Parses .xrk files using libxrk and serves channel data via FastAPI.
-Single-user stateful app: parsed log stored in memory.
+Multi-session with local persistence and Railway/AiM sync.
 """
 
 import io
 import csv
 import math
 import os
+import shutil
 import tempfile
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from fastapi import FastAPI, UploadFile, File, Query, HTTPException
+from fastapi import FastAPI, UploadFile, File, Query, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from libxrk import aim_xrk, ChannelMetadata
+
+from services import session_store, settings_store, sync_service, aim_connector, railway_client
 
 app = FastAPI(title="QuickScope Backend")
 
@@ -32,16 +36,18 @@ CHART_COLORS = [
     '#8b5cf6', '#10b981', '#fb923c', '#38bdf8', '#a3e635',
 ]
 
-# ─── In-memory state ─────────────────────────────────────────────────────────
+# ─── In-memory state (active session for analysis) ──────────────────────────
 
 class SessionState:
     def __init__(self):
         self.log = None
         self.filename: Optional[str] = None
+        self.session_id: Optional[str] = None  # local session ID
 
     def clear(self):
         self.log = None
         self.filename = None
+        self.session_id = None
 
     @property
     def loaded(self) -> bool:
@@ -64,9 +70,8 @@ def _channel_meta(name: str, table) -> dict:
 def _channel_data(name: str, table) -> dict:
     """Extract timestamps (ms) and values from a channel table."""
     df = table.to_pandas()
-    timestamps = df['timecodes'].tolist()  # already in ms
+    timestamps = df['timecodes'].tolist()
     values = df[name].tolist()
-    # Clean NaN/Inf
     clean_vals = []
     for v in values:
         if isinstance(v, (int, float)) and math.isfinite(v):
@@ -76,32 +81,13 @@ def _channel_data(name: str, table) -> dict:
     return {"timestamps": timestamps, "values": clean_vals}
 
 
-# ─── Endpoints ───────────────────────────────────────────────────────────────
+def _parse_file(file_path: str | Path):
+    """Parse a session file with libxrk. Returns the log object."""
+    return aim_xrk(str(file_path))
 
-@app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
-    if not file.filename or not file.filename.lower().endswith((".xrk", ".xrz")):
-        raise HTTPException(400, "Only .xrk/.xrz files are supported")
 
-    content = await file.read()
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xrk")
-    try:
-        tmp.write(content)
-        tmp.flush()
-        tmp.close()
-        log = aim_xrk(tmp.name)
-        state.log = log
-        state.filename = file.filename
-    except Exception as e:
-        state.clear()
-        raise HTTPException(500, f"Failed to parse file: {e}")
-    finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
-
-    # Metadata (log.metadata is a dict)
+def _extract_session_info(log, filename: str) -> dict:
+    """Extract metadata, channels, duration from a parsed log."""
     meta = log.metadata or {}
     metadata = {
         "vehicle": meta.get("Vehicle", ""),
@@ -114,7 +100,6 @@ async def upload_file(file: UploadFile = File(...)):
         "comment": meta.get("Long Comment", ""),
     }
 
-    # Channel list
     channels = []
     total_samples = 0
     duration_ms = 0.0
@@ -124,11 +109,9 @@ async def upload_file(file: UploadFile = File(...)):
         total_samples += n_rows
         cm = _channel_meta(name, table)
 
-        # Track max timestamp for duration (exclude GPS channels which have raw UTC timecodes)
         if n_rows > 0 and not name.lower().startswith("gps"):
             df = table.to_pandas()
             last_tc = float(df['timecodes'].iloc[-1])
-            # Sanity check: skip if > 10 hours (likely raw UTC)
             if last_tc < 36_000_000 and last_tc > duration_ms:
                 duration_ms = last_tc
 
@@ -140,7 +123,6 @@ async def upload_file(file: UploadFile = File(...)):
             "index": i,
         })
 
-    # Laps
     lap_count = log.laps.num_rows if log.laps is not None else 0
 
     return {
@@ -150,6 +132,227 @@ async def upload_file(file: UploadFile = File(...)):
         "totalSamples": total_samples,
         "lapCount": lap_count,
     }
+
+
+# ─── Session Management Endpoints ──────────────────────────────────────────
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """List all sessions from the local index."""
+    return session_store.list_sessions()
+
+
+@app.post("/api/sessions/{session_id}/load")
+async def load_session(session_id: str):
+    """Load a local session into memory for analysis."""
+    entry = session_store.get_session(session_id)
+    if not entry:
+        raise HTTPException(404, "Session not found")
+
+    local_path = entry.get("local_path")
+    if not local_path or not Path(local_path).exists():
+        raise HTTPException(400, "Session file not available locally. Pull it first.")
+
+    try:
+        log = _parse_file(local_path)
+        state.log = log
+        state.filename = entry["filename"]
+        state.session_id = session_id
+    except Exception as e:
+        state.clear()
+        raise HTTPException(500, f"Failed to parse file: {e}")
+
+    return _extract_session_info(log, entry["filename"])
+
+
+@app.post("/api/sessions/sync")
+async def sync_sessions():
+    """Sync with Railway — pull remote session list, push local-only sessions."""
+    try:
+        result = await sync_service.sync_with_railway()
+        return {"ok": True, **result}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Sync failed: {e}")
+
+
+@app.post("/api/sessions/{session_id}/pull")
+async def pull_session(session_id: str):
+    """Download a remote-only session's file from Railway."""
+    result = await sync_service.pull_session(session_id)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error", "Pull failed"))
+    return result
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Remove a session from the local index and delete its cached file."""
+    entry = session_store.get_session(session_id)
+    if not entry:
+        raise HTTPException(404, "Session not found")
+
+    # Delete local file if it exists
+    local_path = entry.get("local_path")
+    if local_path:
+        Path(local_path).unlink(missing_ok=True)
+
+    # Clear active session if it's the one being deleted
+    if state.session_id == session_id:
+        state.clear()
+
+    session_store.delete_session(session_id)
+    return {"ok": True}
+
+
+# ─── AiM Device Endpoints ──────────────────────────────────────────────────
+
+@app.get("/api/aim/status")
+async def aim_status():
+    """Check if connected to AiM WiFi."""
+    connected = aim_connector.is_aim_connected()
+    return {"connected": connected, "ssid": settings_store.load().get("aim_wifi_ssid", "")}
+
+
+@app.get("/api/aim/sessions")
+async def list_aim_sessions():
+    """List sessions available on the AiM device."""
+    if not aim_connector.is_aim_connected():
+        return {"ok": False, "sessions": [], "error": "Not connected to AiM WiFi"}
+
+    sessions = await aim_connector.list_aim_sessions()
+
+    # Mark which ones we already have locally
+    local_sessions = session_store.list_sessions()
+    local_filenames = {s["filename"] for s in local_sessions}
+
+    for s in sessions:
+        s["already_downloaded"] = s["filename"] in local_filenames
+
+    return {"ok": True, "sessions": sessions}
+
+
+@app.post("/api/aim/pull")
+async def pull_from_aim(background_tasks: BackgroundTasks):
+    """Download new sessions from AiM device, save locally, queue upload to Railway."""
+    if not aim_connector.is_aim_connected():
+        raise HTTPException(400, "Not connected to AiM WiFi")
+
+    aim_sessions = await aim_connector.list_aim_sessions()
+    local_sessions = session_store.list_sessions()
+    local_filenames = {s["filename"] for s in local_sessions}
+
+    downloaded = []
+    for aim_s in aim_sessions:
+        if aim_s["filename"] in local_filenames:
+            continue
+
+        try:
+            dest = session_store.session_file_path(aim_s["filename"])
+            await aim_connector.download_aim_session(aim_s["filename"], dest.parent)
+
+            # Parse to extract metadata
+            try:
+                log = _parse_file(dest)
+                info = _extract_session_info(log, aim_s["filename"])
+                meta = info["metadata"]
+            except Exception:
+                meta = {}
+                info = {"durationMs": 0, "lapCount": 0}
+
+            entry = session_store.add_session(
+                filename=aim_s["filename"],
+                source="aim_device",
+                sync_status="local_only",
+                local_path=str(dest),
+                track_name=meta.get("venue", ""),
+                driver_name=meta.get("driver", ""),
+                vehicle_name=meta.get("vehicle", ""),
+                duration_s=info.get("durationMs", 0) / 1000,
+                lap_count=info.get("lapCount", 0),
+            )
+            downloaded.append(entry["filename"])
+        except Exception as e:
+            downloaded.append({"filename": aim_s["filename"], "error": str(e)})
+
+    # Background: sync with Railway to push new sessions
+    if downloaded:
+        background_tasks.add_task(_background_sync)
+
+    return {"ok": True, "downloaded": downloaded}
+
+
+async def _background_sync():
+    try:
+        await sync_service.sync_with_railway()
+    except Exception:
+        pass
+
+
+# ─── Settings Endpoints ────────────────────────────────────────────────────
+
+@app.get("/api/settings")
+async def get_settings():
+    return settings_store.load()
+
+
+@app.put("/api/settings")
+async def update_settings(body: dict):
+    return settings_store.update(body)
+
+
+# ─── Original Endpoints (analysis — operate on loaded session) ──────────────
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
+    if not file.filename or not file.filename.lower().endswith((".xrk", ".xrz")):
+        raise HTTPException(400, "Only .xrk/.xrz files are supported")
+
+    content = await file.read()
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xrk")
+    try:
+        tmp.write(content)
+        tmp.flush()
+        tmp.close()
+        log = _parse_file(tmp.name)
+        state.log = log
+        state.filename = file.filename
+    except Exception as e:
+        state.clear()
+        raise HTTPException(500, f"Failed to parse file: {e}")
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+    info = _extract_session_info(log, file.filename)
+
+    # Save to local cache
+    dest = session_store.session_file_path(file.filename)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(content)
+
+    meta = info["metadata"]
+    entry = session_store.add_session(
+        filename=file.filename,
+        source="manual_upload",
+        sync_status="local_only",
+        local_path=str(dest),
+        track_name=meta.get("venue", ""),
+        driver_name=meta.get("driver", ""),
+        vehicle_name=meta.get("vehicle", ""),
+        duration_s=info["durationMs"] / 1000,
+        lap_count=info["lapCount"],
+    )
+    state.session_id = entry["id"]
+
+    # Background: upload to Railway
+    if background_tasks:
+        background_tasks.add_task(_background_sync)
+
+    return info
 
 
 @app.get("/api/channels")
@@ -204,7 +407,6 @@ async def get_gps():
         raise HTTPException(400, "No file loaded")
 
     ch = state.log.channels
-    # Find GPS channels
     lat_name = next((n for n in ch if "latitude" in n.lower()), None)
     lon_name = next((n for n in ch if "longitude" in n.lower()), None)
     speed_name = next((n for n in ch if "gps" in n.lower() and "speed" in n.lower()), None)
@@ -215,7 +417,6 @@ async def get_gps():
     lat_data = _channel_data(lat_name, ch[lat_name])
     lon_data = _channel_data(lon_name, ch[lon_name])
 
-    # Filter out NaN/zero GPS coordinates (no fix)
     lat = lat_data["values"]
     lon = lon_data["values"]
     ts = lat_data["timestamps"]
@@ -223,7 +424,6 @@ async def get_gps():
     filtered = {"timestamps": [], "lat": [], "lon": [], "speed": []}
     speed_data = _channel_data(speed_name, ch[speed_name]) if speed_name else None
 
-    # GPS timecodes may be in a different timebase (raw UTC) — offset to session start
     ts_offset = min(ts) if ts else 0
 
     for i in range(len(ts)):
@@ -252,7 +452,6 @@ async def export_csv(channels: str = Query(...)):
     if not names:
         raise HTTPException(400, "No channels specified")
 
-    # Collect data
     channel_data = {}
     for name in names:
         if name in state.log.channels:
@@ -261,18 +460,15 @@ async def export_csv(channels: str = Query(...)):
     if not channel_data:
         raise HTTPException(400, "None of the specified channels found")
 
-    # Use highest sample-rate channel as timebase
     timebase_name = max(channel_data, key=lambda n: len(channel_data[n]["timestamps"]))
     timebase_ts = channel_data[timebase_name]["timestamps"]
 
-    # Units
     units_map = {}
     for name in channel_data:
         if name in state.log.channels:
             cm = _channel_meta(name, state.log.channels[name])
             units_map[name] = cm["units"]
 
-    # Build CSV
     output = io.StringIO()
     writer = csv.writer(output)
     headers = ["Time (s)"]

@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Car, User, Calendar, Clock, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Upload, Gauge, Activity, Download } from 'lucide-react';
+import { Car, User, Calendar, Clock, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Upload, Gauge, Activity, Download, ArrowLeft } from 'lucide-react';
 import type { XRKSession } from '../lib/xrk-parser';
 import { formatTime } from '../lib/xrk-parser';
 
@@ -13,6 +13,7 @@ interface SessionHeaderProps {
   onFileSelected: (file: File) => void;
   onExportOpen?: () => void;
   totalSamples: number;
+  onBack?: () => void;
 }
 
 export function SessionHeader({
@@ -25,6 +26,7 @@ export function SessionHeader({
   onFileSelected,
   onExportOpen,
   totalSamples,
+  onBack,
 }: SessionHeaderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -46,8 +48,17 @@ export function SessionHeader({
 
   return (
     <header className="flex items-center gap-3 px-3 h-10 border-b border-border bg-card flex-shrink-0 overflow-hidden">
-      {/* Logo + toggle */}
+      {/* Back + Logo + toggle */}
       <div className="flex items-center gap-2">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            title="Back to sessions"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+        )}
         <button
           onClick={onToggleLeft}
           className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"

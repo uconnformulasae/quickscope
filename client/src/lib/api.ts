@@ -5,6 +5,8 @@
 
 const API_BASE = 'http://localhost:8000';
 
+// ─── Types ──────────────────────────────────────────────────────────────────
+
 export interface SessionInfo {
   metadata: {
     vehicle: string;
@@ -47,6 +49,129 @@ export interface GPSData {
   lon: number[];
   speed: number[] | null;
 }
+
+export interface LocalSession {
+  id: string;
+  remote_id: number | null;
+  aim_session_id: string;
+  filename: string;
+  local_path: string | null;
+  track_name: string;
+  driver_name: string;
+  vehicle_name: string;
+  recorded_at: string | null;
+  duration_s: number;
+  lap_count: number;
+  sync_status: 'local_only' | 'remote_only' | 'synced' | 'uploading' | 'downloading';
+  source: 'manual_upload' | 'aim_device' | 'railway';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AimStatus {
+  connected: boolean;
+  ssid: string;
+}
+
+export interface AimSession {
+  filename: string;
+  url: string;
+  already_downloaded: boolean;
+}
+
+export interface Settings {
+  railway_url: string;
+  aim_wifi_ssid: string;
+  aim_device_ip: string;
+  aim_device_port: number;
+}
+
+export interface SyncResult {
+  ok: boolean;
+  pulled: number;
+  pushed: number;
+  errors: string[];
+}
+
+// ─── Session Management ─────────────────────────────────────────────────────
+
+export async function listSessions(): Promise<LocalSession[]> {
+  const res = await fetch(`${API_BASE}/api/sessions`);
+  if (!res.ok) throw new Error(`Failed to list sessions: ${res.status}`);
+  return res.json();
+}
+
+export async function loadSession(sessionId: string): Promise<SessionInfo> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/load`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Load failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function syncSessions(): Promise<SyncResult> {
+  const res = await fetch(`${API_BASE}/api/sessions/sync`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Sync failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function pullSession(sessionId: string): Promise<{ ok: boolean; local_path?: string; error?: string }> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/pull`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Pull failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+}
+
+// ─── AiM Device ─────────────────────────────────────────────────────────────
+
+export async function getAimStatus(): Promise<AimStatus> {
+  const res = await fetch(`${API_BASE}/api/aim/status`);
+  if (!res.ok) throw new Error(`Failed to get AiM status: ${res.status}`);
+  return res.json();
+}
+
+export async function listAimSessions(): Promise<{ ok: boolean; sessions: AimSession[]; error?: string }> {
+  const res = await fetch(`${API_BASE}/api/aim/sessions`);
+  if (!res.ok) throw new Error(`Failed to list AiM sessions: ${res.status}`);
+  return res.json();
+}
+
+export async function pullFromAim(): Promise<{ ok: boolean; downloaded: string[] }> {
+  const res = await fetch(`${API_BASE}/api/aim/pull`, { method: 'POST' });
+  if (!res.ok) throw new Error(`AiM pull failed: ${res.status}`);
+  return res.json();
+}
+
+// ─── Settings ───────────────────────────────────────────────────────────────
+
+export async function getSettings(): Promise<Settings> {
+  const res = await fetch(`${API_BASE}/api/settings`);
+  if (!res.ok) throw new Error(`Failed to get settings: ${res.status}`);
+  return res.json();
+}
+
+export async function updateSettings(settings: Partial<Settings>): Promise<Settings> {
+  const res = await fetch(`${API_BASE}/api/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error(`Failed to update settings: ${res.status}`);
+  return res.json();
+}
+
+// ─── Analysis (existing — operate on loaded session) ────────────────────────
 
 export async function uploadFile(file: File): Promise<SessionInfo> {
   const formData = new FormData();
