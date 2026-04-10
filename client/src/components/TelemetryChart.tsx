@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import type { XRKSession } from '../lib/xrk-parser';
 import { lttbDownsample, formatTime } from '../lib/xrk-parser';
-import type { ActiveChannel, TimeRange, DerivedChannel } from '../lib/useXRKStore';
+import type { ActiveChannel, TimeRange, DerivedChannel, ChartMode } from '../lib/useXRKStore';
 import type { ChannelSample } from '../lib/xrk-parser';
 import { RotateCcw } from 'lucide-react';
 
@@ -16,6 +16,7 @@ interface TelemetryChartProps {
   derivedSamplesMap?: Map<number, ChannelSample[]>;
   cursorTime?: number | null; // seconds — externally driven cursor position
   onCursorTimeChange?: (t: number | null) => void;
+  chartMode?: ChartMode;
 }
 
 interface StripLayout {
@@ -39,6 +40,7 @@ const LEFT_MARGIN = 60;
 const RIGHT_MARGIN = 12;
 const BOTTOM_AXIS_HEIGHT = 36;
 const MIN_STRIP_HEIGHT = 140;
+const AXIS_WIDTH = 50;
 const MONO_FONT = 'JetBrains Mono, monospace';
 
 const GRID_COLOR = 'rgba(255,255,255,0.05)';
@@ -153,6 +155,7 @@ export function TelemetryChart({
   derivedSamplesMap,
   cursorTime,
   onCursorTimeChange,
+  chartMode = 'separate',
 }: TelemetryChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -214,6 +217,20 @@ export function TelemetryChart({
     }
     return map;
   }, [visibleChannels, session, derivedChannels, derivedSamplesMap]);
+
+  // ─── Dynamic margins for overlay Y-axes ────────────────────────────────
+  const { leftMargin, rightMargin } = useMemo(() => {
+    const n = visibleChannels.length;
+    if (chartMode !== 'overlay' || n <= 1) {
+      return { leftMargin: LEFT_MARGIN, rightMargin: RIGHT_MARGIN };
+    }
+    const leftCount = Math.ceil(n / 2);
+    const rightCount = Math.floor(n / 2);
+    return {
+      leftMargin: Math.max(LEFT_MARGIN, leftCount * AXIS_WIDTH),
+      rightMargin: Math.max(RIGHT_MARGIN, rightCount * AXIS_WIDTH),
+    };
+  }, [chartMode, visibleChannels.length]);
 
   // ─── Rebuild global min/max cache when channel data changes ─────────────
   useEffect(() => {
@@ -325,6 +342,24 @@ export function TelemetryChart({
     const plotH = canvasH - BOTTOM_AXIS_HEIGHT;
     const numCh = visibleChannels.length;
     if (numCh === 0) return [];
+
+    if (chartMode === 'overlay') {
+      // All channels share the full plot height
+      return visibleChannels.map((ac) => {
+        const data = channelDataMap.get(ac.channelId);
+        const label = data?.def.shortName || `Ch${ac.channelId}`;
+        const units = data?.def.units || '';
+        return {
+          top: 0,
+          height: plotH,
+          channelId: ac.channelId,
+          color: ac.color,
+          label: label + (units ? ` (${units})` : ''),
+          units,
+        };
+      });
+    }
+
     const stripH = Math.max(MIN_STRIP_HEIGHT, plotH / numCh);
     return visibleChannels.map((ac, i) => {
       const data = channelDataMap.get(ac.channelId);
@@ -339,16 +374,16 @@ export function TelemetryChart({
         units,
       };
     });
-  }, [visibleChannels, channelDataMap]);
+  }, [visibleChannels, channelDataMap, chartMode]);
 
   // ─── Time ↔ Pixel conversions ─────────────────────────────────────────
   const timeToX = useCallback((t: number, xRange: [number, number], plotW: number): number => {
-    return LEFT_MARGIN + ((t - xRange[0]) / (xRange[1] - xRange[0])) * plotW;
-  }, []);
+    return leftMargin + ((t - xRange[0]) / (xRange[1] - xRange[0])) * plotW;
+  }, [leftMargin]);
 
   const xToTime = useCallback((px: number, xRange: [number, number], plotW: number): number => {
-    return xRange[0] + ((px - LEFT_MARGIN) / plotW) * (xRange[1] - xRange[0]);
-  }, []);
+    return xRange[0] + ((px - leftMargin) / plotW) * (xRange[1] - xRange[0]);
+  }, [leftMargin]);
 
   // ─── DRAW ─────────────────────────────────────────────────────────────
   const draw = useCallback(() => {
@@ -363,7 +398,9 @@ export function TelemetryChart({
     if (w === 0 || h === 0) return;
 
     const xRange: [number, number] = xRangeRef.current || [0, sessionDuration];
-    const plotW = w - LEFT_MARGIN - RIGHT_MARGIN;
+    const lm = leftMargin;
+    const rm = rightMargin;
+    const plotW = w - lm - rm;
     const strips = computeStripLayouts(h);
 
     ctx.save();
@@ -373,6 +410,7 @@ export function TelemetryChart({
     const xTicks = niceAxisTicks(xRange[0], xRange[1], Math.max(5, Math.floor(plotW / 80)));
 
     // ── Draw each strip ──
+    let gridDrawnForOverlay = false;
     for (const strip of strips) {
       const data = channelDataMap.get(strip.channelId);
       if (!data) continue;
@@ -399,55 +437,61 @@ export function TelemetryChart({
 
       // ── Background grid (horizontal) ──
       const yTicks = niceAxisTicks(yMin, yMax, Math.max(2, Math.floor(strip.height / 30)));
-      ctx.strokeStyle = GRID_COLOR;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (const yt of yTicks) {
-        const y = Math.round(valToY(yt)) + 0.5;
-        ctx.moveTo(LEFT_MARGIN, y);
-        ctx.lineTo(w - RIGHT_MARGIN, y);
-      }
-      ctx.stroke();
+      const shouldDrawGrid = chartMode !== 'overlay' || !gridDrawnForOverlay;
 
-      // ── Vertical grid (x axis) ──
-      ctx.beginPath();
-      for (const xt of xTicks) {
-        const x = Math.round(timeToX(xt, xRange, plotW)) + 0.5;
-        if (x >= LEFT_MARGIN && x <= w - RIGHT_MARGIN) {
-          ctx.moveTo(x, strip.top);
-          ctx.lineTo(x, strip.top + strip.height);
+      if (shouldDrawGrid) {
+        ctx.strokeStyle = GRID_COLOR;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (const yt of yTicks) {
+          const y = Math.round(valToY(yt)) + 0.5;
+          ctx.moveTo(lm, y);
+          ctx.lineTo(w - rm, y);
         }
-      }
-      ctx.stroke();
+        ctx.stroke();
 
-      // ── Lap markers ──
-      ctx.strokeStyle = 'rgba(247,127,0,0.35)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      for (const lap of session.lapMarkers) {
-        const lt = lap.timestamp / 1000; // ms to seconds
-        if (lt >= xRange[0] && lt <= xRange[1]) {
-          const x = Math.round(timeToX(lt, xRange, plotW)) + 0.5;
-          ctx.moveTo(x, strip.top);
-          ctx.lineTo(x, strip.top + strip.height);
-        }
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Lap labels (only for first strip)
-      if (strip === strips[0]) {
-        ctx.font = `9px ${MONO_FONT}`;
-        ctx.fillStyle = '#f77f00';
-        ctx.textAlign = 'center';
-        session.lapMarkers.forEach((lap, i) => {
-          const lt = lap.timestamp / 1000;
-          if (lt >= xRange[0] && lt <= xRange[1]) {
-            const x = timeToX(lt, xRange, plotW);
-            ctx.fillText(`L${i + 1}`, x, strip.top + 10);
+        // ── Vertical grid (x axis) ──
+        ctx.beginPath();
+        for (const xt of xTicks) {
+          const x = Math.round(timeToX(xt, xRange, plotW)) + 0.5;
+          if (x >= lm && x <= w - rm) {
+            ctx.moveTo(x, strip.top);
+            ctx.lineTo(x, strip.top + strip.height);
           }
-        });
+        }
+        ctx.stroke();
+
+        // ── Lap markers ──
+        ctx.strokeStyle = 'rgba(247,127,0,0.35)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        for (const lap of session.lapMarkers) {
+          const lt = lap.timestamp / 1000; // ms to seconds
+          if (lt >= xRange[0] && lt <= xRange[1]) {
+            const x = Math.round(timeToX(lt, xRange, plotW)) + 0.5;
+            ctx.moveTo(x, strip.top);
+            ctx.lineTo(x, strip.top + strip.height);
+          }
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Lap labels (only for first strip)
+        if (strip === strips[0]) {
+          ctx.font = `9px ${MONO_FONT}`;
+          ctx.fillStyle = '#f77f00';
+          ctx.textAlign = 'center';
+          session.lapMarkers.forEach((lap, i) => {
+            const lt = lap.timestamp / 1000;
+            if (lt >= xRange[0] && lt <= xRange[1]) {
+              const x = timeToX(lt, xRange, plotW);
+              ctx.fillText(`L${i + 1}`, x, strip.top + 10);
+            }
+          });
+        }
+
+        if (chartMode === 'overlay') gridDrawnForOverlay = true;
       }
 
       // ── Draw line trace ──
@@ -472,8 +516,8 @@ export function TelemetryChart({
         if (globalMM) {
           const { minSample, maxSample } = globalMM;
           const bright = brightenColor(strip.color, 0.3);
-          const chartLeft = LEFT_MARGIN;
-          const chartRight = w - RIGHT_MARGIN;
+          const chartLeft = lm;
+          const chartRight = w - rm;
 
           const drawMinMaxMarker = (
             sample: ChannelSample,
@@ -530,38 +574,95 @@ export function TelemetryChart({
       }
 
       // ── Y-axis ticks and labels ──
-      ctx.font = `10px ${MONO_FONT}`;
-      ctx.fillStyle = strip.color;
-      ctx.textAlign = 'right';
-      for (const yt of yTicks) {
-        const y = valToY(yt);
-        if (y >= strip.top + 5 && y <= strip.top + strip.height - 5) {
-          ctx.fillText(formatValue(yt), LEFT_MARGIN - 5, y + 3);
+      if (chartMode === 'overlay') {
+        // Alternating Y-axes: even index → left, odd index → right
+        const chIndex = visibleChannels.findIndex(vc => vc.channelId === strip.channelId);
+        const isLeft = chIndex % 2 === 0;
+        const sideIndex = Math.floor(chIndex / 2);
+
+        ctx.font = `10px ${MONO_FONT}`;
+        ctx.fillStyle = strip.color;
+
+        if (isLeft) {
+          const axX = lm - 5 - sideIndex * AXIS_WIDTH;
+          ctx.textAlign = 'right';
+          for (const yt of yTicks) {
+            const y = valToY(yt);
+            if (y >= strip.top + 5 && y <= strip.top + strip.height - 5) {
+              ctx.fillText(formatValue(yt), axX, y + 3);
+            }
+          }
+          // Subtle axis line
+          ctx.strokeStyle = strip.color + '40';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(axX + 3, strip.top);
+          ctx.lineTo(axX + 3, strip.top + strip.height);
+          ctx.stroke();
+          // Channel name label at top
+          ctx.font = `bold 9px ${MONO_FONT}`;
+          ctx.fillStyle = strip.color;
+          ctx.textAlign = 'right';
+          ctx.fillText(strip.label, axX, strip.top + 10);
+        } else {
+          const axX = w - rm + 5 + sideIndex * AXIS_WIDTH;
+          ctx.textAlign = 'left';
+          for (const yt of yTicks) {
+            const y = valToY(yt);
+            if (y >= strip.top + 5 && y <= strip.top + strip.height - 5) {
+              ctx.fillText(formatValue(yt), axX, y + 3);
+            }
+          }
+          // Subtle axis line
+          ctx.strokeStyle = strip.color + '40';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(axX - 3, strip.top);
+          ctx.lineTo(axX - 3, strip.top + strip.height);
+          ctx.stroke();
+          // Channel name label at top
+          ctx.font = `bold 9px ${MONO_FONT}`;
+          ctx.fillStyle = strip.color;
+          ctx.textAlign = 'left';
+          ctx.fillText(strip.label, axX, strip.top + 10);
+        }
+      } else {
+        ctx.font = `10px ${MONO_FONT}`;
+        ctx.fillStyle = strip.color;
+        ctx.textAlign = 'right';
+        for (const yt of yTicks) {
+          const y = valToY(yt);
+          if (y >= strip.top + 5 && y <= strip.top + strip.height - 5) {
+            ctx.fillText(formatValue(yt), lm - 5, y + 3);
+          }
         }
       }
 
-      // ── Channel name (rotated on left margin) ──
-      ctx.save();
-      ctx.font = `bold 10px ${MONO_FONT}`;
-      ctx.fillStyle = strip.color;
-      ctx.textAlign = 'center';
-      ctx.translate(12, strip.top + strip.height / 2);
-      ctx.rotate(-Math.PI / 2);
-      // Clip text
-      const maxChars = Math.floor(strip.height / 6);
-      let nameText = strip.label;
-      if (nameText.length > maxChars) nameText = nameText.slice(0, maxChars - 1) + '…';
-      ctx.fillText(nameText, 0, 0);
-      ctx.restore();
+      // ── Channel name (rotated on left margin) ── (separate mode only)
+      if (chartMode !== 'overlay') {
+        ctx.save();
+        ctx.font = `bold 10px ${MONO_FONT}`;
+        ctx.fillStyle = strip.color;
+        ctx.textAlign = 'center';
+        ctx.translate(12, strip.top + strip.height / 2);
+        ctx.rotate(-Math.PI / 2);
+        const maxChars = Math.floor(strip.height / 6);
+        let nameText = strip.label;
+        if (nameText.length > maxChars) nameText = nameText.slice(0, maxChars - 1) + '…';
+        ctx.fillText(nameText, 0, 0);
+        ctx.restore();
+      }
 
-      // ── Strip separator ──
-      ctx.strokeStyle = SEPARATOR_COLOR;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      const sepY = Math.round(strip.top + strip.height) + 0.5;
-      ctx.moveTo(0, sepY);
-      ctx.lineTo(w, sepY);
-      ctx.stroke();
+      // ── Strip separator ── (separate mode only)
+      if (chartMode !== 'overlay') {
+        ctx.strokeStyle = SEPARATOR_COLOR;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const sepY = Math.round(strip.top + strip.height) + 0.5;
+        ctx.moveTo(0, sepY);
+        ctx.lineTo(w, sepY);
+        ctx.stroke();
+      }
     }
 
     // ── Bottom X axis ──
@@ -572,8 +673,8 @@ export function TelemetryChart({
     ctx.strokeStyle = SEPARATOR_COLOR;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(LEFT_MARGIN, Math.round(axisY) + 0.5);
-    ctx.lineTo(w - RIGHT_MARGIN, Math.round(axisY) + 0.5);
+    ctx.moveTo(lm, Math.round(axisY) + 0.5);
+    ctx.lineTo(w - rm, Math.round(axisY) + 0.5);
     ctx.stroke();
 
     ctx.font = `10px ${MONO_FONT}`;
@@ -581,7 +682,7 @@ export function TelemetryChart({
     ctx.textAlign = 'center';
     for (const xt of xTicks) {
       const x = timeToX(xt, xRange, plotW);
-      if (x >= LEFT_MARGIN && x <= w - RIGHT_MARGIN) {
+      if (x >= lm && x <= w - rm) {
         // Tick mark
         ctx.beginPath();
         ctx.moveTo(Math.round(x) + 0.5, axisY);
@@ -596,7 +697,7 @@ export function TelemetryChart({
     ctx.font = `9px ${MONO_FONT}`;
     ctx.fillStyle = TEXT_COLOR;
     ctx.textAlign = 'right';
-    ctx.fillText('Time (s)', w - RIGHT_MARGIN, axisY + 30);
+    ctx.fillText('Time (s)', w - rm, axisY + 30);
 
     // ── Cursor overlays ──
     const cursorA = cursorXRef.current;
@@ -606,8 +707,8 @@ export function TelemetryChart({
     if (cursorA !== null && cursorB !== null) {
       const xA = timeToX(cursorA, xRange, plotW);
       const xB = timeToX(cursorB, xRange, plotW);
-      const left = Math.max(LEFT_MARGIN, Math.min(xA, xB));
-      const right = Math.min(w - RIGHT_MARGIN, Math.max(xA, xB));
+      const left = Math.max(lm, Math.min(xA, xB));
+      const right = Math.min(w - rm, Math.max(xA, xB));
       ctx.fillStyle = DELTA_FILL;
       ctx.fillRect(left, 0, right - left, axisY);
     }
@@ -615,7 +716,7 @@ export function TelemetryChart({
     // Draw cursor lines with timestamp label at the bottom axis
     const drawCursorLine = (t: number, color: string, showTimestamp = false) => {
       const x = Math.round(timeToX(t, xRange, plotW)) + 0.5;
-      if (x < LEFT_MARGIN || x > w - RIGHT_MARGIN) return;
+      if (x < lm || x > w - rm) return;
       ctx.strokeStyle = color;
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -629,7 +730,7 @@ export function TelemetryChart({
         const tw = ctx.measureText(label).width;
         const pillW = tw + 8;
         const pillH = 16;
-        const pillX = Math.round(clamp(x - pillW / 2, LEFT_MARGIN, w - RIGHT_MARGIN - pillW));
+        const pillX = Math.round(clamp(x - pillW / 2, lm, w - rm - pillW));
         const pillY = axisY + 2;
         ctx.fillStyle = CURSOR_PILL_BG;
         ctx.beginPath();
@@ -646,6 +747,7 @@ export function TelemetryChart({
       drawCursorLine(cursorA, lineColor, true);
 
       // Value readouts for cursor A
+      let pillIndex = 0;
       for (const strip of strips) {
         const data = channelDataMap.get(strip.channelId);
         if (!data || data.allSamples.length === 0) continue;
@@ -681,8 +783,10 @@ export function TelemetryChart({
         const tw = ctx.measureText(pillText).width;
         const pillW = tw + 8;
         const pillH = 16;
-        const pillX = w - RIGHT_MARGIN - pillW - 4;
-        const pillY = Math.round(clamp(dotY - pillH / 2, strip.top + 2, strip.top + strip.height - pillH - 2));
+        const pillX = w - rm - pillW - 4;
+        const pillY = chartMode === 'overlay'
+          ? strip.top + 4 + pillIndex * (pillH + 2)
+          : Math.round(clamp(dotY - pillH / 2, strip.top + 2, strip.top + strip.height - pillH - 2));
 
         ctx.fillStyle = CURSOR_PILL_BG;
         ctx.beginPath();
@@ -692,6 +796,7 @@ export function TelemetryChart({
         ctx.fillStyle = strip.color;
         ctx.textAlign = 'center';
         ctx.fillText(pillText, pillX + pillW / 2, pillY + 11);
+        pillIndex++;
       }
     }
 
@@ -711,6 +816,7 @@ export function TelemetryChart({
 
       // Value readouts for hover in delta mode (when placed cursors exist)
       if (deltaModeRef.current && (cursorA !== null || cursorB !== null)) {
+        let hoverPillIndex = 0;
         for (const strip of strips) {
           const data = channelDataMap.get(strip.channelId);
           if (!data || data.allSamples.length === 0) continue;
@@ -748,7 +854,9 @@ export function TelemetryChart({
           const pillW = tw + 6;
           const pillH = 14;
           const pillX = dotX + 8;
-          const pillY = Math.round(clamp(dotY - pillH / 2, strip.top + 2, strip.top + strip.height - pillH - 2));
+          const pillY = chartMode === 'overlay'
+            ? strip.top + 4 + hoverPillIndex * (pillH + 2)
+            : Math.round(clamp(dotY - pillH / 2, strip.top + 2, strip.top + strip.height - pillH - 2));
 
           ctx.fillStyle = 'rgba(13,14,20,0.75)';
           ctx.beginPath();
@@ -758,6 +866,7 @@ export function TelemetryChart({
           ctx.fillStyle = strip.color + 'aa';
           ctx.textAlign = 'left';
           ctx.fillText(pillText, pillX + 3, pillY + 10);
+          hoverPillIndex++;
         }
       }
     }
@@ -787,7 +896,7 @@ export function TelemetryChart({
       const lineH = 16;
       const panelH = (panelLines.length + 1) * lineH + panelPad * 2;
       const panelW = 240;
-      const panelX = w - RIGHT_MARGIN - panelW - 8;
+      const panelX = w - rm - panelW - 8;
       const panelY = 8;
 
       ctx.fillStyle = DELTA_PANEL_BG;
@@ -839,7 +948,7 @@ export function TelemetryChart({
     }
 
     ctx.restore();
-  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getDownsampled]);
+  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getDownsampled, leftMargin, rightMargin, chartMode]);
 
   // ─── Animation loop ────────────────────────────────────────────────────
   useEffect(() => {
@@ -905,7 +1014,7 @@ export function TelemetryChart({
 
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
-    const plotW = canvasSizeRef.current.w - LEFT_MARGIN - RIGHT_MARGIN;
+    const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
     if (plotW <= 0) return;
 
     const xRange = getEffectiveXRange();
@@ -920,7 +1029,7 @@ export function TelemetryChart({
     const newSpan = (xRange[1] - xRange[0]) * factor;
 
     // Keep time-under-cursor stationary
-    const ratio = (mouseX - LEFT_MARGIN) / plotW;
+    const ratio = (mouseX - leftMargin) / plotW;
     let newStart = tAtMouse - ratio * newSpan;
     let newEnd = newStart + newSpan;
 
@@ -939,7 +1048,7 @@ export function TelemetryChart({
       emitViewRange([newStart, newEnd]);
     }
     needsDrawRef.current = true;
-  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange]);
+  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -957,7 +1066,7 @@ export function TelemetryChart({
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
-    const plotW = canvasSizeRef.current.w - LEFT_MARGIN - RIGHT_MARGIN;
+    const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
     if (plotW <= 0) return;
 
     if (isDraggingRef.current && dragStartRef.current) {
@@ -989,7 +1098,7 @@ export function TelemetryChart({
       }
       needsDrawRef.current = true;
     }
-  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange]);
+  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     const wasDragging = isDraggingRef.current;
@@ -1005,7 +1114,7 @@ export function TelemetryChart({
 
       if (dx < 3) {
         // This was a click, not a drag
-        const plotW = canvasSizeRef.current.w - LEFT_MARGIN - RIGHT_MARGIN;
+        const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
         const xRange = getEffectiveXRange();
         const t = clamp(xToTime(mouseX, xRange, plotW), xRange[0], xRange[1]);
 
@@ -1027,7 +1136,7 @@ export function TelemetryChart({
       }
     }
     dragStartRef.current = null;
-  }, [getEffectiveXRange, xToTime]);
+  }, [getEffectiveXRange, xToTime, leftMargin, rightMargin]);
 
   const handleMouseLeave = useCallback(() => {
     isDraggingRef.current = false;
@@ -1083,7 +1192,7 @@ export function TelemetryChart({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const plotW = canvasSizeRef.current.w - LEFT_MARGIN - RIGHT_MARGIN;
+    const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
     if (plotW <= 0) return;
     const touches = e.touches;
 
@@ -1116,7 +1225,7 @@ export function TelemetryChart({
       const span = origRange[1] - origRange[0];
       const newSpan = span * factor;
       const tAtCenter = xToTime(centerX, origRange, plotW);
-      const ratio = (centerX - LEFT_MARGIN) / plotW;
+      const ratio = (centerX - leftMargin) / plotW;
       let newStart = tAtCenter - ratio * newSpan;
       let newEnd = newStart + newSpan;
 
@@ -1134,7 +1243,7 @@ export function TelemetryChart({
       }
       needsDrawRef.current = true;
     }
-  }, [sessionDuration, xToTime, emitViewRange]);
+  }, [sessionDuration, xToTime, emitViewRange, leftMargin, rightMargin]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     e.preventDefault();
@@ -1156,7 +1265,7 @@ export function TelemetryChart({
 
         if (totalMovement < 10 && duration < 300) {
           // Tap → place cursor
-          const plotW = canvasSizeRef.current.w - LEFT_MARGIN - RIGHT_MARGIN;
+          const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
           const xRange = getEffectiveXRange();
           const t = clamp(xToTime(endX, xRange, plotW), xRange[0], xRange[1]);
           cursorXRef.current = t;
@@ -1178,7 +1287,7 @@ export function TelemetryChart({
         xRange: [...getEffectiveXRange()] as [number, number],
       };
     }
-  }, [getEffectiveXRange, xToTime, onCursorTimeChange]);
+  }, [getEffectiveXRange, xToTime, onCursorTimeChange, leftMargin, rightMargin]);
 
   // ─── Reset zoom from toolbar ──────────────────────────────────────────
   const resetZoom = useCallback(() => {

@@ -338,6 +338,7 @@ export default function App() {
               derivedSamplesMap={derivedSamplesMap}
               cursorTime={state.cursorTime}
               onCursorTimeChange={setCursorTime}
+              chartMode={state.chartMode}
             />
           ) : (
             /* Empty state -- no file loaded */
