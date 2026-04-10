@@ -163,6 +163,10 @@ def list_aim_sessions() -> list[dict]:
 
             all_data = b""
 
+            # Step 0: STCP handshake — device ignores all STNC messages without this
+            resp = _send_and_recv(s, _HANDSHAKE, "STCP handshake", read_timeout=5)
+            all_data += resp
+
             # Step 1: System info query
             resp = _send_and_recv(s, _STNC_SYSTEM, "STNC system info", read_timeout=5)
             all_data += resp
