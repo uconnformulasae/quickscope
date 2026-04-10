@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Search, X, Plus, FlaskConical, Pencil, Trash2 } from 'lucide-react';
 import type { XRKSession, ChannelDef } from '../lib/xrk-parser';
-import type { ActiveChannel, DerivedChannel } from '../lib/useXRKStore';
+import type { ActiveChannel, DerivedChannel, ChartMode } from '../lib/useXRKStore';
 
 interface ChannelSidebarProps {
   session: XRKSession;
@@ -16,6 +16,8 @@ interface ChannelSidebarProps {
   onSearchChange: (s: string) => void;
   showOnlyWithData: boolean;
   onShowOnlyWithDataChange: (v: boolean) => void;
+  chartMode: ChartMode;
+  onChartModeChange: (mode: ChartMode) => void;
 }
 
 function formatSampleCount(count: number): string {
@@ -38,6 +40,8 @@ export function ChannelSidebar({
   onSearchChange,
   showOnlyWithData,
   onShowOnlyWithDataChange,
+  chartMode,
+  onChartModeChange,
 }: ChannelSidebarProps) {
   const activeSet = useMemo(() => new Set(activeChannels.map(c => c.channelId)), [activeChannels]);
 
@@ -99,6 +103,30 @@ export function ChannelSidebar({
               <FlaskConical className="w-3 h-3" />
             </button>
           </div>
+        </div>
+
+        {/* Chart mode toggle */}
+        <div className="flex gap-1 mb-2">
+          <button
+            onClick={() => onChartModeChange('separate')}
+            className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+              chartMode === 'separate'
+                ? 'bg-primary/20 text-primary border border-primary/40'
+                : 'text-muted-foreground border border-border hover:text-foreground hover:border-muted-foreground/40'
+            }`}
+          >
+            Separate
+          </button>
+          <button
+            onClick={() => onChartModeChange('overlay')}
+            className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+              chartMode === 'overlay'
+                ? 'bg-primary/20 text-primary border border-primary/40'
+                : 'text-muted-foreground border border-border hover:text-foreground hover:border-muted-foreground/40'
+            }`}
+          >
+            Overlay
+          </button>
         </div>
 
         {/* Search */}
