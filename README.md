@@ -1,0 +1,100 @@
+# QuickScope
+
+Racing telemetry analysis tool for AiM data logger files. Visualize, compare, and export channel data from `.xrk` and `.xrz` session files.
+
+Built for UConn Formula SAE Electric.
+
+## Features
+
+- Custom canvas-based chart engine with multi-channel strip view
+- Zoom, pan, and cursor inspection with value readouts
+- Delta mode for comparing two points in time
+- Derived channels via math formulas or JavaScript expressions
+- Lap analysis, histograms, XY scatter plots, GPS track map
+- CSV export with cross-channel interpolation
+- Session management with local persistence
+- Sync with [Data-Development](https://github.com/uconnformulasae/Data-Development) (Railway deployment) for shared session storage
+- Direct AiM device connectivity over WiFi (macOS and Windows)
+
+## Architecture
+
+- **Frontend**: React 18 + TypeScript + Vite + Tailwind CSS (port 5000)
+- **Backend**: Python FastAPI + libxrk (port 8000)
+
+The backend parses `.xrk`/`.xrz` files using [libxrk](https://pypi.org/project/libxrk/) and serves channel data via REST API. The frontend renders everything client-side using a custom Canvas chart engine -- no charting library dependency.
+
+Sessions are persisted locally in `./data/sessions.json` with raw files cached in `./data/sessions/`. When configured, sessions sync bidirectionally with the Data-Development Railway backend.
+
+## Quick Start
+
+```bash
+./start.sh
+```
+
+This installs dependencies (if needed) and starts both servers. Open `http://localhost:5000`.
+
+### Manual Start
+
+```bash
+# Backend
+cd backend
+pip install -r requirements.txt
+python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+# Frontend (separate terminal)
+npm install
+npm run dev
+```
+
+## Configuration
+
+Click the gear icon in the session browser to configure:
+
+- **Railway URL** -- Data-Development API endpoint (e.g. `https://your-app.up.railway.app/api/v1`)
+- **AiM WiFi SSID** -- your AiM device's hotspot name
+- **AiM Device IP** -- default `10.0.0.1`
+
+Settings are stored in `./data/settings.json`.
+
+## AiM Device Connection
+
+When connected to the AiM device's WiFi hotspot:
+
+1. The green AiM indicator appears in the session browser header
+2. Click "Pull from AiM" to browse sessions on the device
+3. Select which sessions to download
+4. Downloaded sessions are saved locally and auto-uploaded to Railway (if configured)
+
+The connection uses the AiM binary TCP protocol (port 2000) with UDP discovery (port 36002).
+
+## Project Structure
+
+```
+backend/
+  main.py                  # FastAPI app -- session management + analysis endpoints
+  services/
+    session_store.py       # JSON-backed local session index
+    settings_store.py      # Persistent settings
+    railway_client.py      # Data-Development API client
+    aim_connector.py       # AiM device protocol (UDP discovery + TCP session list/download)
+    sync_service.py        # Bidirectional Railway sync
+
+client/src/
+  App.tsx                  # Root -- view routing (session browser vs analysis)
+  lib/
+    api.ts                 # Backend API client
+    useXRKStore.ts         # React state management
+    xrk-parser.ts          # Types, downsampling, formatting helpers
+    formula-engine.ts      # Derived channel expression evaluator
+  components/
+    SessionBrowser.tsx     # Session list, sync, upload, AiM pull
+    TelemetryChart.tsx     # Canvas chart engine
+    ChannelSidebar.tsx     # Channel picker
+    AnalysisPanel.tsx      # Stats, laps, histogram, XY plot, GPS tabs
+    AimSessionPicker.tsx   # AiM device session browser/downloader
+    SettingsDialog.tsx     # Railway + AiM configuration
+    SessionHeader.tsx      # Top bar with metadata and controls
+    DerivedChannelDialog.tsx  # Formula/JS expression editor
+    ExportDialog.tsx       # CSV export channel selector
+    GPSMapView.tsx         # Leaflet map with speed-colored track
+```
