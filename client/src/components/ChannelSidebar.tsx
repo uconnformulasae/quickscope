@@ -19,10 +19,10 @@ interface ChannelSidebarProps {
 }
 
 function formatSampleCount(count: number): string {
-  if (count === 0) return 'No data';
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M pts`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(0)}K pts`;
-  return `${count} pts`;
+  if (count > 0) return `${count} pts`;
+  return '';
 }
 
 export function ChannelSidebar({
@@ -61,9 +61,9 @@ export function ChannelSidebar({
       );
     }
 
-    // Has data filter
+    // Has data filter — use fileSampleCount (backend) so unloaded channels aren't hidden
     if (showOnlyWithData) {
-      channels = channels.filter(c => (session.samples.get(c.index) || []).length > 0);
+      channels = channels.filter(c => (c.fileSampleCount ?? (session.samples.get(c.index) || []).length) > 0);
     }
 
     return channels;
@@ -231,7 +231,10 @@ interface ChannelRowProps {
 }
 
 function ChannelRow({ chan, isActive, sampleCount, onToggle }: ChannelRowProps) {
-  const hasData = sampleCount > 0;
+  // Use fileSampleCount (from backend) to determine if the file has data for this channel.
+  // sampleCount is 0 for channels not yet lazy-loaded, even if the file has data.
+  const fileHasData = (chan.fileSampleCount ?? sampleCount) > 0;
+  const displayCount = chan.fileSampleCount ?? sampleCount;
   return (
     <button
       onClick={onToggle}
@@ -239,10 +242,10 @@ function ChannelRow({ chan, isActive, sampleCount, onToggle }: ChannelRowProps) 
         flex items-center gap-2 w-full px-2 py-1 text-left
         hover:bg-muted/30 transition-colors group
         ${isActive ? 'bg-muted/20' : ''}
-        ${!hasData ? 'opacity-50' : ''}
+        ${!fileHasData ? 'opacity-50' : ''}
       `}
       data-testid={`channel-row-${chan.index}`}
-      title={!hasData ? 'No data recorded for this channel in this session' : undefined}
+      title={!fileHasData ? 'No data recorded for this channel in this session' : undefined}
     >
       {/* Color swatch */}
       <div
@@ -270,16 +273,16 @@ function ChannelRow({ chan, isActive, sampleCount, onToggle }: ChannelRowProps) 
 
       {/* Data indicator */}
       <div className="flex-shrink-0 flex flex-col items-end gap-0.5">
-        {hasData ? (
+        {fileHasData ? (
           <span className="text-xs text-muted-foreground/40 tabular">
-            {formatSampleCount(sampleCount)}
+            {formatSampleCount(displayCount)}
           </span>
         ) : (
           <span className="text-xs px-1 py-0.5 rounded bg-muted/60 text-muted-foreground/50 leading-none">
             No data
           </span>
         )}
-        {hasData && (
+        {fileHasData && chan.sampleRateHz > 0 && (
           <span className="text-xs text-muted-foreground/30 tabular">
             {chan.sampleRateHz}Hz
           </span>

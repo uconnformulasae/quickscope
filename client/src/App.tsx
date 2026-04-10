@@ -74,6 +74,7 @@ export default function App() {
         offset: 0,
         units: ch.units,
         color: ch.color,
+        fileSampleCount: ch.sampleCount,
       });
     }
 
