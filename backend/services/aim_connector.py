@@ -296,7 +296,7 @@ def _extract_data_blocks(raw: bytes) -> bytes:
         pos = payload_end + 8
 
     if not blocks:
-        return raw
+        raise RuntimeError(f"No data blocks found in {len(raw)} bytes of response")
 
     blocks.sort(key=lambda b: b[0])
     total_size = blocks[-1][0] + len(blocks[-1][1])

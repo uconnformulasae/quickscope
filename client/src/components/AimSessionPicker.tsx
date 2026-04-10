@@ -29,6 +29,13 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
   const [downloading, setDownloading] = useState(false);
   const [downloadResult, setDownloadResult] = useState<string | null>(null);
 
+  // Dismiss on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   useEffect(() => {
     setLoading(true);
     setError(null);

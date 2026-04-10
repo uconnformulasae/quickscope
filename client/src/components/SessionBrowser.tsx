@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   listSessions, loadSession, syncSessions, pullSession, deleteSession,
   getAimStatus, uploadFile,
@@ -134,11 +134,12 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
 
   const handleDelete = useCallback(async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
+    if (!window.confirm('Delete this session from local storage?')) return;
     try {
       await deleteSession(sessionId);
       await refreshSessions();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Delete failed');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed');
     }
   }, [refreshSessions]);
 
@@ -148,18 +149,18 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
     setError(null);
     try {
       const info = await uploadFile(file);
-      await refreshSessions();
-      // Find the new session (most recent)
       const updated = await listSessions();
+      setSessions(updated);
       const newest = updated.find(s => s.filename === file.name);
       if (newest) {
         onSessionLoaded(info, newest.id, file.name);
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
       setLoadingId(null);
     }
-  }, [onSessionLoaded, refreshSessions]);
+  }, [onSessionLoaded]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -168,25 +169,23 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
     if (file) handleFileUpload(file);
   }, [handleFileUpload]);
 
-  const filteredSessions = sessions.filter(s => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (
-      s.filename.toLowerCase().includes(q) ||
-      s.track_name?.toLowerCase().includes(q) ||
-      s.driver_name?.toLowerCase().includes(q) ||
-      s.vehicle_name?.toLowerCase().includes(q)
-    );
-  });
-
-  // Sort: most recent first
-  const sortedSessions = [...filteredSessions].sort((a, b) => {
-    const da = a.recorded_at || a.created_at;
-    const db = b.recorded_at || b.created_at;
-    return db.localeCompare(da);
-  });
-
-  const railwayConfigured = sessions.length > 0 || syncing;
+  const sortedSessions = useMemo(() => {
+    const filtered = sessions.filter(s => {
+      if (!search) return true;
+      const q = search.toLowerCase();
+      return (
+        s.filename.toLowerCase().includes(q) ||
+        s.track_name?.toLowerCase().includes(q) ||
+        s.driver_name?.toLowerCase().includes(q) ||
+        s.vehicle_name?.toLowerCase().includes(q)
+      );
+    });
+    return filtered.sort((a, b) => {
+      const da = a.recorded_at || a.created_at;
+      const db = b.recorded_at || b.created_at;
+      return db.localeCompare(da);
+    });
+  }, [sessions, search]);
 
   return (
     <div
@@ -210,7 +209,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
               </span>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 text-muted-foreground/50" title={`Probing ${aimStatus?.device_ip || '10.0.0.1'}:36002`}>
+            <div className="flex items-center gap-1.5 text-muted-foreground/50">
               <WifiOff className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">AiM</span>
             </div>

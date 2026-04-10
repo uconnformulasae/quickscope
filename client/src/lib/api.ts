@@ -71,7 +71,6 @@ export interface LocalSession {
 export interface AimStatus {
   connected: boolean;
   device: { ip: string; ssid: string; device_name: string } | null;
-  device_ip: string;
 }
 
 export interface AimSession {

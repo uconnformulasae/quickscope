@@ -4,28 +4,29 @@ Parses .xrk files using libxrk and serves channel data via FastAPI.
 Multi-session with local persistence and Railway/AiM sync.
 """
 
+import asyncio
 import io
 import csv
 import logging
 import math
-import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Query, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from libxrk import aim_xrk, ChannelMetadata
 
-# Configure logging so AiM connector debug output is visible
+from services import session_store, settings_store, sync_service, aim_connector, railway_client
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("quickscope")
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from libxrk import aim_xrk, ChannelMetadata
-
-from services import session_store, settings_store, sync_service, aim_connector, railway_client
 
 app = FastAPI(title="QuickScope Backend")
 
@@ -48,7 +49,7 @@ class SessionState:
     def __init__(self):
         self.log = None
         self.filename: Optional[str] = None
-        self.session_id: Optional[str] = None  # local session ID
+        self.session_id: Optional[str] = None
 
     def clear(self):
         self.log = None
@@ -61,9 +62,11 @@ class SessionState:
 
 state = SessionState()
 
+# Guard against concurrent sync operations
+_sync_lock = asyncio.Lock()
+
 
 def _channel_meta(name: str, table) -> dict:
-    """Extract metadata from a channel's PyArrow table."""
     field = table.schema.field(name)
     meta = ChannelMetadata.from_field(field)
     return {
@@ -74,7 +77,6 @@ def _channel_meta(name: str, table) -> dict:
 
 
 def _channel_data(name: str, table) -> dict:
-    """Extract timestamps (ms) and values from a channel table."""
     df = table.to_pandas()
     timestamps = df['timecodes'].tolist()
     values = df[name].tolist()
@@ -88,12 +90,10 @@ def _channel_data(name: str, table) -> dict:
 
 
 def _parse_file(file_path: str | Path):
-    """Parse a session file with libxrk. Returns the log object."""
     return aim_xrk(str(file_path))
 
 
 def _extract_session_info(log, filename: str) -> dict:
-    """Extract metadata, channels, duration from a parsed log."""
     meta = log.metadata or {}
     metadata = {
         "vehicle": meta.get("Vehicle", ""),
@@ -115,20 +115,16 @@ def _extract_session_info(log, filename: str) -> dict:
         total_samples += n_rows
         cm = _channel_meta(name, table)
 
+        sample_rate_hz = 0
         if n_rows > 0 and not name.lower().startswith("gps"):
             df = table.to_pandas()
             last_tc = float(df['timecodes'].iloc[-1])
             if last_tc < 36_000_000 and last_tc > duration_ms:
                 duration_ms = last_tc
-
-        # Compute sample rate from timecodes if available
-        sample_rate_hz = 0
-        if n_rows >= 2 and not name.lower().startswith("gps"):
-            df = table.to_pandas() if 'df' not in dir() or df is None else df
-            tcs = table.to_pandas()['timecodes']
-            dt = float(tcs.iloc[-1] - tcs.iloc[0])
-            if dt > 0:
-                sample_rate_hz = round((n_rows - 1) / (dt / 1000), 1)
+            if n_rows >= 2:
+                dt = float(df['timecodes'].iloc[-1] - df['timecodes'].iloc[0])
+                if dt > 0:
+                    sample_rate_hz = round((n_rows - 1) / (dt / 1000), 1)
 
         channels.append({
             "name": name,
@@ -150,17 +146,24 @@ def _extract_session_info(log, filename: str) -> dict:
     }
 
 
+def _sanitize_filename(filename: str) -> str:
+    """Strip directory components and dangerous characters from a filename."""
+    safe = Path(filename).name
+    safe = re.sub(r'[^\w\-.]', '_', safe)
+    if not safe:
+        raise ValueError("Invalid filename")
+    return safe
+
+
 # ─── Session Management Endpoints ──────────────────────────────────────────
 
 @app.get("/api/sessions")
 async def list_sessions():
-    """List all sessions from the local index."""
     return session_store.list_sessions()
 
 
 @app.post("/api/sessions/{session_id}/load")
 async def load_session(session_id: str):
-    """Load a local session into memory for analysis."""
     entry = session_store.get_session(session_id)
     if not entry:
         raise HTTPException(404, "Session not found")
@@ -174,28 +177,28 @@ async def load_session(session_id: str):
         state.log = log
         state.filename = entry["filename"]
         state.session_id = session_id
-    except Exception as e:
+    except Exception:
         state.clear()
-        raise HTTPException(500, f"Failed to parse file: {e}")
+        logger.exception("Failed to parse session file")
+        raise HTTPException(500, "Failed to parse session file")
 
     return _extract_session_info(log, entry["filename"])
 
 
 @app.post("/api/sessions/sync")
 async def sync_sessions():
-    """Sync with Railway — pull remote session list, push local-only sessions."""
     try:
         result = await sync_service.sync_with_railway()
         return {"ok": True, **result}
     except ValueError as e:
         raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Sync failed: {e}")
+    except Exception:
+        logger.exception("Sync failed")
+        raise HTTPException(500, "Sync failed")
 
 
 @app.post("/api/sessions/{session_id}/pull")
 async def pull_session(session_id: str):
-    """Download a remote-only session's file from Railway."""
     result = await sync_service.pull_session(session_id)
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "Pull failed"))
@@ -204,17 +207,14 @@ async def pull_session(session_id: str):
 
 @app.delete("/api/sessions/{session_id}")
 async def delete_session(session_id: str):
-    """Remove a session from the local index and delete its cached file."""
     entry = session_store.get_session(session_id)
     if not entry:
         raise HTTPException(404, "Session not found")
 
-    # Delete local file if it exists
     local_path = entry.get("local_path")
     if local_path:
         Path(local_path).unlink(missing_ok=True)
 
-    # Clear active session if it's the one being deleted
     if state.session_id == session_id:
         state.clear()
 
@@ -226,27 +226,21 @@ async def delete_session(session_id: str):
 
 @app.get("/api/aim/status")
 async def aim_status():
-    """Check if AiM device is reachable via UDP discovery."""
-    connected = aim_connector.is_aim_connected()
+    connected = await asyncio.to_thread(aim_connector.is_aim_connected)
     device_info = None
     if connected:
-        device_info = aim_connector.discover_device()
-    return {
-        "connected": connected,
-        "device": device_info,
-        "device_ip": aim_connector._get_device_ip(),
-    }
+        device_info = await asyncio.to_thread(aim_connector.discover_device)
+    return {"connected": connected, "device": device_info}
 
 
 @app.get("/api/aim/sessions")
 async def list_aim_sessions():
-    """List sessions available on the AiM device."""
-    if not aim_connector.is_aim_connected():
+    connected = await asyncio.to_thread(aim_connector.is_aim_connected)
+    if not connected:
         return {"ok": False, "sessions": [], "error": "AiM device not reachable"}
 
-    sessions = aim_connector.list_aim_sessions()
+    sessions = await asyncio.to_thread(aim_connector.list_aim_sessions)
 
-    # Mark which ones we already have locally
     local_sessions = session_store.list_sessions()
     local_filenames = {s["filename"] for s in local_sessions}
 
@@ -256,40 +250,47 @@ async def list_aim_sessions():
     return {"ok": True, "sessions": sessions}
 
 
+class AimPullRequest(BaseModel):
+    filenames: list[str]
+
+
 @app.post("/api/aim/pull")
-async def pull_from_aim(body: dict = None, background_tasks: BackgroundTasks = None):
-    """Download selected sessions from AiM device, save locally, queue upload to Railway."""
-    if not aim_connector.is_aim_connected():
+async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks):
+    connected = await asyncio.to_thread(aim_connector.is_aim_connected)
+    if not connected:
         raise HTTPException(400, "AiM device not reachable")
 
-    selected_filenames = (body or {}).get("filenames", [])
-    if not selected_filenames:
+    if not body.filenames:
         return {"ok": False, "error": "No files selected", "downloaded": []}
 
-    logger.info("AiM pull: downloading %d selected sessions...", len(selected_filenames))
+    logger.info("AiM pull: downloading %d selected sessions...", len(body.filenames))
 
     downloaded = []
     errors = []
-    for filename in selected_filenames:
-        aim_s = {"filename": filename}
-        logger.info("AiM pull: downloading %s ...", aim_s["filename"])
+    for raw_filename in body.filenames:
         try:
-            dest = session_store.session_file_path(aim_s["filename"])
-            aim_connector.download_aim_session(aim_s["filename"], dest.parent)
+            filename = _sanitize_filename(raw_filename)
+        except ValueError:
+            errors.append(f"{raw_filename}: invalid filename")
+            continue
+
+        logger.info("AiM pull: downloading %s ...", filename)
+        try:
+            dest = session_store.session_file_path(filename)
+            await asyncio.to_thread(aim_connector.download_aim_session, filename, dest.parent)
             logger.info("AiM pull: saved %s (%d bytes)", dest, dest.stat().st_size)
 
-            # Parse to extract metadata
             try:
                 log = _parse_file(dest)
-                info = _extract_session_info(log, aim_s["filename"])
+                info = _extract_session_info(log, filename)
                 meta = info["metadata"]
             except Exception as parse_err:
-                logger.warning("AiM pull: parse failed for %s: %s", aim_s["filename"], parse_err)
+                logger.warning("AiM pull: parse failed for %s: %s", filename, parse_err)
                 meta = {}
                 info = {"durationMs": 0, "lapCount": 0}
 
             entry = session_store.add_session(
-                filename=aim_s["filename"],
+                filename=filename,
                 source="aim_device",
                 sync_status="local_only",
                 local_path=str(dest),
@@ -301,10 +302,9 @@ async def pull_from_aim(body: dict = None, background_tasks: BackgroundTasks = N
             )
             downloaded.append(entry["filename"])
         except Exception as e:
-            logger.error("AiM pull: failed to download %s: %s", aim_s["filename"], e, exc_info=True)
-            errors.append(f"{aim_s['filename']}: {e}")
+            logger.error("AiM pull: failed to download %s: %s", filename, e, exc_info=True)
+            errors.append(f"{filename}: {e}")
 
-    # Background: sync with Railway to push new sessions
     if downloaded:
         background_tasks.add_task(_background_sync)
 
@@ -312,10 +312,13 @@ async def pull_from_aim(body: dict = None, background_tasks: BackgroundTasks = N
 
 
 async def _background_sync():
-    try:
-        await sync_service.sync_with_railway()
-    except Exception:
-        pass
+    if _sync_lock.locked():
+        return
+    async with _sync_lock:
+        try:
+            await sync_service.sync_with_railway()
+        except Exception:
+            logger.exception("Background sync failed")
 
 
 # ─── Settings Endpoints ────────────────────────────────────────────────────
@@ -337,34 +340,29 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
     if not file.filename or not file.filename.lower().endswith((".xrk", ".xrz")):
         raise HTTPException(400, "Only .xrk/.xrz files are supported")
 
+    filename = _sanitize_filename(file.filename)
     content = await file.read()
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xrk")
-    try:
-        tmp.write(content)
-        tmp.flush()
-        tmp.close()
-        log = _parse_file(tmp.name)
-        state.log = log
-        state.filename = file.filename
-    except Exception as e:
-        state.clear()
-        raise HTTPException(500, f"Failed to parse file: {e}")
-    finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
 
-    info = _extract_session_info(log, file.filename)
-
-    # Save to local cache
-    dest = session_store.session_file_path(file.filename)
+    # Save to local cache first, then parse from there (avoids temp file issues)
+    dest = session_store.session_file_path(filename)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(content)
 
+    try:
+        log = _parse_file(dest)
+        state.log = log
+        state.filename = filename
+    except Exception:
+        dest.unlink(missing_ok=True)
+        state.clear()
+        logger.exception("Failed to parse uploaded file")
+        raise HTTPException(500, "Failed to parse file")
+
+    info = _extract_session_info(log, filename)
     meta = info["metadata"]
+
     # Check for duplicate
-    existing = session_store.find_by_filename(file.filename)
+    existing = session_store.find_by_filename(filename)
     if existing:
         state.session_id = existing["id"]
         if background_tasks:
@@ -372,7 +370,7 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
         return info
 
     entry = session_store.add_session(
-        filename=file.filename,
+        filename=filename,
         source="manual_upload",
         sync_status="local_only",
         local_path=str(dest),
@@ -384,7 +382,6 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
     )
     state.session_id = entry["id"]
 
-    # Background: upload to Railway
     if background_tasks:
         background_tasks.add_task(_background_sync)
 
@@ -523,7 +520,7 @@ async def export_csv(channels: str = Query(...)):
 
     csv_bytes = output.getvalue().encode("utf-8")
     output.close()
-    basename = (state.filename or "export").rsplit(".", 1)[0]
+    basename = re.sub(r'[^\w\-.]', '_', (state.filename or "export").rsplit(".", 1)[0])
 
     return StreamingResponse(
         io.BytesIO(csv_bytes),

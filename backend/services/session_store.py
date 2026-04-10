@@ -131,4 +131,10 @@ def delete_session(session_id: str) -> bool:
 
 def session_file_path(filename: str) -> Path:
     _ensure_dirs()
-    return SESSIONS_DIR / filename
+    safe_name = Path(filename).name
+    if not safe_name:
+        raise ValueError("Invalid filename")
+    resolved = (SESSIONS_DIR / safe_name).resolve()
+    if not resolved.is_relative_to(SESSIONS_DIR.resolve()):
+        raise ValueError("Invalid filename")
+    return resolved

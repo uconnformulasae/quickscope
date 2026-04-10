@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Save } from 'lucide-react';
 import { getSettings, updateSettings, type Settings } from '../lib/api';
 
@@ -16,12 +16,21 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
     getSettings()
       .then(setSettings)
       .catch(e => setError(e.message));
+    return () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); };
   }, []);
+
+  // Dismiss on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -30,9 +39,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
     try {
       await updateSettings(settings);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed');
     } finally {
       setSaving(false);
     }
