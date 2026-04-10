@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listSessions, loadSession, syncSessions, pullSession, deleteSession,
-  getAimStatus, pullFromAim, uploadFile,
+  getAimStatus, uploadFile,
   type LocalSession, type SessionInfo, type AimStatus,
 } from '../lib/api';
 import {
@@ -9,6 +9,7 @@ import {
   Download, CheckCircle, Clock, Loader2, HardDrive, Radio,
   ChevronRight, Search, Settings,
 } from 'lucide-react';
+import { AimSessionPicker } from './AimSessionPicker';
 
 interface SessionBrowserProps {
   onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
@@ -52,7 +53,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
   const [sessions, setSessions] = useState<LocalSession[]>([]);
   const [aimStatus, setAimStatus] = useState<AimStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [pullingAim, setPullingAim] = useState(false);
+  const [aimPickerOpen, setAimPickerOpen] = useState(false);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [pullingId, setPullingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -101,24 +102,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
     }
   }, [refreshSessions]);
 
-  const handlePullAim = useCallback(async () => {
-    setPullingAim(true);
-    setError(null);
-    try {
-      const result = await pullFromAim();
-      await refreshSessions();
-      if (result.error) {
-        setError(result.error);
-      } else if (result.errors?.length) {
-        setError(`Some downloads failed: ${result.errors.join('; ')}`);
-      } else if (result.downloaded?.length === 0) {
-        setError(result.message || 'No new sessions found on device');
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'AiM pull failed');
-    } finally {
-      setPullingAim(false);
-    }
+  const handleAimPickerDownloaded = useCallback(() => {
+    refreshSessions();
   }, [refreshSessions]);
 
   const handleSessionClick = useCallback(async (session: LocalSession) => {
@@ -273,15 +258,10 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
 
         {aimStatus?.connected && (
           <button
-            onClick={handlePullAim}
-            disabled={pullingAim}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+            onClick={() => setAimPickerOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
           >
-            {pullingAim ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Download className="w-3.5 h-3.5" />
-            )}
+            <Download className="w-3.5 h-3.5" />
             Pull from AiM
           </button>
         )}
@@ -409,6 +389,14 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
             <p className="text-sm font-medium text-foreground">Drop .xrk / .xrz file to upload</p>
           </div>
         </div>
+      )}
+
+      {/* AiM Session Picker */}
+      {aimPickerOpen && (
+        <AimSessionPicker
+          onClose={() => setAimPickerOpen(false)}
+          onDownloaded={handleAimPickerDownloaded}
+        />
       )}
 
       {/* Footer */}

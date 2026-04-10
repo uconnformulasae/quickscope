@@ -257,31 +257,21 @@ async def list_aim_sessions():
 
 
 @app.post("/api/aim/pull")
-async def pull_from_aim(background_tasks: BackgroundTasks):
-    """Download new sessions from AiM device, save locally, queue upload to Railway."""
+async def pull_from_aim(body: dict = None, background_tasks: BackgroundTasks = None):
+    """Download selected sessions from AiM device, save locally, queue upload to Railway."""
     if not aim_connector.is_aim_connected():
         raise HTTPException(400, "AiM device not reachable")
 
-    logger.info("AiM pull: listing sessions on device...")
-    try:
-        aim_sessions = aim_connector.list_aim_sessions()
-    except Exception as e:
-        logger.error("AiM pull: failed to list sessions: %s", e, exc_info=True)
-        return {"ok": False, "error": f"Failed to list sessions: {e}", "downloaded": []}
+    selected_filenames = (body or {}).get("filenames", [])
+    if not selected_filenames:
+        return {"ok": False, "error": "No files selected", "downloaded": []}
 
-    logger.info("AiM pull: found %d sessions on device", len(aim_sessions))
-    if not aim_sessions:
-        return {"ok": True, "downloaded": [], "message": "No sessions found on device"}
-
-    local_sessions = session_store.list_sessions()
-    local_filenames = {s["filename"] for s in local_sessions}
-    new_sessions = [s for s in aim_sessions if s["filename"] not in local_filenames]
-    logger.info("AiM pull: %d new sessions to download (skipping %d already local)",
-                len(new_sessions), len(aim_sessions) - len(new_sessions))
+    logger.info("AiM pull: downloading %d selected sessions...", len(selected_filenames))
 
     downloaded = []
     errors = []
-    for aim_s in new_sessions:
+    for filename in selected_filenames:
+        aim_s = {"filename": filename}
         logger.info("AiM pull: downloading %s ...", aim_s["filename"])
         try:
             dest = session_store.session_file_path(aim_s["filename"])
