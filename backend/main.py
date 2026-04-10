@@ -218,9 +218,16 @@ async def delete_session(session_id: str):
 
 @app.get("/api/aim/status")
 async def aim_status():
-    """Check if connected to AiM WiFi."""
+    """Check if AiM device is reachable via UDP discovery."""
     connected = aim_connector.is_aim_connected()
-    return {"connected": connected, "ssid": settings_store.load().get("aim_wifi_ssid", "")}
+    device_info = None
+    if connected:
+        device_info = aim_connector.discover_device()
+    return {
+        "connected": connected,
+        "device": device_info,
+        "device_ip": aim_connector._get_device_ip(),
+    }
 
 
 @app.get("/api/aim/sessions")
@@ -229,7 +236,7 @@ async def list_aim_sessions():
     if not aim_connector.is_aim_connected():
         return {"ok": False, "sessions": [], "error": "AiM device not reachable"}
 
-    sessions = await aim_connector.list_aim_sessions()
+    sessions = aim_connector.list_aim_sessions()
 
     # Mark which ones we already have locally
     local_sessions = session_store.list_sessions()
@@ -247,7 +254,7 @@ async def pull_from_aim(background_tasks: BackgroundTasks):
     if not aim_connector.is_aim_connected():
         raise HTTPException(400, "AiM device not reachable")
 
-    aim_sessions = await aim_connector.list_aim_sessions()
+    aim_sessions = aim_connector.list_aim_sessions()
     local_sessions = session_store.list_sessions()
     local_filenames = {s["filename"] for s in local_sessions}
 
@@ -258,7 +265,7 @@ async def pull_from_aim(background_tasks: BackgroundTasks):
 
         try:
             dest = session_store.session_file_path(aim_s["filename"])
-            await aim_connector.download_aim_session(aim_s["filename"], dest.parent)
+            aim_connector.download_aim_session(aim_s["filename"], dest.parent)
 
             # Parse to extract metadata
             try:

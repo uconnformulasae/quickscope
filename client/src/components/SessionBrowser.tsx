@@ -211,12 +211,14 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
         {/* Connection indicators */}
         <div className="flex items-center gap-3 text-xs">
           {aimStatus?.connected ? (
-            <div className="flex items-center gap-1.5 text-emerald-400">
+            <div className="flex items-center gap-1.5 text-emerald-400" title={aimStatus.device?.device_name || aimStatus.device_ip}>
               <Wifi className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">AiM Connected</span>
+              <span className="hidden sm:inline">
+                AiM {aimStatus.device?.device_name ? `(${aimStatus.device.device_name})` : 'Connected'}
+              </span>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 text-muted-foreground/50">
+            <div className="flex items-center gap-1.5 text-muted-foreground/50" title={`Probing ${aimStatus?.device_ip || '10.0.0.1'}:36002`}>
               <WifiOff className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">AiM</span>
             </div>
