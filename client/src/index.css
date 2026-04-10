@@ -1,0 +1,170 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================================================
+   QuickScope Design System — Dark Motorsport Telemetry Aesthetic
+   Primary: Electric Blue (#4361ee)
+   Accent: Orange (#f77f00)
+   Background: Deep Charcoal (#0d0e14)
+   ========================================================= */
+
+@layer base {
+  :root {
+    /* Surfaces - Dark Charcoal motorsport palette */
+    --background: 232 28% 7%;         /* #0d0e14 deep charcoal */
+    --foreground: 220 15% 88%;        /* #dde1ec cool light text */
+
+    --card: 230 25% 10%;              /* #131520 card surface */
+    --card-foreground: 220 15% 88%;
+
+    --popover: 230 25% 10%;
+    --popover-foreground: 220 15% 88%;
+
+    /* Primary: Electric Blue */
+    --primary: 232 82% 59%;           /* #4361ee */
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary: subtle dark surface */
+    --secondary: 230 20% 16%;         /* #1d2030 */
+    --secondary-foreground: 220 15% 75%;
+
+    /* Muted */
+    --muted: 230 20% 14%;             /* #191d2b */
+    --muted-foreground: 220 10% 50%;  /* muted text */
+
+    /* Accent: Racing Orange */
+    --accent: 28 100% 49%;            /* #f77f00 */
+    --accent-foreground: 0 0% 100%;
+
+    /* Destructive */
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Border & Input */
+    --border: 230 20% 20%;            /* #242838 */
+    --input: 230 20% 18%;
+    --ring: 232 82% 59%;              /* electric blue ring */
+
+    /* Radius */
+    --radius: 0.5rem;
+
+    /* Chart colors - telemetry palette */
+    --chart-1: 232 82% 59%;   /* electric blue - speed/dynamics */
+    --chart-2: 28 100% 49%;   /* racing orange - throttle/engine */
+    --chart-3: 142 71% 45%;   /* electric green - battery/power */
+    --chart-4: 280 80% 65%;   /* purple - brakes */
+    --chart-5: 195 100% 50%;  /* cyan - temperature */
+    --chart-6: 48 100% 60%;   /* yellow - voltage */
+  }
+
+  /* QuickScope is dark-first — dark mode is the primary mode */
+  .dark {
+    --background: 232 28% 7%;
+    --foreground: 220 15% 88%;
+    --card: 230 25% 10%;
+    --card-foreground: 220 15% 88%;
+    --popover: 230 25% 10%;
+    --popover-foreground: 220 15% 88%;
+    --primary: 232 82% 59%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 230 20% 16%;
+    --secondary-foreground: 220 15% 75%;
+    --muted: 230 20% 14%;
+    --muted-foreground: 220 10% 50%;
+    --accent: 28 100% 49%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 230 20% 20%;
+    --input: 230 20% 18%;
+    --ring: 232 82% 59%;
+  }
+
+  /* Light mode override (less common) */
+  .light {
+    --background: 220 20% 95%;
+    --foreground: 232 25% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 232 25% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 232 25% 10%;
+    --primary: 232 82% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 15% 90%;
+    --secondary-foreground: 232 25% 20%;
+    --muted: 220 15% 92%;
+    --muted-foreground: 220 10% 45%;
+    --accent: 28 100% 45%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 15% 80%;
+    --input: 220 15% 85%;
+    --ring: 232 82% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    margin: 0;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'DM Sans', 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-size: clamp(0.875rem, 0.8rem + 0.35vw, 1rem);
+    line-height: 1.5;
+  }
+
+  #root {
+    height: 100%;
+  }
+
+  /* Tabular numbers for data values */
+  .tabular { font-variant-numeric: tabular-nums lining-nums; }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+
+  /* Focus ring */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: var(--radius);
+  }
+
+  /* Animations */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 8px hsl(var(--primary) / 0.3); }
+    50% { box-shadow: 0 0 20px hsl(var(--primary) / 0.6); }
+  }
+
+  .fade-in { animation: fadeIn 0.2s ease-out; }
+}
