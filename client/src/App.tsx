@@ -263,7 +263,7 @@ export default function App() {
   // ─── Session Browser View ──────────────────────────────────────────────────
   if (view === 'browser') {
     return (
-      <div className="flex flex-col h-full bg-background dark overflow-hidden relative">
+      <div className="flex flex-col h-full bg-background overflow-hidden relative">
         <SessionBrowser
           onSessionLoaded={handleSessionLoaded}
           onOpenSettings={() => setSettingsOpen(true)}
@@ -277,7 +277,7 @@ export default function App() {
 
   // ─── Analysis View (existing) ──────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full bg-background dark overflow-hidden">
+    <div className="flex flex-col h-full bg-background overflow-hidden">
       {/* Top bar */}
       <SessionHeader
         session={session}
