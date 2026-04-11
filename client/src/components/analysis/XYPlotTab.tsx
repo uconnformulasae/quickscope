@@ -2,18 +2,9 @@ import { useEffect, useRef } from 'react';
 import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import { lttbDownsample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
-import { resolveChannel, resolveSamples, ensurePlotly } from './analysis-helpers';
+import { resolveChannel, resolveSamples, ensurePlotly, getPlotlyColors } from './analysis-helpers';
 
-function getPlotlyColors() {
-  const s = getComputedStyle(document.documentElement);
-  return {
-    gridcolor: s.getPropertyValue('--chart-grid').trim(),
-    tickfontColor: s.getPropertyValue('--chart-text').trim(),
-    fontColor: s.getPropertyValue('--chart-text').trim(),
-  };
-}
-
-export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onChannelChange, derivedChannels, derivedSamplesMap }: {
+export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onChannelChange, derivedChannels, derivedSamplesMap, theme }: {
   session: XRKSession;
   activeChannels: ActiveChannel[];
   xChannelId: number | null;
@@ -21,6 +12,7 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
   onChannelChange: (xId: number | null, yId: number | null) => void;
   derivedChannels?: DerivedChannel[];
   derivedSamplesMap?: Map<number, ChannelSample[]>;
+  theme?: 'dark' | 'light';
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
 
@@ -103,7 +95,7 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
     };
 
     ensurePlotly(render);
-  }, [session, xChan, yChan, yAc]);
+  }, [session, xChan, yChan, yAc, theme]);
 
   const chanOptions = activeChannels.map(ac => {
     const c = resolveChannel(ac.channelId, session, derivedChannels);

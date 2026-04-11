@@ -408,6 +408,7 @@ export default function App() {
               derivedSamplesMap={derivedSamplesMap}
               onNavigateToTime={handleNavigateToTime}
               cursorTime={state.cursorTime}
+              theme={theme}
             />
           </div>
         )}

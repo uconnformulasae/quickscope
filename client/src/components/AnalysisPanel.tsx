@@ -23,6 +23,7 @@ interface AnalysisPanelProps {
   derivedSamplesMap?: Map<number, ChannelSample[]>;
   onNavigateToTime?: (timestampMs: number) => void;
   cursorTime?: number | null;
+  theme?: 'dark' | 'light';
 }
 
 const TABS: { id: AnalysisTab; label: string; icon: any }[] = [
@@ -48,6 +49,7 @@ export function AnalysisPanel({
   derivedSamplesMap,
   onNavigateToTime,
   cursorTime,
+  theme,
 }: AnalysisPanelProps) {
   return (
     <div className="flex flex-col h-full bg-card border-l border-border overflow-hidden">
@@ -88,6 +90,7 @@ export function AnalysisPanel({
             onChannelChange={onHistogramChannelChange}
             derivedChannels={derivedChannels}
             derivedSamplesMap={derivedSamplesMap}
+            theme={theme}
           />
         )}
         {analysisTab === 'xyplot' && (
@@ -99,6 +102,7 @@ export function AnalysisPanel({
             onChannelChange={onXYChannelChange}
             derivedChannels={derivedChannels}
             derivedSamplesMap={derivedSamplesMap}
+            theme={theme}
           />
         )}
         {analysisTab === 'gps' && (

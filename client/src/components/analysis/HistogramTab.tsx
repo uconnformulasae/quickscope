@@ -1,24 +1,16 @@
 import { useEffect, useRef } from 'react';
 import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
-import { resolveChannel, resolveSamples, ensurePlotly } from './analysis-helpers';
+import { resolveChannel, resolveSamples, ensurePlotly, getPlotlyColors } from './analysis-helpers';
 
-function getPlotlyColors() {
-  const s = getComputedStyle(document.documentElement);
-  return {
-    gridcolor: s.getPropertyValue('--chart-grid').trim(),
-    tickfontColor: s.getPropertyValue('--chart-text').trim(),
-    fontColor: s.getPropertyValue('--chart-text').trim(),
-  };
-}
-
-export function HistogramTab({ session, activeChannels, channelId, onChannelChange, derivedChannels, derivedSamplesMap }: {
+export function HistogramTab({ session, activeChannels, channelId, onChannelChange, derivedChannels, derivedSamplesMap, theme }: {
   session: XRKSession;
   activeChannels: ActiveChannel[];
   channelId: number | null;
   onChannelChange: (id: number | null) => void;
   derivedChannels?: DerivedChannel[];
   derivedSamplesMap?: Map<number, ChannelSample[]>;
+  theme?: 'dark' | 'light';
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
 
@@ -77,7 +69,7 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
     };
 
     ensurePlotly(render);
-  }, [session, chan, activeChan]);
+  }, [session, chan, activeChan, theme]);
 
   return (
     <div className="p-2 flex flex-col gap-2 h-full">
