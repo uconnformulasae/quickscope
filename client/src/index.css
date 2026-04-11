@@ -56,6 +56,21 @@
     --chart-4: 280 80% 65%;   /* purple - brakes */
     --chart-5: 195 100% 50%;  /* cyan - temperature */
     --chart-6: 48 100% 60%;   /* yellow - voltage */
+
+    /* Canvas chart colors */
+    --chart-grid: rgba(255,255,255,0.05);
+    --chart-text: #8b93a8;
+    --chart-cursor: rgba(255,255,255,0.5);
+    --chart-cursor-pill: rgba(13,14,20,0.9);
+    --chart-cursor-pill-text: #dde1ec;
+    --chart-delta-fill: rgba(34,211,238,0.10);
+    --chart-delta-line: rgba(34,211,238,0.7);
+    --chart-delta-panel: rgba(13,14,20,0.92);
+    --chart-delta-accent: #22d3ee;
+    --chart-separator: rgba(255,255,255,0.08);
+    --chart-hover-line: rgba(255,255,255,0.25);
+    --chart-lap-marker: rgba(247,127,0,0.35);
+    --chart-lap-text: #f77f00;
   }
 
   /* QuickScope is dark-first — dark mode is the primary mode */
@@ -79,29 +94,67 @@
     --border: 230 20% 20%;
     --input: 230 20% 18%;
     --ring: 232 82% 59%;
+
+    /* Canvas chart colors */
+    --chart-grid: rgba(255,255,255,0.05);
+    --chart-text: #8b93a8;
+    --chart-cursor: rgba(255,255,255,0.5);
+    --chart-cursor-pill: rgba(13,14,20,0.9);
+    --chart-cursor-pill-text: #dde1ec;
+    --chart-delta-fill: rgba(34,211,238,0.10);
+    --chart-delta-line: rgba(34,211,238,0.7);
+    --chart-delta-panel: rgba(13,14,20,0.92);
+    --chart-delta-accent: #22d3ee;
+    --chart-separator: rgba(255,255,255,0.08);
+    --chart-hover-line: rgba(255,255,255,0.25);
+    --chart-lap-marker: rgba(247,127,0,0.35);
+    --chart-lap-text: #f77f00;
   }
 
   /* Light mode override (less common) */
   .light {
-    --background: 220 20% 95%;
-    --foreground: 232 25% 10%;
-    --card: 0 0% 100%;
-    --card-foreground: 232 25% 10%;
+    --background: 220 14% 96%;       /* #f0f1f5 light gray */
+    --foreground: 230 25% 10%;       /* #131520 dark text */
+
+    --card: 0 0% 100%;               /* #ffffff white */
+    --card-foreground: 230 25% 10%;
+
     --popover: 0 0% 100%;
-    --popover-foreground: 232 25% 10%;
-    --primary: 232 82% 50%;
+    --popover-foreground: 230 25% 10%;
+
+    --primary: 232 82% 50%;          /* slightly deeper blue for white bg */
     --primary-foreground: 0 0% 100%;
-    --secondary: 220 15% 90%;
-    --secondary-foreground: 232 25% 20%;
-    --muted: 220 15% 92%;
-    --muted-foreground: 220 10% 45%;
+
+    --secondary: 220 14% 92%;
+    --secondary-foreground: 230 20% 25%;
+
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 10% 42%;
+
     --accent: 28 100% 45%;
     --accent-foreground: 0 0% 100%;
+
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 15% 80%;
-    --input: 220 15% 85%;
+
+    --border: 220 14% 85%;           /* #d4d7e0 */
+    --input: 220 14% 90%;
     --ring: 232 82% 50%;
+
+    /* Canvas chart colors */
+    --chart-grid: rgba(0,0,0,0.06);
+    --chart-text: hsl(220,10%,42%);
+    --chart-cursor: rgba(0,0,0,0.35);
+    --chart-cursor-pill: rgba(255,255,255,0.92);
+    --chart-cursor-pill-text: #131520;
+    --chart-delta-fill: rgba(34,211,238,0.12);
+    --chart-delta-line: rgba(34,211,238,0.8);
+    --chart-delta-panel: rgba(255,255,255,0.95);
+    --chart-delta-accent: #0ea5c9;
+    --chart-separator: rgba(0,0,0,0.06);
+    --chart-hover-line: rgba(0,0,0,0.2);
+    --chart-lap-marker: rgba(200,100,0,0.3);
+    --chart-lap-text: #c56600;
   }
 }
 

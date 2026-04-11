@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { uploadFile, fetchChannelData, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
+import { useTheme } from './lib/useTheme';
 import type { DerivedChannel } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
 import { ChannelSidebar } from './components/ChannelSidebar';
@@ -41,6 +42,8 @@ export default function App() {
     previewDerivedChannel,
     setChartMode,
   } = useAppState();
+
+  const { theme, toggleTheme } = useTheme();
 
   // View state
   const [view, setView] = useState<View>('browser');
@@ -260,10 +263,12 @@ export default function App() {
   // ─── Session Browser View ──────────────────────────────────────────────────
   if (view === 'browser') {
     return (
-      <div className="flex flex-col h-full bg-background dark overflow-hidden relative">
+      <div className="flex flex-col h-full bg-background overflow-hidden relative">
         <SessionBrowser
           onSessionLoaded={handleSessionLoaded}
           onOpenSettings={() => setSettingsOpen(true)}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
         {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       </div>
@@ -272,7 +277,7 @@ export default function App() {
 
   // ─── Analysis View (existing) ──────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full bg-background dark overflow-hidden">
+    <div className="flex flex-col h-full bg-background overflow-hidden">
       {/* Top bar */}
       <SessionHeader
         session={session}
@@ -285,6 +290,8 @@ export default function App() {
         onExportOpen={session ? () => setExportDialogOpen(true) : undefined}
         totalSamples={session?.totalSamples ?? 0}
         onBack={handleBackToBrowser}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       {/* Main layout */}
@@ -353,7 +360,7 @@ export default function App() {
                 </div>
               ) : state.loadError ? (
                 <div className="max-w-sm text-center">
-                  <p className="text-sm font-medium text-red-400 mb-1">Failed to load file</p>
+                  <p className="text-sm font-medium text-red-500 dark:text-red-400 mb-1">Failed to load file</p>
                   <p className="text-xs text-muted-foreground">{state.loadError}</p>
                 </div>
               ) : (
@@ -401,6 +408,7 @@ export default function App() {
               derivedSamplesMap={derivedSamplesMap}
               onNavigateToTime={handleNavigateToTime}
               cursorTime={state.cursorTime}
+              theme={theme}
             />
           </div>
         )}

@@ -11,10 +11,13 @@ import {
 } from 'lucide-react';
 import { AimSessionPicker } from './AimSessionPicker';
 import { QuickScopeLogo } from './QuickScopeLogo';
+import { ThemeToggle } from './ThemeToggle';
 
 interface SessionBrowserProps {
   onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
   onOpenSettings: () => void;
+  theme: 'dark' | 'light';
+  onToggleTheme: () => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -43,11 +46,11 @@ function pathStem(filename: string): string {
 }
 
 const SYNC_STATUS_CONFIG = {
-  synced: { icon: CheckCircle, label: 'Synced', color: 'text-emerald-400' },
-  local_only: { icon: HardDrive, label: 'Local only', color: 'text-amber-400' },
-  remote_only: { icon: Cloud, label: 'Remote', color: 'text-blue-400' },
-  uploading: { icon: Loader2, label: 'Uploading...', color: 'text-amber-400 animate-spin' },
-  downloading: { icon: Loader2, label: 'Downloading...', color: 'text-blue-400 animate-spin' },
+  synced: { icon: CheckCircle, label: 'Synced', color: 'text-emerald-500 dark:text-emerald-400' },
+  local_only: { icon: HardDrive, label: 'Local only', color: 'text-amber-500 dark:text-amber-400' },
+  remote_only: { icon: Cloud, label: 'Remote', color: 'text-blue-500 dark:text-blue-400' },
+  uploading: { icon: Loader2, label: 'Uploading...', color: 'text-amber-500 dark:text-amber-400 animate-spin' },
+  downloading: { icon: Loader2, label: 'Downloading...', color: 'text-blue-500 dark:text-blue-400 animate-spin' },
 } as const;
 
 const SOURCE_CONFIG = {
@@ -56,7 +59,7 @@ const SOURCE_CONFIG = {
   railway: { icon: Cloud, label: 'Railway' },
 } as const;
 
-export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrowserProps) {
+export function SessionBrowser({ onSessionLoaded, onOpenSettings, theme, onToggleTheme }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<LocalSession[]>([]);
   const [aimStatus, setAimStatus] = useState<AimStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -234,7 +237,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
         {/* Connection indicators */}
         <div className="flex items-center gap-3 text-xs">
           {aimStatus?.connected ? (
-            <div className="flex items-center gap-1.5 text-emerald-400" title={aimStatus.device?.device_name || aimStatus.device?.ip}>
+            <div className="flex items-center gap-1.5 text-emerald-500 dark:text-emerald-400" title={aimStatus.device?.device_name || aimStatus.device?.ip}>
               <Wifi className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">
                 AiM {aimStatus.device?.device_name ? `(${aimStatus.device.device_name})` : 'Connected'}
@@ -247,6 +250,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
             </div>
           )}
         </div>
+
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
 
         <button
           onClick={onOpenSettings}
@@ -290,7 +295,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
         {aimStatus?.connected && (
           <button
             onClick={() => setAimPickerOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
           >
             <Download className="w-3.5 h-3.5" />
             Pull from AiM
@@ -314,7 +319,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
 
       {/* Error banner */}
       {error && (
-        <div className="mx-4 mt-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-400 border border-red-500/20">
+        <div className="mx-4 mt-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20">
           {error}
           <button onClick={() => setError(null)} className="ml-2 underline">dismiss</button>
         </div>
@@ -383,7 +388,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
                         </span>
                       )}
                       {session.sync_status === 'remote_only' && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 flex-shrink-0">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 dark:text-blue-400 flex-shrink-0">
                           click to download
                         </span>
                       )}
@@ -419,7 +424,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
                         </button>
                         <button
                           onClick={(e) => handleDelete(e, session.id)}
-                          className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-400 transition-all"
+                          className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 dark:hover:text-red-400 transition-all"
                           title="Delete"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

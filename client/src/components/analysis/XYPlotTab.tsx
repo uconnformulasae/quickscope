@@ -2,9 +2,9 @@ import { useEffect, useRef } from 'react';
 import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import { lttbDownsample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
-import { resolveChannel, resolveSamples, ensurePlotly } from './analysis-helpers';
+import { resolveChannel, resolveSamples, ensurePlotly, getPlotlyColors } from './analysis-helpers';
 
-export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onChannelChange, derivedChannels, derivedSamplesMap }: {
+export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onChannelChange, derivedChannels, derivedSamplesMap, theme }: {
   session: XRKSession;
   activeChannels: ActiveChannel[];
   xChannelId: number | null;
@@ -12,6 +12,7 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
   onChannelChange: (xId: number | null, yId: number | null) => void;
   derivedChannels?: DerivedChannel[];
   derivedSamplesMap?: Map<number, ChannelSample[]>;
+  theme?: 'dark' | 'light';
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
 
@@ -33,6 +34,8 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
     const render = () => {
       const Plotly = (window as any).Plotly;
       if (!Plotly || !chartRef.current) return;
+
+      const pc = getPlotlyColors();
 
       const xSamplesRaw = resolveSamples(xChan.index, session, derivedSamplesMap);
       const ySamplesRaw = resolveSamples(yChan.index, session, derivedSamplesMap);
@@ -72,18 +75,18 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
         plot_bgcolor: 'transparent',
         xaxis: {
           title: `${xChan.shortName}${xChan.units ? ` (${xChan.units})` : ''}`,
-          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-          gridcolor: 'rgba(255,255,255,0.05)',
+          tickfont: { size: 10, color: pc.tickfontColor, family: 'JetBrains Mono' },
+          gridcolor: pc.gridcolor,
           zeroline: false,
         },
         yaxis: {
           title: `${yChan.shortName}${yChan.units ? ` (${yChan.units})` : ''}`,
-          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-          gridcolor: 'rgba(255,255,255,0.05)',
+          tickfont: { size: 10, color: pc.tickfontColor, family: 'JetBrains Mono' },
+          gridcolor: pc.gridcolor,
           zeroline: false,
         },
         margin: { l: 50, r: 15, t: 15, b: 50 },
-        font: { family: 'DM Sans', color: '#8b93a8', size: 11 },
+        font: { family: 'DM Sans', color: pc.fontColor, size: 11 },
       };
 
       Plotly.react(chartRef.current, [trace], layout, {
@@ -92,7 +95,7 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
     };
 
     ensurePlotly(render);
-  }, [session, xChan, yChan, yAc]);
+  }, [session, xChan, yChan, yAc, theme]);
 
   const chanOptions = activeChannels.map(ac => {
     const c = resolveChannel(ac.channelId, session, derivedChannels);

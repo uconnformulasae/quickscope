@@ -120,10 +120,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
 
           {/* Error / Success */}
           {error && (
-            <p className="text-xs text-red-400">{error}</p>
+            <p className="text-xs text-red-500 dark:text-red-400">{error}</p>
           )}
           {saved && (
-            <p className="text-xs text-emerald-400">Settings saved.</p>
+            <p className="text-xs text-emerald-500 dark:text-emerald-400">Settings saved.</p>
           )}
         </div>
 

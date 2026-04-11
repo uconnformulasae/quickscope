@@ -26,6 +26,16 @@ export function formatNum(n: number): string {
   return n.toFixed(3);
 }
 
+/** Read Plotly-relevant CSS custom properties from the current theme */
+export function getPlotlyColors() {
+  const s = getComputedStyle(document.documentElement);
+  return {
+    gridcolor: s.getPropertyValue('--chart-grid').trim(),
+    tickfontColor: s.getPropertyValue('--chart-text').trim(),
+    fontColor: s.getPropertyValue('--chart-text').trim(),
+  };
+}
+
 /** Load Plotly.js from CDN (shared by Histogram and XY Plot tabs) */
 let plotlyPromise: Promise<void> | null = null;
 export function ensurePlotly(onReady: () => void) {

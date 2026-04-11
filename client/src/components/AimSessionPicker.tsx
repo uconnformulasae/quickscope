@@ -110,7 +110,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Radio className="w-4 h-4 text-emerald-400" />
+            <Radio className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
             <h2 className="text-sm font-semibold text-foreground">AiM Device Sessions</h2>
           </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-muted/50 text-muted-foreground">
@@ -156,7 +156,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
                       }
                     `}>
                       {(isSelected || isDownloaded) && (
-                        <CheckCircle className={`w-3 h-3 ${isDownloaded ? 'text-emerald-400' : 'text-primary-foreground'}`} />
+                        <CheckCircle className={`w-3 h-3 ${isDownloaded ? 'text-emerald-500 dark:text-emerald-400' : 'text-primary-foreground'}`} />
                       )}
                     </div>
 
@@ -167,7 +167,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
                           {session.filename}
                         </span>
                         {isDownloaded && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 flex-shrink-0">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 flex-shrink-0">
                             downloaded
                           </span>
                         )}
@@ -195,12 +195,12 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
 
         {/* Error / Success */}
         {error && (
-          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-400 border border-red-500/20">
+          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20">
             {error}
           </div>
         )}
         {downloadResult && (
-          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20">
             {downloadResult}
           </div>
         )}
