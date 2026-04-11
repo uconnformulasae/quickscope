@@ -380,7 +380,7 @@ function DerivedChannelRow({ dc, isActive, sampleCount, onToggle, onEdit, onRemo
         </button>
         <button
           onClick={e => { e.stopPropagation(); onRemove(); }}
-          className="p-1 rounded text-muted-foreground/60 hover:text-red-400 transition-colors"
+          className="p-1 rounded text-muted-foreground/60 hover:text-red-500 dark:hover:text-red-400 transition-colors"
           title="Delete"
         >
           <Trash2 className="w-3 h-3" />

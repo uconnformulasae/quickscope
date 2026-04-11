@@ -360,7 +360,7 @@ export default function App() {
                 </div>
               ) : state.loadError ? (
                 <div className="max-w-sm text-center">
-                  <p className="text-sm font-medium text-red-400 mb-1">Failed to load file</p>
+                  <p className="text-sm font-medium text-red-500 dark:text-red-400 mb-1">Failed to load file</p>
                   <p className="text-xs text-muted-foreground">{state.loadError}</p>
                 </div>
               ) : (
