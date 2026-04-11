@@ -11,10 +11,13 @@ import {
 } from 'lucide-react';
 import { AimSessionPicker } from './AimSessionPicker';
 import { QuickScopeLogo } from './QuickScopeLogo';
+import { ThemeToggle } from './ThemeToggle';
 
 interface SessionBrowserProps {
   onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
   onOpenSettings: () => void;
+  theme: 'dark' | 'light';
+  onToggleTheme: () => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -56,7 +59,7 @@ const SOURCE_CONFIG = {
   railway: { icon: Cloud, label: 'Railway' },
 } as const;
 
-export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrowserProps) {
+export function SessionBrowser({ onSessionLoaded, onOpenSettings, theme, onToggleTheme }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<LocalSession[]>([]);
   const [aimStatus, setAimStatus] = useState<AimStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -247,6 +250,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
             </div>
           )}
         </div>
+
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
 
         <button
           onClick={onOpenSettings}

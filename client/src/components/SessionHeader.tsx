@@ -3,6 +3,7 @@ import { Car, User, Calendar, Clock, PanelLeftClose, PanelLeftOpen, PanelRightCl
 import type { XRKSession } from '../lib/xrk-parser';
 import { formatTime } from '../lib/xrk-parser';
 import { QuickScopeLogo } from './QuickScopeLogo';
+import { ThemeToggle } from './ThemeToggle';
 
 interface SessionHeaderProps {
   session: XRKSession | null;
@@ -15,6 +16,8 @@ interface SessionHeaderProps {
   onExportOpen?: () => void;
   totalSamples: number;
   onBack?: () => void;
+  theme: 'dark' | 'light';
+  onToggleTheme: () => void;
 }
 
 export function SessionHeader({
@@ -28,6 +31,8 @@ export function SessionHeader({
   onExportOpen,
   totalSamples,
   onBack,
+  theme,
+  onToggleTheme,
 }: SessionHeaderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -132,6 +137,8 @@ export function SessionHeader({
           onChange={handleFileChange}
           data-testid="input-file-hidden"
         />
+
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
 
         <button
           onClick={onToggleRight}
