@@ -4,6 +4,15 @@ import { lttbDownsample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { resolveChannel, resolveSamples, ensurePlotly } from './analysis-helpers';
 
+function getPlotlyColors() {
+  const s = getComputedStyle(document.documentElement);
+  return {
+    gridcolor: s.getPropertyValue('--chart-grid').trim(),
+    tickfontColor: s.getPropertyValue('--chart-text').trim(),
+    fontColor: s.getPropertyValue('--chart-text').trim(),
+  };
+}
+
 export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onChannelChange, derivedChannels, derivedSamplesMap }: {
   session: XRKSession;
   activeChannels: ActiveChannel[];
@@ -33,6 +42,8 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
     const render = () => {
       const Plotly = (window as any).Plotly;
       if (!Plotly || !chartRef.current) return;
+
+      const pc = getPlotlyColors();
 
       const xSamplesRaw = resolveSamples(xChan.index, session, derivedSamplesMap);
       const ySamplesRaw = resolveSamples(yChan.index, session, derivedSamplesMap);
@@ -72,18 +83,18 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
         plot_bgcolor: 'transparent',
         xaxis: {
           title: `${xChan.shortName}${xChan.units ? ` (${xChan.units})` : ''}`,
-          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-          gridcolor: 'rgba(255,255,255,0.05)',
+          tickfont: { size: 10, color: pc.tickfontColor, family: 'JetBrains Mono' },
+          gridcolor: pc.gridcolor,
           zeroline: false,
         },
         yaxis: {
           title: `${yChan.shortName}${yChan.units ? ` (${yChan.units})` : ''}`,
-          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-          gridcolor: 'rgba(255,255,255,0.05)',
+          tickfont: { size: 10, color: pc.tickfontColor, family: 'JetBrains Mono' },
+          gridcolor: pc.gridcolor,
           zeroline: false,
         },
         margin: { l: 50, r: 15, t: 15, b: 50 },
-        font: { family: 'DM Sans', color: '#8b93a8', size: 11 },
+        font: { family: 'DM Sans', color: pc.fontColor, size: 11 },
       };
 
       Plotly.react(chartRef.current, [trace], layout, {

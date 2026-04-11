@@ -3,6 +3,15 @@ import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { resolveChannel, resolveSamples, ensurePlotly } from './analysis-helpers';
 
+function getPlotlyColors() {
+  const s = getComputedStyle(document.documentElement);
+  return {
+    gridcolor: s.getPropertyValue('--chart-grid').trim(),
+    tickfontColor: s.getPropertyValue('--chart-text').trim(),
+    fontColor: s.getPropertyValue('--chart-text').trim(),
+  };
+}
+
 export function HistogramTab({ session, activeChannels, channelId, onChannelChange, derivedChannels, derivedSamplesMap }: {
   session: XRKSession;
   activeChannels: ActiveChannel[];
@@ -31,6 +40,8 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
       const Plotly = (window as any).Plotly;
       if (!Plotly || !chartRef.current) return;
 
+      const pc = getPlotlyColors();
+
       const samples = resolveSamples(chan.index, session, derivedSamplesMap);
       const values = samples.map(s => s.value);
 
@@ -47,17 +58,17 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
         plot_bgcolor: 'transparent',
         xaxis: {
           title: `${chan.shortName}${chan.units ? ` (${chan.units})` : ''}`,
-          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-          gridcolor: 'rgba(255,255,255,0.05)',
+          tickfont: { size: 10, color: pc.tickfontColor, family: 'JetBrains Mono' },
+          gridcolor: pc.gridcolor,
         },
         yaxis: {
           title: 'Count',
-          tickfont: { size: 10, color: '#8b93a8', family: 'JetBrains Mono' },
-          gridcolor: 'rgba(255,255,255,0.05)',
+          tickfont: { size: 10, color: pc.tickfontColor, family: 'JetBrains Mono' },
+          gridcolor: pc.gridcolor,
         },
         margin: { l: 45, r: 15, t: 15, b: 45 },
         bargap: 0.05,
-        font: { family: 'DM Sans', color: '#8b93a8', size: 11 },
+        font: { family: 'DM Sans', color: pc.fontColor, size: 11 },
       };
 
       Plotly.react(chartRef.current, [trace], layout, {
