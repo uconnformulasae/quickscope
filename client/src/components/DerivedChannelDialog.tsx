@@ -77,7 +77,8 @@ function MiniPreviewChart({
     ctx.stroke();
 
     // Draw axis labels
-    ctx.fillStyle = '#8b93a8';
+    const textColor = getComputedStyle(document.documentElement).getPropertyValue('--chart-text').trim();
+    ctx.fillStyle = textColor;
     ctx.font = '9px monospace';
     ctx.fillText(minV.toFixed(2), 2, H - 2);
     ctx.fillText(maxV.toFixed(2), 2, 10);
@@ -96,7 +97,7 @@ function MiniPreviewChart({
       ref={canvasRef}
       width={320}
       height={80}
-      className="w-full rounded border border-border/50 bg-[#080910]"
+      className="w-full rounded border border-border/50 bg-background"
       style={{ imageRendering: 'pixelated' }}
     />
   );
@@ -176,7 +177,7 @@ export function DerivedChannelDialog({
       onClick={handleBackdrop}
     >
       <div
-        className="relative w-[480px] max-h-[90vh] flex flex-col bg-[#0d0e14] border border-border rounded-xl shadow-2xl overflow-hidden"
+        className="relative w-[480px] max-h-[90vh] flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -284,7 +285,7 @@ export function DerivedChannelDialog({
                   ? 'e.g. Spd1 * 0.621371'
                   : "result = {'timestamps': [...], 'values': [...]}"
               }
-              className="w-full px-2.5 py-2 bg-[#080910] border border-border rounded text-xs text-foreground placeholder-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary font-mono resize-y leading-relaxed"
+              className="w-full px-2.5 py-2 bg-background border border-border rounded text-xs text-foreground placeholder-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary font-mono resize-y leading-relaxed"
               spellCheck={false}
               data-testid="textarea-expression"
             />
