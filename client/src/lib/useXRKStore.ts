@@ -66,9 +66,6 @@ export interface AppState {
   showOnlyWithData: boolean;
 }
 
-// Max channels to auto-activate on load
-const AUTO_SELECT_COUNT = 5;
-
 const DERIVED_CHART_COLORS = [
   '#f43f5e', '#8b5cf6', '#06b6d4', '#84cc16', '#fb923c',
   '#a855f7', '#22d3ee', '#facc15', '#ec4899', '#10b981',
@@ -185,16 +182,6 @@ export function useAppState() {
   const [derivedSamplesMap, setDerivedSamplesMap] = useState<Map<number, ChannelSample[]>>(new Map());
 
   const setSession = useCallback((session: XRKSession, fileName: string) => {
-    // Auto-activate the first N channels that actually have data
-    const defaultChannels: ActiveChannel[] = [];
-    for (const [id, chan] of session.channels) {
-      if (defaultChannels.length >= AUTO_SELECT_COUNT) break;
-      const samps = session.samples.get(id);
-      if (samps && samps.length > 0) {
-        defaultChannels.push({ channelId: id, color: chan.color, visible: true });
-      }
-    }
-
     setState(prev => ({
       ...prev,
       session,
@@ -202,7 +189,7 @@ export function useAppState() {
       isLoading: false,
       loadError: null,
       parseProgress: null,
-      activeChannels: defaultChannels,
+      activeChannels: [],
       derivedChannels: [],
       viewRange: null,
     }));
