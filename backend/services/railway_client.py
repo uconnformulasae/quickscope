@@ -61,6 +61,18 @@ async def download_session_file(remote_id: int, dest_path: Path) -> Path:
     return dest_path
 
 
+async def rename_session(remote_id: int, new_name: str) -> dict:
+    """Rename a session on the Railway backend."""
+    base = _base_url()
+    async with httpx.AsyncClient(timeout=TIMEOUT_DEFAULT) as client:
+        resp = await client.patch(
+            f"{base}/sessions/{remote_id}/rename",
+            json={"name": new_name},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def upload_session_file(file_path: Path) -> dict:
     """Upload a local session file to Railway."""
     base = _base_url()

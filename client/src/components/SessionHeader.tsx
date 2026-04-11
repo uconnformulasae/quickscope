@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { Car, User, Calendar, Clock, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Upload, Gauge, Activity, Download, ArrowLeft } from 'lucide-react';
 import type { XRKSession } from '../lib/xrk-parser';
 import { formatTime } from '../lib/xrk-parser';
+import { QuickScopeLogo } from './QuickScopeLogo';
 
 interface SessionHeaderProps {
   session: XRKSession | null;
@@ -66,7 +67,7 @@ export function SessionHeader({
         >
           {leftOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
         </button>
-        <QuickScopeLogoInline />
+        <QuickScopeLogo size={24} textClass="text-sm" />
       </div>
 
       {/* File name */}
@@ -150,29 +151,6 @@ function MetaPill({ icon, value, label }: { icon: React.ReactNode; value: string
     <div className="hidden lg:flex items-center gap-1 px-1.5 py-0.5 bg-muted/30 rounded text-xs text-muted-foreground whitespace-nowrap">
       <span className="text-primary">{icon}</span>
       <span>{value}</span>
-    </div>
-  );
-}
-
-function QuickScopeLogoInline() {
-  return (
-    <div className="flex items-center gap-1.5">
-      <svg width="24" height="24" viewBox="0 0 40 40" fill="none" aria-label="QuickScope">
-        {/* Background tile */}
-        <rect width="40" height="40" rx="8" fill="hsl(230 25% 10%)"/>
-        {/* Outer crosshair circle */}
-        <circle cx="20" cy="20" r="11" stroke="#4361ee" strokeWidth="2.5"/>
-        {/* Crosshair lines */}
-        <line x1="20" y1="5" x2="20" y2="13" stroke="#4361ee" strokeWidth="2.5" strokeLinecap="round"/>
-        <line x1="20" y1="27" x2="20" y2="35" stroke="#4361ee" strokeWidth="2.5" strokeLinecap="round"/>
-        <line x1="5" y1="20" x2="13" y2="20" stroke="#4361ee" strokeWidth="2.5" strokeLinecap="round"/>
-        <line x1="27" y1="20" x2="35" y2="20" stroke="#4361ee" strokeWidth="2.5" strokeLinecap="round"/>
-        {/* Small waveform inside */}
-        <polyline points="13,22 16,17 19,23 22,18 25,21 27,20" stroke="#f77f00" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-        {/* Center dot */}
-        <circle cx="20" cy="20" r="2" fill="#f77f00"/>
-      </svg>
-      <span className="text-sm font-semibold text-foreground tracking-tight">QuickScope</span>
     </div>
   );
 }

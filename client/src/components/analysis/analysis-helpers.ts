@@ -9,7 +9,7 @@ export function resolveChannel(id: number, session: XRKSession, derivedChannels?
   const sessionChan = session.channels.get(id);
   if (sessionChan) return sessionChan;
   const dc = derivedChannels?.find(d => d.id === id);
-  if (dc) return { index: dc.id, shortName: dc.name, longName: dc.name, units: dc.units, color: dc.color, sampleRateHz: 0, sampleRateRaw: 0, dataType: 0, dataSize: 0, scale: 0, offset: 0 } as any;
+  if (dc) return { index: dc.id, shortName: dc.name, longName: dc.name, units: dc.units, color: dc.color, sampleRateHz: 0, sampleRateRaw: 0 } satisfies import('../../lib/xrk-parser').ChannelDef;
   return null;
 }
 

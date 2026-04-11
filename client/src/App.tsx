@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { uploadFile, fetchChannelData, loadSession, type SessionInfo } from './lib/api';
+import { uploadFile, fetchChannelData, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import type { DerivedChannel } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
@@ -69,11 +69,6 @@ export default function App() {
         longName: ch.name,
         sampleRateRaw: ch.sampleRateHz > 0 ? Math.round(1e6 / ch.sampleRateHz) : 0,
         sampleRateHz: ch.sampleRateHz,
-        dataType: 0,
-        dataSize: 0,
-        decoderType: 0,
-        scale: 0,
-        offset: 0,
         units: ch.units,
         color: ch.color,
         fileSampleCount: ch.sampleCount,

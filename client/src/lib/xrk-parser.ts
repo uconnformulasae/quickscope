@@ -13,11 +13,6 @@ export interface ChannelDef {
   longName: string;
   sampleRateRaw: number; // period in microseconds (e.g. 20000 = 50Hz)
   sampleRateHz: number;  // actual Hz
-  dataType: number;      // source type: 1=internal, 5=GPS, 9=CAN
-  dataSize: number;      // bytes per sample
-  decoderType: number;   // raw decoder byte from CHS[20]
-  scale: number;         // cal_value_1
-  offset: number;        // cal_value_2
   units: string;
   color: string;
   fileSampleCount?: number; // total samples in file (from backend), used to distinguish "not loaded" from "no data"

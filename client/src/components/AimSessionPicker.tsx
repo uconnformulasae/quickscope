@@ -14,13 +14,6 @@ function formatSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-function formatDuration(seconds: number): string {
-  if (!seconds || seconds <= 0) return '';
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
-
 export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProps) {
   const [sessions, setSessions] = useState<AimSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,11 +38,6 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
           setError(result.error || 'Failed to list sessions');
         } else {
           setSessions(result.sessions);
-          // Auto-select all new sessions
-          const newOnes = new Set(
-            result.sessions.filter(s => !s.already_downloaded).map(s => s.filename)
-          );
-          setSelected(newOnes);
         }
       })
       .catch(e => setError(e instanceof Error ? e.message : 'Failed'))
@@ -224,8 +212,8 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
               <span>{sessions.length} on device</span>
               {newCount > 0 && <span>{newCount} new</span>}
               <span>{selected.size} selected</span>
-              <button onClick={selectAll} className="text-primary hover:underline">All new</button>
-              <button onClick={selectNone} className="hover:underline">None</button>
+              <button onClick={selectAll} className="text-primary hover:underline">Select all</button>
+              <button onClick={selectNone} className="hover:underline">Deselect all</button>
             </div>
             <button
               onClick={handleDownload}

@@ -127,6 +127,19 @@ export async function pullSession(sessionId: string): Promise<{ ok: boolean; loc
   return res.json();
 }
 
+export async function renameSession(sessionId: string, filename: string): Promise<LocalSession> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Rename failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function deleteSession(sessionId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { resolveChannel, resolveSamples, ensurePlotly } from './analysis-helpers';
@@ -12,7 +12,6 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
   derivedSamplesMap?: Map<number, ChannelSample[]>;
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
-  const [isReady, setIsReady] = useState(false);
 
   const activeChannelIdsWithData = activeChannels
     .filter(ac => resolveSamples(ac.channelId, session, derivedSamplesMap).length > 0)
@@ -64,7 +63,6 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
       Plotly.react(chartRef.current, [trace], layout, {
         responsive: true, displayModeBar: false, displaylogo: false,
       });
-      setIsReady(true);
     };
 
     ensurePlotly(render);

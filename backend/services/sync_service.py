@@ -36,9 +36,12 @@ async def sync_with_railway() -> dict:
         if existing:
             continue
 
-        # Also check by filename
+        # Also check by filename or aim_session_id
         filename = remote.get("filename", "")
+        aim_id = remote.get("aim_session_id", "")
         by_name = session_store.find_by_filename(filename) if filename else None
+        if not by_name and aim_id:
+            by_name = session_store.find_by_aim_session_id(aim_id)
         if by_name:
             session_store.update_session(
                 by_name["id"],

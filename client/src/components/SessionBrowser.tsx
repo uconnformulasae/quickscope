@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   listSessions, loadSession, syncSessions, pullSession, deleteSession,
-  getAimStatus, uploadFile,
+  renameSession, getAimStatus, uploadFile,
   type LocalSession, type SessionInfo, type AimStatus,
 } from '../lib/api';
 import {
-  RefreshCw, Cloud, CloudOff, Wifi, WifiOff, Upload, Trash2,
-  Download, CheckCircle, Clock, Loader2, HardDrive, Radio,
-  ChevronRight, Search, Settings,
+  RefreshCw, Cloud, Wifi, WifiOff, Upload, Trash2,
+  Download, CheckCircle, Loader2, HardDrive, Radio,
+  ChevronRight, Search, Settings, Pencil,
 } from 'lucide-react';
 import { AimSessionPicker } from './AimSessionPicker';
+import { QuickScopeLogo } from './QuickScopeLogo';
 
 interface SessionBrowserProps {
   onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
@@ -29,10 +30,16 @@ function formatDate(dateStr: string | null): string {
   if (!dateStr) return '';
   try {
     const d = new Date(dateStr);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   } catch {
     return dateStr;
   }
+}
+
+function pathStem(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  return dot > 0 ? filename.slice(0, dot) : filename;
 }
 
 const SYNC_STATUS_CONFIG = {
@@ -59,7 +66,10 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -143,6 +153,28 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
     }
   }, [refreshSessions]);
 
+  const startRename = useCallback((e: React.MouseEvent, session: LocalSession) => {
+    e.stopPropagation();
+    setRenamingId(session.id);
+    setRenameValue(session.aim_session_id || pathStem(session.filename));
+    setTimeout(() => renameInputRef.current?.select(), 0);
+  }, []);
+
+  const submitRename = useCallback(async () => {
+    const id = renamingId;
+    const value = renameValue.trim();
+    setRenamingId(null);
+    if (!id || !value) return;
+    const current = sessions.find(s => s.id === id);
+    if (current && value === (current.aim_session_id || pathStem(current.filename))) return;
+    try {
+      await renameSession(id, value);
+      await refreshSessions();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Rename failed');
+    }
+  }, [renamingId, renameValue, sessions, refreshSessions]);
+
   const handleFileUpload = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.xrk') && !file.name.toLowerCase().endsWith('.xrz')) return;
     setLoadingId('upload');
@@ -202,7 +234,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
         {/* Connection indicators */}
         <div className="flex items-center gap-3 text-xs">
           {aimStatus?.connected ? (
-            <div className="flex items-center gap-1.5 text-emerald-400" title={aimStatus.device?.device_name || aimStatus.device_ip}>
+            <div className="flex items-center gap-1.5 text-emerald-400" title={aimStatus.device?.device_name || aimStatus.device?.ip}>
               <Wifi className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">
                 AiM {aimStatus.device?.device_name ? `(${aimStatus.device.device_name})` : 'Connected'}
@@ -331,9 +363,25 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
                   {/* Main info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-foreground truncate">
-                        {session.aim_session_id || session.filename}
-                      </span>
+                      {renamingId === session.id ? (
+                        <input
+                          ref={renameInputRef}
+                          value={renameValue}
+                          onChange={e => setRenameValue(e.target.value)}
+                          onBlur={submitRename}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') submitRename();
+                            if (e.key === 'Escape') setRenamingId(null);
+                          }}
+                          onClick={e => e.stopPropagation()}
+                          className="text-sm font-medium text-foreground bg-muted/50 border border-primary/50 rounded px-1.5 py-0.5 outline-none w-full max-w-[260px]"
+                          autoFocus
+                        />
+                      ) : (
+                        <span className="text-sm font-medium text-foreground truncate">
+                          {session.aim_session_id || session.filename}
+                        </span>
+                      )}
                       {session.sync_status === 'remote_only' && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 flex-shrink-0">
                           click to download
@@ -362,6 +410,13 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
                       <Loader2 className="w-4 h-4 text-primary animate-spin" />
                     ) : (
                       <>
+                        <button
+                          onClick={(e) => startRename(e, session)}
+                          className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary transition-all"
+                          title="Rename"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           onClick={(e) => handleDelete(e, session.id)}
                           className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-400 transition-all"
@@ -409,20 +464,3 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings }: SessionBrows
 }
 
 
-function QuickScopeLogo() {
-  return (
-    <div className="flex items-center gap-2">
-      <svg width="28" height="28" viewBox="0 0 40 40" fill="none" aria-label="QuickScope">
-        <rect width="40" height="40" rx="8" fill="hsl(230 25% 10%)"/>
-        <circle cx="20" cy="20" r="11" stroke="#4361ee" strokeWidth="2.5"/>
-        <line x1="20" y1="5" x2="20" y2="13" stroke="#4361ee" strokeWidth="2.5" strokeLinecap="round"/>
-        <line x1="20" y1="27" x2="20" y2="35" stroke="#4361ee" strokeWidth="2.5" strokeLinecap="round"/>
-        <line x1="5" y1="20" x2="13" y2="20" stroke="#4361ee" strokeWidth="2.5" strokeLinecap="round"/>
-        <line x1="27" y1="20" x2="35" y2="20" stroke="#4361ee" strokeWidth="2.5" strokeLinecap="round"/>
-        <polyline points="13,22 16,17 19,23 22,18 25,21 27,20" stroke="#f77f00" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
-        <circle cx="20" cy="20" r="2" fill="#f77f00"/>
-      </svg>
-      <span className="text-base font-semibold text-foreground tracking-tight">QuickScope</span>
-    </div>
-  );
-}
