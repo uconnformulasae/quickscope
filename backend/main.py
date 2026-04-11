@@ -550,6 +550,145 @@ def _interpolate(timestamps, values, t):
     return values[lo] + frac * (values[hi] - values[lo])
 
 
+try:
+    import numpy as np
+    _HAS_NUMPY = True
+except ImportError:
+    np = None
+    _HAS_NUMPY = False
+
+# Maximum expression length and execution timeout
+_MAX_EXPRESSION_LEN = 50_000
+_EVAL_TIMEOUT_SECONDS = 10
+
+
+def _interp_helper(ch_data, t):
+    """Interpolate channel value at timestamp t."""
+    ts = ch_data["timestamps"]
+    vals = ch_data["values"]
+    if not ts:
+        return 0.0
+    if t <= ts[0]:
+        return vals[0]
+    if t >= ts[-1]:
+        return vals[-1]
+    lo, hi = 0, len(ts) - 1
+    while lo < hi - 1:
+        mid = (lo + hi) // 2
+        if ts[mid] <= t:
+            lo = mid
+        else:
+            hi = mid
+    t0, t1 = ts[lo], ts[hi]
+    if t1 == t0:
+        return vals[lo]
+    frac = (t - t0) / (t1 - t0)
+    return vals[lo] + frac * (vals[hi] - vals[lo])
+
+
+class DerivedChannelRequest(BaseModel):
+    expression: str
+    channels: dict  # { channelName: { timestamps: [...], values: [...] } }
+
+
+@app.post("/api/derived/evaluate")
+async def evaluate_derived_channel(body: DerivedChannelRequest):
+    """
+    Evaluate a Python expression against channel data.
+    The expression receives: channels (dict), np (numpy), math, interpolate(ch, t).
+    Must assign result = { 'timestamps': [...], 'values': [...] }.
+    """
+    if not _HAS_NUMPY:
+        raise HTTPException(500, "numpy is not installed on the server")
+
+    if len(body.expression) > _MAX_EXPRESSION_LEN:
+        raise HTTPException(400, f"Expression too long (max {_MAX_EXPRESSION_LEN} characters)")
+
+    local_vars: dict = {}
+    global_env = {
+        "__builtins__": {
+            "range": range,
+            "len": len,
+            "min": min,
+            "max": max,
+            "abs": abs,
+            "round": round,
+            "sum": sum,
+            "zip": zip,
+            "enumerate": enumerate,
+            "map": map,
+            "filter": filter,
+            "list": list,
+            "dict": dict,
+            "tuple": tuple,
+            "float": float,
+            "int": int,
+            "bool": bool,
+            "str": str,
+            "sorted": sorted,
+            "reversed": reversed,
+            "isinstance": isinstance,
+            "True": True,
+            "False": False,
+            "None": None,
+            "print": lambda *a, **kw: None,
+        },
+        "channels": body.channels,
+        "np": np,
+        "interpolate": _interp_helper,
+        "math": math,
+    }
+
+    import signal
+
+    def _timeout_handler(signum, frame):
+        raise TimeoutError("Script exceeded time limit")
+
+    try:
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(_EVAL_TIMEOUT_SECONDS)
+        try:
+            exec(body.expression, global_env, local_vars)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+    except TimeoutError:
+        raise HTTPException(400, f"Script timed out after {_EVAL_TIMEOUT_SECONDS} seconds")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Execution error: {type(e).__name__}: {e}")
+
+    result = local_vars.get("result")
+    if result is None:
+        raise HTTPException(400, "Script must assign a 'result' variable with { 'timestamps': [...], 'values': [...] }")
+
+    if not isinstance(result, dict) or "timestamps" not in result or "values" not in result:
+        raise HTTPException(400, "result must be a dict with 'timestamps' and 'values' keys")
+
+    ts_out = result["timestamps"]
+    vals_out = result["values"]
+
+    # Convert numpy arrays to lists if needed
+    if hasattr(ts_out, "tolist"):
+        ts_out = ts_out.tolist()
+    if hasattr(vals_out, "tolist"):
+        vals_out = vals_out.tolist()
+
+    if len(ts_out) != len(vals_out):
+        raise HTTPException(400, "timestamps and values must have the same length")
+
+    # Filter non-finite values
+    clean_ts = []
+    clean_vals = []
+    for t, v in zip(ts_out, vals_out):
+        if isinstance(v, (int, float)) and math.isfinite(v):
+            clean_ts.append(float(t))
+            clean_vals.append(float(v))
+
+    return {"timestamps": clean_ts, "values": clean_vals}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

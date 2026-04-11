@@ -22,7 +22,7 @@ export type ChannelMap = Record<string, ChannelData>;
 
 // ─── Interpolation helper ─────────────────────────────────────────────────────
 
-export function interpolateAt(ch: ChannelData, t: number): number {
+function interpolateAt(ch: ChannelData, t: number): number {
   if (ch.timestamps.length === 0) return 0;
   if (t <= ch.timestamps[0]) return ch.values[0];
   if (t >= ch.timestamps[ch.timestamps.length - 1]) return ch.values[ch.timestamps.length - 1];
@@ -65,23 +65,31 @@ function applyDiff(ch: ChannelData): ChannelData {
 
 function applySmooth(ch: ChannelData, window: number): ChannelData {
   const n = ch.values.length;
+  if (n === 0) return ch;
   const half = Math.floor(window / 2);
-  const values = ch.values.map((_, i) => {
+  const values = new Array<number>(n);
+  // Sliding window: maintain running sum
+  let sum = 0;
+  for (let i = 0; i < Math.min(half + 1, n); i++) sum += ch.values[i];
+  for (let i = 0; i < n; i++) {
     const lo = Math.max(0, i - half);
     const hi = Math.min(n - 1, i + half);
-    let sum = 0;
-    for (let j = lo; j <= hi; j++) sum += ch.values[j];
-    return sum / (hi - lo + 1);
-  });
+    // Expand window right
+    if (i + half < n && i > 0) sum += ch.values[i + half];
+    // Shrink window left
+    if (i - half - 1 >= 0) sum -= ch.values[i - half - 1];
+    values[i] = sum / (hi - lo + 1);
+  }
   return { timestamps: ch.timestamps, values };
 }
 
 function applyDelay(ch: ChannelData, samples: number): ChannelData {
   const s = Math.floor(Math.abs(samples));
-  if (s === 0) return ch;
+  if (s === 0 || s >= ch.timestamps.length) return ch;
+  // Delay shifts values forward: value at timestamp[i+s] gets value[i]
   return {
     timestamps: ch.timestamps.slice(s),
-    values: ch.values.slice(0, ch.values.length - s),
+    values: ch.values.slice(s),
   };
 }
 
@@ -210,11 +218,11 @@ class Parser {
   private parseUnary(): ASTNode {
     if (this.peek().type === 'op' && this.peek().value === '-') {
       this.consume();
-      return { kind: 'unary', op: '-', arg: this.parseAtom() };
+      return { kind: 'unary', op: '-', arg: this.parseUnary() };
     }
     if (this.peek().type === 'op' && this.peek().value === '+') {
       this.consume();
-      return this.parseAtom();
+      return this.parseUnary();
     }
     return this.parseAtom();
   }
@@ -455,30 +463,3 @@ export function evaluateFormula(
   }
 }
 
-/**
- * Evaluate a JavaScript expression (function body).
- * The function receives: channels (ChannelMap), interpolate (fn)
- * And must return { timestamps: number[], values: number[] }
- */
-export function evaluateJavaScript(
-  code: string,
-  channels: ChannelMap,
-): { timestamps: number[]; values: number[] } | string {
-  try {
-    // eslint-disable-next-line no-new-func
-    const fn = new Function('channels', 'interpolate', code);
-    const result = fn(channels, interpolateAt);
-    if (!result || !Array.isArray(result.timestamps) || !Array.isArray(result.values)) {
-      return 'Expression must return { timestamps: number[], values: number[] }';
-    }
-    if (result.timestamps.length !== result.values.length) {
-      return 'timestamps and values arrays must have the same length';
-    }
-    return {
-      timestamps: result.timestamps as number[],
-      values: result.values as number[],
-    };
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
-}

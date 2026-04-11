@@ -1,148 +1,15 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import type { XRKSession } from '../lib/xrk-parser';
-import { lttbDownsample, formatTime } from '../lib/xrk-parser';
-import type { ActiveChannel, TimeRange, DerivedChannel, ChartMode } from '../lib/useXRKStore';
+import { formatTime } from '../lib/xrk-parser';
 import type { ChannelSample } from '../lib/xrk-parser';
 import { RotateCcw } from 'lucide-react';
-
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-interface TelemetryChartProps {
-  session: XRKSession;
-  activeChannels: ActiveChannel[];
-  viewRange: TimeRange | null;
-  onViewRangeChange: (range: TimeRange | null) => void;
-  derivedChannels?: DerivedChannel[];
-  derivedSamplesMap?: Map<number, ChannelSample[]>;
-  cursorTime?: number | null; // seconds — externally driven cursor position
-  onCursorTimeChange?: (t: number | null) => void;
-  chartMode?: ChartMode;
-}
-
-interface StripLayout {
-  top: number;
-  height: number;
-  channelId: number;
-  color: string;
-  label: string;
-  units: string;
-}
-
-interface DownsampleCache {
-  xRangeKey: string;
-  channelId: number;
-  samples: ChannelSample[];
-}
-
-// ─── Constants ──────────────────────────────────────────────────────────────
-
-const LEFT_MARGIN = 60;
-const RIGHT_MARGIN = 12;
-const BOTTOM_AXIS_HEIGHT = 36;
-const MIN_STRIP_HEIGHT = 140;
-const AXIS_WIDTH = 50;
-const MONO_FONT = 'JetBrains Mono, monospace';
-
-const GRID_COLOR = 'rgba(255,255,255,0.05)';
-const SEPARATOR_COLOR = 'rgba(255,255,255,0.08)';
-const TEXT_COLOR = '#8b93a8';
-const CURSOR_COLOR = 'rgba(255,255,255,0.5)';
-const CURSOR_PILL_BG = 'rgba(13,14,20,0.9)';
-const DELTA_FILL = 'rgba(34,211,238,0.08)';
-const DELTA_LINE = 'rgba(34,211,238,0.4)';
-const DELTA_PANEL_BG = 'rgba(13,14,20,0.95)';
-
-const DEBOUNCE_MS = 100;
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-function clamp(v: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, v));
-}
-
-/** Given a sorted-by-timestamp sample array, find the index of the nearest sample to `t`. */
-function nearestSampleIndex(samples: ChannelSample[], t: number): number {
-  if (samples.length === 0) return -1;
-  let lo = 0, hi = samples.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (samples[mid].timestamp < t) lo = mid + 1;
-    else hi = mid;
-  }
-  // Check lo-1 in case it's closer
-  if (lo > 0 && Math.abs(samples[lo - 1].timestamp - t) < Math.abs(samples[lo].timestamp - t)) {
-    return lo - 1;
-  }
-  return lo;
-}
-
-/** Interpolate value at time `t` given sorted samples. */
-function interpolateValue(samples: ChannelSample[], tMs: number): number | null {
-  if (samples.length === 0) return null;
-  if (tMs <= samples[0].timestamp) return samples[0].value;
-  if (tMs >= samples[samples.length - 1].timestamp) return samples[samples.length - 1].value;
-  const idx = nearestSampleIndex(samples, tMs);
-  if (idx <= 0) return samples[0].value;
-  // Linear interpolation between idx-1 and idx
-  const a = samples[idx - 1];
-  const b = samples[idx];
-  if (b.timestamp === a.timestamp) return a.value;
-  const frac = (tMs - a.timestamp) / (b.timestamp - a.timestamp);
-  return a.value + frac * (b.value - a.value);
-}
-
-function brightenColor(hex: string, amount: number): string {
-  // Parse hex color and brighten
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  const nr = clamp(Math.round(r + (255 - r) * amount), 0, 255);
-  const ng = clamp(Math.round(g + (255 - g) * amount), 0, 255);
-  const nb = clamp(Math.round(b + (255 - b) * amount), 0, 255);
-  return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`;
-}
-
-/** Generate nice tick values for a range. */
-function niceAxisTicks(min: number, max: number, maxTicks: number): number[] {
-  const range = max - min;
-  if (range <= 0 || !isFinite(range)) return [min];
-
-  const roughStep = range / maxTicks;
-  const mag = Math.pow(10, Math.floor(Math.log10(roughStep)));
-  const residual = roughStep / mag;
-  let niceStep: number;
-  if (residual <= 1.5) niceStep = 1 * mag;
-  else if (residual <= 3) niceStep = 2 * mag;
-  else if (residual <= 7) niceStep = 5 * mag;
-  else niceStep = 10 * mag;
-
-  const ticks: number[] = [];
-  const start = Math.ceil(min / niceStep) * niceStep;
-  for (let v = start; v <= max + niceStep * 0.001; v += niceStep) {
-    ticks.push(v);
-  }
-  return ticks;
-}
-
-/** Format a value compactly. */
-function formatValue(v: number): string {
-  const abs = Math.abs(v);
-  if (abs === 0) return '0';
-  if (abs >= 10000) return v.toFixed(0);
-  if (abs >= 100) return v.toFixed(1);
-  if (abs >= 1) return v.toFixed(2);
-  return v.toFixed(3);
-}
-
-/** Format time in seconds for the x-axis. */
-function formatTimeSec(sec: number): string {
-  const mins = Math.floor(sec / 60);
-  const secs = sec % 60;
-  if (mins > 0) {
-    return `${mins}:${secs.toFixed(1).padStart(4, '0')}`;
-  }
-  return secs.toFixed(1) + 's';
-}
+import {
+  type TelemetryChartProps, type StripLayout, type DrawContext,
+  LEFT_MARGIN, RIGHT_MARGIN, BOTTOM_AXIS_HEIGHT, MIN_STRIP_HEIGHT, AXIS_WIDTH,
+  DEBOUNCE_MS,
+  clamp, niceAxisTicks,
+} from '../lib/chart-utils';
+import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawXAxis } from '../lib/chart-draw';
+import { drawCursors } from '../lib/chart-cursors';
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -159,11 +26,11 @@ export function TelemetryChart({
 }: TelemetryChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isCanvasReady, setIsCanvasReady] = useState(false);
   const [deltaMode, setDeltaMode] = useState(false);
   const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
 
   // ─── Refs for transient state (no React re-renders) ─────────────────────
+  const cursorEmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const xRangeRef = useRef<[number, number] | null>(null); // seconds
   const cursorXRef = useRef<number | null>(null); // seconds (placed cursor A)
   const cursor2XRef = useRef<number | null>(null); // seconds (placed cursor B, delta mode)
@@ -176,11 +43,10 @@ export function TelemetryChart({
   const deltaModeRef = useRef(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Cache for downsampled data
-  const dsCache = useRef<Map<number, DownsampleCache>>(new Map());
-
   // Cache for global min/max per channel (recomputed when channelDataMap changes)
   const globalMinMaxCache = useRef<Map<number, { minSample: ChannelSample; maxSample: ChannelSample }>>(new Map());
+  // Smoothed Y-ranges: lerp toward target to avoid jumps. Key is channelId or "overlay:units".
+  const smoothedYRanges = useRef<Map<string, [number, number]>>(new Map());
 
   // Touch gesture refs
   const touchStartRef = useRef<{ x: number; y: number; t: number; xRange: [number, number] } | null>(null);
@@ -219,18 +85,35 @@ export function TelemetryChart({
   }, [visibleChannels, session, derivedChannels, derivedSamplesMap]);
 
   // ─── Dynamic margins for overlay Y-axes ────────────────────────────────
+  // Build unique unit groups for overlay axis layout
+  const overlayAxisLayout = useMemo(() => {
+    if (chartMode !== 'overlay') return { unitAxes: new Map<string, { side: 'left' | 'right'; sideIndex: number }>(), axisCount: 0 };
+    const seen: string[] = [];
+    for (const ac of visibleChannels) {
+      const data = channelDataMap.get(ac.channelId);
+      const units = data?.def.units || '';
+      if (!seen.includes(units)) seen.push(units);
+    }
+    const unitAxes = new Map<string, { side: 'left' | 'right'; sideIndex: number }>();
+    for (let i = 0; i < seen.length; i++) {
+      const isLeft = i % 2 === 0;
+      unitAxes.set(seen[i], { side: isLeft ? 'left' : 'right', sideIndex: Math.floor(i / 2) });
+    }
+    return { unitAxes, axisCount: seen.length };
+  }, [chartMode, visibleChannels, channelDataMap]);
+
   const { leftMargin, rightMargin } = useMemo(() => {
-    const n = visibleChannels.length;
-    if (chartMode !== 'overlay' || n <= 1) {
+    if (chartMode !== 'overlay' || overlayAxisLayout.axisCount <= 1) {
       return { leftMargin: LEFT_MARGIN, rightMargin: RIGHT_MARGIN };
     }
+    const n = overlayAxisLayout.axisCount;
     const leftCount = Math.ceil(n / 2);
     const rightCount = Math.floor(n / 2);
     return {
       leftMargin: Math.max(LEFT_MARGIN, leftCount * AXIS_WIDTH),
       rightMargin: Math.max(RIGHT_MARGIN, rightCount * AXIS_WIDTH),
     };
-  }, [chartMode, visibleChannels.length]);
+  }, [chartMode, overlayAxisLayout]);
 
   // ─── Rebuild global min/max cache when channel data changes ─────────────
   useEffect(() => {
@@ -246,6 +129,8 @@ export function TelemetryChart({
       newCache.set(channelId, { minSample, maxSample });
     }
     globalMinMaxCache.current = newCache;
+    // Reset smoothed Y-ranges so new channels start without stale lerp state
+    smoothedYRanges.current.clear();
     needsDrawRef.current = true;
   }, [channelDataMap]);
 
@@ -291,15 +176,14 @@ export function TelemetryChart({
 
   // ─── Downsampling helper ───────────────────────────────────────────────
   const getDownsampled = useCallback((
-    channelId: number,
+    _channelId: number,
     allSamples: ChannelSample[],
     xRange: [number, number],
-    canvasWidth: number,
+    _canvasWidth: number,
   ): ChannelSample[] => {
-    const targetPoints = Math.min(canvasWidth * 2, 4000);
-    // Filter to visible range (with small padding for context)
+    // Filter to visible range with small padding for context
     const rangePad = (xRange[1] - xRange[0]) * 0.02;
-    const lo = (xRange[0] - rangePad) * 1000; // to ms
+    const lo = (xRange[0] - rangePad) * 1000;
     const hi = (xRange[1] + rangePad) * 1000;
 
     // Binary search for start
@@ -325,16 +209,7 @@ export function TelemetryChart({
       endIdx = Math.min(allSamples.length - 1, a + 1);
     }
 
-    const slice = allSamples.slice(startIdx, endIdx + 1);
-    const cacheKey = `${xRange[0].toFixed(4)}_${xRange[1].toFixed(4)}_${slice.length}`;
-    const cached = dsCache.current.get(channelId);
-    if (cached && cached.xRangeKey === cacheKey) {
-      return cached.samples;
-    }
-
-    const ds = lttbDownsample(slice, targetPoints);
-    dsCache.current.set(channelId, { xRangeKey: cacheKey, channelId, samples: ds });
-    return ds;
+    return allSamples.slice(startIdx, endIdx + 1);
   }, []);
 
   // ─── Compute strip layout ─────────────────────────────────────────────
@@ -392,7 +267,6 @@ export function TelemetryChart({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
     const w = canvasSizeRef.current.w;
     const h = canvasSizeRef.current.h;
     if (w === 0 || h === 0) return;
@@ -402,553 +276,34 @@ export function TelemetryChart({
     const rm = rightMargin;
     const plotW = w - lm - rm;
     const strips = computeStripLayouts(h);
+    const xTicks = niceAxisTicks(xRange[0], xRange[1], Math.max(5, Math.floor(plotW / 80)));
+    const sharedYRanges = new Map<string, [number, number]>();
+
+    const dc: DrawContext = {
+      ctx, w, h, lm, rm, plotW, xRange, xTicks, strips,
+      channelDataMap, chartMode, sharedYRanges,
+      timeToX, getDownsampled, overlayAxisLayout, session,
+      smoothedYRanges: smoothedYRanges.current,
+      needsDrawRef,
+    };
 
     ctx.save();
     ctx.clearRect(0, 0, w, h);
 
-    // ── X axis ticks (shared) ──
-    const xTicks = niceAxisTicks(xRange[0], xRange[1], Math.max(5, Math.floor(plotW / 80)));
-
-    // ── Draw each strip ──
-    let gridDrawnForOverlay = false;
-    for (const strip of strips) {
-      const data = channelDataMap.get(strip.channelId);
-      if (!data) continue;
-
-      const { allSamples, def } = data;
-      const ds = allSamples.length > 0
-        ? getDownsampled(strip.channelId, allSamples, xRange, plotW)
-        : [];
-
-      // Compute Y range for this strip from visible samples
-      let yMin = Infinity, yMax = -Infinity;
-      for (const s of ds) {
-        if (s.value < yMin) yMin = s.value;
-        if (s.value > yMax) yMax = s.value;
-      }
-      if (!isFinite(yMin)) { yMin = 0; yMax = 1; }
-      // Add 8% padding
-      const yPad = (yMax - yMin) * 0.08 || 0.5;
-      yMin -= yPad;
-      yMax += yPad;
-
-      const valToY = (v: number) =>
-        strip.top + strip.height - 4 - ((v - yMin) / (yMax - yMin)) * (strip.height - 8);
-
-      // ── Background grid (horizontal) ──
-      const yTicks = niceAxisTicks(yMin, yMax, Math.max(2, Math.floor(strip.height / 30)));
-      const shouldDrawGrid = chartMode !== 'overlay' || !gridDrawnForOverlay;
-
-      if (shouldDrawGrid) {
-        ctx.strokeStyle = GRID_COLOR;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (const yt of yTicks) {
-          const y = Math.round(valToY(yt)) + 0.5;
-          ctx.moveTo(lm, y);
-          ctx.lineTo(w - rm, y);
-        }
-        ctx.stroke();
-
-        // ── Vertical grid (x axis) ──
-        ctx.beginPath();
-        for (const xt of xTicks) {
-          const x = Math.round(timeToX(xt, xRange, plotW)) + 0.5;
-          if (x >= lm && x <= w - rm) {
-            ctx.moveTo(x, strip.top);
-            ctx.lineTo(x, strip.top + strip.height);
-          }
-        }
-        ctx.stroke();
-
-        // ── Lap markers ──
-        ctx.strokeStyle = 'rgba(247,127,0,0.35)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath();
-        for (const lap of session.lapMarkers) {
-          const lt = lap.timestamp / 1000; // ms to seconds
-          if (lt >= xRange[0] && lt <= xRange[1]) {
-            const x = Math.round(timeToX(lt, xRange, plotW)) + 0.5;
-            ctx.moveTo(x, strip.top);
-            ctx.lineTo(x, strip.top + strip.height);
-          }
-        }
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Lap labels (only for first strip)
-        if (strip === strips[0]) {
-          ctx.font = `9px ${MONO_FONT}`;
-          ctx.fillStyle = '#f77f00';
-          ctx.textAlign = 'center';
-          session.lapMarkers.forEach((lap, i) => {
-            const lt = lap.timestamp / 1000;
-            if (lt >= xRange[0] && lt <= xRange[1]) {
-              const x = timeToX(lt, xRange, plotW);
-              ctx.fillText(`L${i + 1}`, x, strip.top + 10);
-            }
-          });
-        }
-
-        if (chartMode === 'overlay') gridDrawnForOverlay = true;
-      }
-
-      // ── Draw line trace ──
-      if (ds.length > 1) {
-        ctx.strokeStyle = strip.color;
-        ctx.lineWidth = 2.0;
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-        let started = false;
-        for (const s of ds) {
-          const x = timeToX(s.timestamp / 1000, xRange, plotW);
-          const y = valToY(s.value);
-          if (!started) { ctx.moveTo(x, y); started = true; }
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-      }
-
-      // ── Min/Max markers (global — from full dataset) ──
-      {
-        const globalMM = globalMinMaxCache.current.get(strip.channelId);
-        if (globalMM) {
-          const { minSample, maxSample } = globalMM;
-          const bright = brightenColor(strip.color, 0.3);
-          const chartLeft = lm;
-          const chartRight = w - rm;
-
-          const drawMinMaxMarker = (
-            sample: ChannelSample,
-            isMax: boolean,
-          ) => {
-            const tSec = sample.timestamp / 1000;
-            const rawX = timeToX(tSec, xRange, plotW);
-            const inView = rawX >= chartLeft && rawX <= chartRight;
-            const markerY = valToY(sample.value);
-
-            ctx.fillStyle = bright;
-            ctx.font = `8px ${MONO_FONT}`;
-
-            if (inView) {
-              // Draw triangle at actual position
-              ctx.beginPath();
-              if (isMax) {
-                ctx.moveTo(rawX, markerY - 5);
-                ctx.lineTo(rawX - 3, markerY);
-                ctx.lineTo(rawX + 3, markerY);
-              } else {
-                ctx.moveTo(rawX, markerY + 5);
-                ctx.lineTo(rawX - 3, markerY);
-                ctx.lineTo(rawX + 3, markerY);
-              }
-              ctx.closePath();
-              ctx.fill();
-              ctx.textAlign = 'left';
-              ctx.fillText(`${isMax ? '▲' : '▼'} ${formatValue(sample.value)}`, rawX + 5, markerY + 3);
-            } else {
-              // Off-screen: draw edge indicator with arrow
-              const edgeX = rawX < chartLeft ? chartLeft + 4 : chartRight - 4;
-              const edgeY = clamp(markerY, strip.top + 8, strip.top + strip.height - 8);
-              const arrowDir = rawX < chartLeft ? 1 : -1; // +1 points right, -1 left
-              ctx.globalAlpha = 0.7;
-              // Arrow head
-              ctx.beginPath();
-              ctx.moveTo(edgeX + arrowDir * 6, edgeY);
-              ctx.lineTo(edgeX + arrowDir * 2, edgeY - 4);
-              ctx.lineTo(edgeX + arrowDir * 2, edgeY + 4);
-              ctx.closePath();
-              ctx.fill();
-              // Value label
-              ctx.textAlign = arrowDir > 0 ? 'left' : 'right';
-              ctx.fillText(`${isMax ? '▲' : '▼'} ${formatValue(sample.value)}`,
-                edgeX + arrowDir * 9, edgeY + 3);
-              ctx.globalAlpha = 1;
-            }
-          };
-
-          drawMinMaxMarker(maxSample, true);
-          drawMinMaxMarker(minSample, false);
-        }
-      }
-
-      // ── Y-axis ticks and labels ──
-      if (chartMode === 'overlay') {
-        // Alternating Y-axes: even index → left, odd index → right
-        const chIndex = visibleChannels.findIndex(vc => vc.channelId === strip.channelId);
-        const isLeft = chIndex % 2 === 0;
-        const sideIndex = Math.floor(chIndex / 2);
-
-        ctx.font = `10px ${MONO_FONT}`;
-        ctx.fillStyle = strip.color;
-
-        if (isLeft) {
-          const axX = lm - 5 - sideIndex * AXIS_WIDTH;
-          ctx.textAlign = 'right';
-          for (const yt of yTicks) {
-            const y = valToY(yt);
-            if (y >= strip.top + 5 && y <= strip.top + strip.height - 5) {
-              ctx.fillText(formatValue(yt), axX, y + 3);
-            }
-          }
-          // Subtle axis line
-          ctx.strokeStyle = strip.color + '40';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(axX + 3, strip.top);
-          ctx.lineTo(axX + 3, strip.top + strip.height);
-          ctx.stroke();
-          // Channel name label at top
-          ctx.font = `bold 9px ${MONO_FONT}`;
-          ctx.fillStyle = strip.color;
-          ctx.textAlign = 'right';
-          ctx.fillText(strip.label, axX, strip.top + 10);
-        } else {
-          const axX = w - rm + 5 + sideIndex * AXIS_WIDTH;
-          ctx.textAlign = 'left';
-          for (const yt of yTicks) {
-            const y = valToY(yt);
-            if (y >= strip.top + 5 && y <= strip.top + strip.height - 5) {
-              ctx.fillText(formatValue(yt), axX, y + 3);
-            }
-          }
-          // Subtle axis line
-          ctx.strokeStyle = strip.color + '40';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(axX - 3, strip.top);
-          ctx.lineTo(axX - 3, strip.top + strip.height);
-          ctx.stroke();
-          // Channel name label at top
-          ctx.font = `bold 9px ${MONO_FONT}`;
-          ctx.fillStyle = strip.color;
-          ctx.textAlign = 'left';
-          ctx.fillText(strip.label, axX, strip.top + 10);
-        }
-      } else {
-        ctx.font = `10px ${MONO_FONT}`;
-        ctx.fillStyle = strip.color;
-        ctx.textAlign = 'right';
-        for (const yt of yTicks) {
-          const y = valToY(yt);
-          if (y >= strip.top + 5 && y <= strip.top + strip.height - 5) {
-            ctx.fillText(formatValue(yt), lm - 5, y + 3);
-          }
-        }
-      }
-
-      // ── Channel name (rotated on left margin) ── (separate mode only)
-      if (chartMode !== 'overlay') {
-        ctx.save();
-        ctx.font = `bold 10px ${MONO_FONT}`;
-        ctx.fillStyle = strip.color;
-        ctx.textAlign = 'center';
-        ctx.translate(12, strip.top + strip.height / 2);
-        ctx.rotate(-Math.PI / 2);
-        const maxChars = Math.floor(strip.height / 6);
-        let nameText = strip.label;
-        if (nameText.length > maxChars) nameText = nameText.slice(0, maxChars - 1) + '…';
-        ctx.fillText(nameText, 0, 0);
-        ctx.restore();
-      }
-
-      // ── Strip separator ── (separate mode only)
-      if (chartMode !== 'overlay') {
-        ctx.strokeStyle = SEPARATOR_COLOR;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        const sepY = Math.round(strip.top + strip.height) + 0.5;
-        ctx.moveTo(0, sepY);
-        ctx.lineTo(w, sepY);
-        ctx.stroke();
-      }
-    }
-
-    // ── Bottom X axis ──
-    const axisY = strips.length > 0
-      ? strips[strips.length - 1].top + strips[strips.length - 1].height
-      : h - BOTTOM_AXIS_HEIGHT;
-
-    ctx.strokeStyle = SEPARATOR_COLOR;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(lm, Math.round(axisY) + 0.5);
-    ctx.lineTo(w - rm, Math.round(axisY) + 0.5);
-    ctx.stroke();
-
-    ctx.font = `10px ${MONO_FONT}`;
-    ctx.fillStyle = TEXT_COLOR;
-    ctx.textAlign = 'center';
-    for (const xt of xTicks) {
-      const x = timeToX(xt, xRange, plotW);
-      if (x >= lm && x <= w - rm) {
-        // Tick mark
-        ctx.beginPath();
-        ctx.moveTo(Math.round(x) + 0.5, axisY);
-        ctx.lineTo(Math.round(x) + 0.5, axisY + 5);
-        ctx.stroke();
-        // Label
-        ctx.fillText(formatTimeSec(xt), x, axisY + 18);
-      }
-    }
-
-    // "Time (s)" label
-    ctx.font = `9px ${MONO_FONT}`;
-    ctx.fillStyle = TEXT_COLOR;
-    ctx.textAlign = 'right';
-    ctx.fillText('Time (s)', w - rm, axisY + 30);
-
-    // ── Cursor overlays ──
-    const cursorA = cursorXRef.current;
-    const cursorB = cursor2XRef.current;
-
-    // Delta region fill
-    if (cursorA !== null && cursorB !== null) {
-      const xA = timeToX(cursorA, xRange, plotW);
-      const xB = timeToX(cursorB, xRange, plotW);
-      const left = Math.max(lm, Math.min(xA, xB));
-      const right = Math.min(w - rm, Math.max(xA, xB));
-      ctx.fillStyle = DELTA_FILL;
-      ctx.fillRect(left, 0, right - left, axisY);
-    }
-
-    // Draw cursor lines with timestamp label at the bottom axis
-    const drawCursorLine = (t: number, color: string, showTimestamp = false) => {
-      const x = Math.round(timeToX(t, xRange, plotW)) + 0.5;
-      if (x < lm || x > w - rm) return;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, axisY);
-      ctx.stroke();
-
-      if (showTimestamp) {
-        const label = formatTimeSec(t);
-        ctx.font = `10px ${MONO_FONT}`;
-        const tw = ctx.measureText(label).width;
-        const pillW = tw + 8;
-        const pillH = 16;
-        const pillX = Math.round(clamp(x - pillW / 2, lm, w - rm - pillW));
-        const pillY = axisY + 2;
-        ctx.fillStyle = CURSOR_PILL_BG;
-        ctx.beginPath();
-        ctx.roundRect(pillX, pillY, pillW, pillH, 3);
-        ctx.fill();
-        ctx.fillStyle = color;
-        ctx.textAlign = 'center';
-        ctx.fillText(label, pillX + pillW / 2, pillY + 12);
-      }
-    };
-
-    if (cursorA !== null) {
-      const lineColor = cursorB !== null ? DELTA_LINE : CURSOR_COLOR;
-      drawCursorLine(cursorA, lineColor, true);
-
-      // Value readouts for cursor A
-      let pillIndex = 0;
-      for (const strip of strips) {
-        const data = channelDataMap.get(strip.channelId);
-        if (!data || data.allSamples.length === 0) continue;
-
-        const tMs = cursorA * 1000;
-        const val = interpolateValue(data.allSamples, tMs);
-        if (val === null) continue;
-
-        const yMin_s = (() => {
-          const ds = getDownsampled(strip.channelId, data.allSamples, xRange, plotW);
-          let mn = Infinity, mx = -Infinity;
-          for (const s of ds) { if (s.value < mn) mn = s.value; if (s.value > mx) mx = s.value; }
-          if (!isFinite(mn)) { mn = 0; mx = 1; }
-          const pad = (mx - mn) * 0.08 || 0.5;
-          return [mn - pad, mx + pad] as [number, number];
-        })();
-
-        const valToY_c = (v: number) =>
-          strip.top + strip.height - 4 - ((v - yMin_s[0]) / (yMin_s[1] - yMin_s[0])) * (strip.height - 8);
-
-        const dotX = timeToX(cursorA, xRange, plotW);
-        const dotY = valToY_c(val);
-
-        // Dot on trace
-        ctx.fillStyle = strip.color;
-        ctx.beginPath();
-        ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Value pill on right edge
-        const pillText = formatValue(val);
-        ctx.font = `9px ${MONO_FONT}`;
-        const tw = ctx.measureText(pillText).width;
-        const pillW = tw + 8;
-        const pillH = 16;
-        const pillX = w - rm - pillW - 4;
-        const pillY = chartMode === 'overlay'
-          ? strip.top + 4 + pillIndex * (pillH + 2)
-          : Math.round(clamp(dotY - pillH / 2, strip.top + 2, strip.top + strip.height - pillH - 2));
-
-        ctx.fillStyle = CURSOR_PILL_BG;
-        ctx.beginPath();
-        ctx.roundRect(pillX, pillY, pillW, pillH, 3);
-        ctx.fill();
-
-        ctx.fillStyle = strip.color;
-        ctx.textAlign = 'center';
-        ctx.fillText(pillText, pillX + pillW / 2, pillY + 11);
-        pillIndex++;
-      }
-    }
-
-    if (cursorB !== null) {
-      drawCursorLine(cursorB, DELTA_LINE, true);
-    }
-
-    // ── Hover crosshair (always visible when mouse is over canvas) ──
-    const hoverT = hoverXRef.current;
-    if (hoverT !== null) {
-      // Draw a subtle crosshair line (dimmer than placed cursors)
-      const isHoverSameAsCursorA = cursorA !== null && Math.abs(hoverT - cursorA) < (xRange[1] - xRange[0]) * 0.002;
-      const isHoverSameAsCursorB = cursorB !== null && Math.abs(hoverT - cursorB) < (xRange[1] - xRange[0]) * 0.002;
-      if (!isHoverSameAsCursorA && !isHoverSameAsCursorB) {
-        drawCursorLine(hoverT, 'rgba(255,255,255,0.25)', true);
-      }
-
-      // Value readouts for hover in delta mode (when placed cursors exist)
-      if (deltaModeRef.current && (cursorA !== null || cursorB !== null)) {
-        let hoverPillIndex = 0;
-        for (const strip of strips) {
-          const data = channelDataMap.get(strip.channelId);
-          if (!data || data.allSamples.length === 0) continue;
-
-          const tMs = hoverT * 1000;
-          const val = interpolateValue(data.allSamples, tMs);
-          if (val === null) continue;
-
-          const yMin_s = (() => {
-            const ds = getDownsampled(strip.channelId, data.allSamples, xRange, plotW);
-            let mn = Infinity, mx = -Infinity;
-            for (const s of ds) { if (s.value < mn) mn = s.value; if (s.value > mx) mx = s.value; }
-            if (!isFinite(mn)) { mn = 0; mx = 1; }
-            const pad = (mx - mn) * 0.08 || 0.5;
-            return [mn - pad, mx + pad] as [number, number];
-          })();
-
-          const valToY_h = (v: number) =>
-            strip.top + strip.height - 4 - ((v - yMin_s[0]) / (yMin_s[1] - yMin_s[0])) * (strip.height - 8);
-
-          const dotX = timeToX(hoverT, xRange, plotW);
-          const dotY = valToY_h(val);
-
-          // Small hollow dot
-          ctx.strokeStyle = strip.color;
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
-          ctx.stroke();
-
-          // Value pill (smaller, semi-transparent)
-          const pillText = formatValue(val);
-          ctx.font = `8px ${MONO_FONT}`;
-          const tw = ctx.measureText(pillText).width;
-          const pillW = tw + 6;
-          const pillH = 14;
-          const pillX = dotX + 8;
-          const pillY = chartMode === 'overlay'
-            ? strip.top + 4 + hoverPillIndex * (pillH + 2)
-            : Math.round(clamp(dotY - pillH / 2, strip.top + 2, strip.top + strip.height - pillH - 2));
-
-          ctx.fillStyle = 'rgba(13,14,20,0.75)';
-          ctx.beginPath();
-          ctx.roundRect(pillX, pillY, pillW, pillH, 2);
-          ctx.fill();
-
-          ctx.fillStyle = strip.color + 'aa';
-          ctx.textAlign = 'left';
-          ctx.fillText(pillText, pillX + 3, pillY + 10);
-          hoverPillIndex++;
-        }
-      }
-    }
-
-    // ── Delta panel ──
-    if (cursorA !== null && cursorB !== null) {
-      const deltaT = Math.abs(cursorB - cursorA);
-      const panelLines: { label: string; valA: string; valB: string; delta: string; color: string }[] = [];
-
-      for (const strip of strips) {
-        const data = channelDataMap.get(strip.channelId);
-        if (!data || data.allSamples.length === 0) continue;
-        const vA = interpolateValue(data.allSamples, cursorA * 1000);
-        const vB = interpolateValue(data.allSamples, cursorB * 1000);
-        if (vA === null || vB === null) continue;
-        panelLines.push({
-          label: data.def.shortName,
-          valA: formatValue(vA),
-          valB: formatValue(vB),
-          delta: formatValue(vB - vA),
-          color: strip.color,
-        });
-      }
-
-      // Draw panel at top-right
-      const panelPad = 8;
-      const lineH = 16;
-      const panelH = (panelLines.length + 1) * lineH + panelPad * 2;
-      const panelW = 240;
-      const panelX = w - rm - panelW - 8;
-      const panelY = 8;
-
-      ctx.fillStyle = DELTA_PANEL_BG;
-      ctx.beginPath();
-      ctx.roundRect(panelX, panelY, panelW, panelH, 6);
-      ctx.fill();
-
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(panelX, panelY, panelW, panelH, 6);
-      ctx.stroke();
-
-      // Header
-      ctx.font = `bold 9px ${MONO_FONT}`;
-      ctx.fillStyle = DELTA_LINE;
-      ctx.textAlign = 'left';
-      ctx.fillText(`Δt = ${deltaT.toFixed(3)}s`, panelX + panelPad, panelY + panelPad + 10);
-
-      // Column headers
-      const col1 = panelX + panelPad;
-      const col2 = panelX + 80;
-      const col3 = panelX + 130;
-      const col4 = panelX + 185;
-
-      ctx.font = `8px ${MONO_FONT}`;
-      ctx.fillStyle = TEXT_COLOR;
-      // No column headers — just show data
-
-      // Data rows
-      for (let i = 0; i < panelLines.length; i++) {
-        const row = panelLines[i];
-        const ry = panelY + panelPad + (i + 1) * lineH + 10;
-
-        ctx.font = `bold 8px ${MONO_FONT}`;
-        ctx.fillStyle = row.color;
-        ctx.textAlign = 'left';
-        ctx.fillText(row.label, col1, ry);
-
-        ctx.font = `8px ${MONO_FONT}`;
-        ctx.fillStyle = '#8b93a8';
-        ctx.textAlign = 'right';
-        ctx.fillText(row.valA, col2 + 30, ry);
-        ctx.fillText(row.valB, col3 + 35, ry);
-
-        ctx.fillStyle = DELTA_LINE;
-        ctx.fillText('Δ' + row.delta, col4 + 40, ry);
-      }
-    }
+    computeOverlayYRanges(dc);
+    drawStrips(dc, globalMinMaxCache.current);
+    drawOverlayLegend(dc);
+    const axisY = drawXAxis(dc);
+    drawCursors(dc, {
+      cursorA: cursorXRef.current,
+      cursorB: cursor2XRef.current,
+      hoverT: hoverXRef.current,
+      deltaMode: deltaModeRef.current,
+    }, axisY);
 
     ctx.restore();
-  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getDownsampled, leftMargin, rightMargin, chartMode]);
+  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getDownsampled, leftMargin, rightMargin, chartMode, overlayAxisLayout]);
+
 
   // ─── Animation loop ────────────────────────────────────────────────────
   useEffect(() => {
@@ -968,6 +323,13 @@ export function TelemetryChart({
     };
   }, [draw]);
 
+  // ─── Compute required canvas height for separate mode ─────────────────
+  const numVisible = visibleChannels.length;
+  const requiredCanvasHeight = useMemo(() => {
+    if (chartMode === 'overlay' || numVisible === 0) return 0; // 0 = use container height
+    return numVisible * MIN_STRIP_HEIGHT + BOTTOM_AXIS_HEIGHT;
+  }, [chartMode, numVisible]);
+
   // ─── Canvas sizing via ResizeObserver ──────────────────────────────────
   useEffect(() => {
     const container = containerRef.current;
@@ -978,7 +340,9 @@ export function TelemetryChart({
       const dpr = window.devicePixelRatio || 1;
       const rect = container.getBoundingClientRect();
       const w = Math.round(rect.width);
-      const h = Math.round(rect.height);
+      // In separate mode, grow canvas beyond viewport if needed
+      const containerH = Math.round(rect.height);
+      const h = requiredCanvasHeight > 0 ? Math.max(containerH, requiredCanvasHeight) : containerH;
       canvas.width = w * dpr;
       canvas.height = h * dpr;
       canvas.style.width = w + 'px';
@@ -987,7 +351,6 @@ export function TelemetryChart({
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       canvasSizeRef.current = { w, h };
       needsDrawRef.current = true;
-      setIsCanvasReady(true);
     };
 
     const ro = new ResizeObserver(resize);
@@ -995,60 +358,74 @@ export function TelemetryChart({
     resize();
 
     return () => ro.disconnect();
-  }, []);
+  }, [requiredCanvasHeight, numVisible]); // re-run when canvas appears or size changes
 
-  // Trigger redraws when data changes
+  // Trigger redraws when data or display mode changes
   useEffect(() => {
     needsDrawRef.current = true;
-  }, [channelDataMap, visibleChannels, viewRange]);
+  }, [channelDataMap, visibleChannels, viewRange, chartMode]);
+
+  // Clear smoothed Y-ranges when chart mode changes to avoid stale lerp state
+  useEffect(() => {
+    smoothedYRanges.current.clear();
+  }, [chartMode]);
 
   // ─── Mouse events ─────────────────────────────────────────────────────
   const getEffectiveXRange = useCallback((): [number, number] => {
     return xRangeRef.current || [0, sessionDuration];
   }, [sessionDuration]);
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
+  // Store wheel handler deps in a ref so the native listener stays stable
+  const wheelDepsRef = useRef({ sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin });
+  useEffect(() => {
+    wheelDepsRef.current = { sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin };
+  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin]);
+
+  // Attach native wheel listener once with { passive: false }
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
-    if (plotW <= 0) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { sessionDuration: dur, getEffectiveXRange: getXR, xToTime: x2t, emitViewRange: emit, leftMargin: lm, rightMargin: rm } = wheelDepsRef.current;
+      const plotW = canvasSizeRef.current.w - lm - rm;
+      if (plotW <= 0) return;
 
-    const xRange = getEffectiveXRange();
-    const tAtMouse = xToTime(mouseX, xRange, plotW);
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const xRange = getXR();
+      const tAtMouse = x2t(mouseX, xRange, plotW);
 
-    // Graduated zoom: normalize deltaY across trackpad/mouse wheel
-    let delta = e.deltaY;
-    if (e.deltaMode === 1) delta *= 40; // line mode → pixels
-    if (e.deltaMode === 2) delta *= 800; // page mode → pixels
-    const zoomIntensity = 0.0008;
-    const factor = Math.exp(delta * zoomIntensity);
-    const newSpan = (xRange[1] - xRange[0]) * factor;
+      let delta = e.deltaY;
+      if (e.deltaMode === 1) delta *= 40;
+      if (e.deltaMode === 2) delta *= 800;
+      const factor = Math.exp(delta * 0.0008);
+      const newSpan = (xRange[1] - xRange[0]) * factor;
 
-    // Keep time-under-cursor stationary
-    const ratio = (mouseX - leftMargin) / plotW;
-    let newStart = tAtMouse - ratio * newSpan;
-    let newEnd = newStart + newSpan;
+      const ratio = (mouseX - lm) / plotW;
+      let newStart = tAtMouse - ratio * newSpan;
+      let newEnd = newStart + newSpan;
 
-    // Clamp
-    if (newStart < 0) { newEnd -= newStart; newStart = 0; }
-    if (newEnd > sessionDuration) { newStart -= (newEnd - sessionDuration); newEnd = sessionDuration; }
-    newStart = Math.max(0, newStart);
-    newEnd = Math.min(sessionDuration, newEnd);
+      const clampedSpan = Math.min(newSpan, dur);
+      if (newStart < 0) { newStart = 0; newEnd = clampedSpan; }
+      if (newEnd > dur) { newEnd = dur; newStart = dur - clampedSpan; }
+      newStart = Math.max(0, newStart);
+      newEnd = Math.min(dur, newEnd);
 
-    // If span covers full session, reset
-    if (newEnd - newStart >= sessionDuration * 0.998) {
-      xRangeRef.current = null;
-      emitViewRange(null);
-    } else {
-      xRangeRef.current = [newStart, newEnd];
-      emitViewRange([newStart, newEnd]);
-    }
-    needsDrawRef.current = true;
-  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin]);
+      if (newEnd - newStart >= dur * 0.998) {
+        xRangeRef.current = null;
+        emit(null);
+      } else {
+        xRangeRef.current = [newStart, newEnd];
+        emit([newStart, newEnd]);
+      }
+      needsDrawRef.current = true;
+    };
+
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [numVisible]); // re-run when canvas appears (0→N channels)
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -1095,10 +472,17 @@ export function TelemetryChart({
       // In non-delta mode, the hover IS the cursor
       if (!deltaModeRef.current) {
         cursorXRef.current = hoverXRef.current;
+        // Throttle state emit so GPS map updates without causing excessive re-renders
+        if (onCursorTimeChange && !cursorEmitTimer.current) {
+          cursorEmitTimer.current = setTimeout(() => {
+            cursorEmitTimer.current = null;
+            if (cursorXRef.current !== null) onCursorTimeChange(cursorXRef.current);
+          }, 60);
+        }
       }
       needsDrawRef.current = true;
     }
-  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin]);
+  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin, onCursorTimeChange]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     const wasDragging = isDraggingRef.current;
@@ -1355,15 +739,14 @@ export function TelemetryChart({
         </div>
       </div>
 
-      {/* Canvas container */}
+      {/* Canvas container — scrollable in separate mode when many channels */}
       <div
         ref={containerRef}
-        className="flex-1 min-h-0 relative"
+        className="flex-1 min-h-0 relative overflow-y-auto overflow-x-hidden"
         style={{ cursor: cursorStyle }}
       >
         <canvas
           ref={canvasRef}
-          onWheel={handleWheel}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -1372,7 +755,6 @@ export function TelemetryChart({
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
-          className="absolute inset-0"
           style={{ touchAction: 'none' }}
           data-testid="telemetry-canvas"
         />

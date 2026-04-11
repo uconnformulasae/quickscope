@@ -37,12 +37,6 @@ export interface ChannelDataResponse {
   };
 }
 
-export interface LapData {
-  lapNumber: number;
-  timestamp: number;
-  duration: number;
-}
-
 export interface GPSData {
   timestamps: number[];
   lat: number[];
@@ -221,15 +215,6 @@ export async function fetchChannelData(
     map.set(name, channelData);
   }
   return map;
-}
-
-export async function fetchLaps(): Promise<LapData[]> {
-  const res = await fetch(`${API_BASE}/api/laps`);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch laps: ${res.status}`);
-  }
-  const data = await res.json();
-  return data.laps || [];
 }
 
 export async function fetchGPS(): Promise<GPSData | null> {

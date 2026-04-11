@@ -34,6 +34,7 @@ export default function App() {
     setHistogramChannel,
     setXYChannels,
     clearSession,
+    setChannelSamples,
     addDerivedChannel,
     removeDerivedChannel,
     updateDerivedChannel,
@@ -177,19 +178,19 @@ export default function App() {
     try {
       const dataMap = await fetchChannelData([channelDef.shortName]);
       const data = dataMap.get(channelDef.shortName);
-      if (data && state.session) {
+      if (data) {
         const channelSamples: ChannelSample[] = data.timestamps.map((t: number, i: number) => ({
           timestamp: t,
           value: data.values[i],
         }));
-        state.session.samples.set(channelId, channelSamples);
+        setChannelSamples(channelId, channelSamples);
       }
     } catch (err) {
       console.error('Failed to fetch channel data:', err);
     }
 
     toggleChannel(channelId, color);
-  }, [state.activeChannels, state.session, toggleChannel]);
+  }, [state.activeChannels, state.session, toggleChannel, setChannelSamples]);
 
   const handleOpenCreateDerived = useCallback(() => {
     setEditingDerived(undefined);
@@ -404,6 +405,7 @@ export default function App() {
               derivedChannels={state.derivedChannels}
               derivedSamplesMap={derivedSamplesMap}
               onNavigateToTime={handleNavigateToTime}
+              cursorTime={state.cursorTime}
             />
           </div>
         )}

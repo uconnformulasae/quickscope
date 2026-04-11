@@ -11,8 +11,8 @@ interface DerivedChannelDialogProps {
   session: XRKSession;
   editing?: DerivedChannel;
   onClose: () => void;
-  onPreview: (def: Omit<DerivedChannel, 'id' | 'color'>) => { timestamps: number[]; values: number[] } | string;
-  onSubmit: (def: Omit<DerivedChannel, 'id' | 'color'>) => { error: string } | { id: number };
+  onPreview: (def: Omit<DerivedChannel, 'id' | 'color'>) => Promise<{ timestamps: number[]; values: number[] } | string>;
+  onSubmit: (def: Omit<DerivedChannel, 'id' | 'color'>) => Promise<{ error: string } | { id: number }>;
 }
 
 const FORMULA_EXAMPLES = [
@@ -23,13 +23,18 @@ const FORMULA_EXAMPLES = [
   { label: 'Smooth lat G', expr: 'smooth(LatA, 20)' },
 ];
 
-const JS_TEMPLATE = `// Example: Power = Voltage * Current
-const v = channels['VBAT'];
-const i = channels['IBAT'];
-if (!v || !i) return { timestamps: [], values: [] };
-const ts = v.timestamps;
-const values = ts.map((t, idx) => v.values[idx] * interpolate(i, t));
-return { timestamps: ts, values };`;
+const PYTHON_TEMPLATE = `# Example: Power = Voltage * Current
+# Available: channels (dict), np (numpy), math, interpolate(ch, t)
+# Must assign result = { 'timestamps': [...], 'values': [...] }
+
+v = channels.get('VBAT')
+i = channels.get('IBAT')
+if not v or not i:
+    result = {'timestamps': [], 'values': []}
+else:
+    ts = v['timestamps']
+    vals = [v['values'][idx] * interpolate(i, t) for idx, t in enumerate(ts)]
+    result = {'timestamps': ts, 'values': vals}`;
 
 function MiniPreviewChart({
   timestamps,
@@ -106,19 +111,21 @@ export function DerivedChannelDialog({
 }: DerivedChannelDialogProps) {
   const [name, setName] = useState(editing?.name ?? '');
   const [units, setUnits] = useState(editing?.units ?? '');
-  const [mode, setMode] = useState<'formula' | 'javascript'>(editing?.mode ?? 'formula');
+  const [mode, setMode] = useState<'formula' | 'python'>(editing?.mode ?? 'formula');
   const [expression, setExpression] = useState(
-    editing?.expression ?? (editing?.mode === 'javascript' ? JS_TEMPLATE : '')
+    editing?.expression ?? (editing?.mode === 'python' ? PYTHON_TEMPLATE : '')
   );
   const [previewResult, setPreviewResult] = useState<{ timestamps: number[]; values: number[] } | string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showChannelList, setShowChannelList] = useState(false);
 
+  const [isEvaluating, setIsEvaluating] = useState(false);
+
   // When mode changes, set template if expression is empty
-  const handleModeChange = (m: 'formula' | 'javascript') => {
+  const handleModeChange = (m: 'formula' | 'python') => {
     setMode(m);
     if (!expression.trim()) {
-      setExpression(m === 'javascript' ? JS_TEMPLATE : '');
+      setExpression(m === 'python' ? PYTHON_TEMPLATE : '');
     }
     setPreviewResult(null);
   };
@@ -128,22 +135,32 @@ export function DerivedChannelDialog({
     .map(ch => ch.shortName)
     .sort();
 
-  const handlePreview = useCallback(() => {
+  const handlePreview = useCallback(async () => {
     if (!name.trim() || !expression.trim()) return;
-    const result = onPreview({ name: name.trim(), units, mode, expression });
-    setPreviewResult(result);
+    setIsEvaluating(true);
+    try {
+      const result = await onPreview({ name: name.trim(), units, mode, expression });
+      setPreviewResult(result);
+    } finally {
+      setIsEvaluating(false);
+    }
   }, [name, units, mode, expression, onPreview]);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!name.trim()) { setSubmitError('Channel name is required'); return; }
     if (!expression.trim()) { setSubmitError('Expression is required'); return; }
     setSubmitError(null);
+    setIsEvaluating(true);
 
-    const result = onSubmit({ name: name.trim(), units, mode, expression });
-    if ('error' in result) {
-      setSubmitError(result.error);
-    } else {
-      onClose();
+    try {
+      const result = await onSubmit({ name: name.trim(), units, mode, expression });
+      if ('error' in result) {
+        setSubmitError(result.error);
+      } else {
+        onClose();
+      }
+    } finally {
+      setIsEvaluating(false);
     }
   };
 
@@ -223,16 +240,16 @@ export function DerivedChannelDialog({
                 Formula
               </button>
               <button
-                onClick={() => handleModeChange('javascript')}
+                onClick={() => handleModeChange('python')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs border transition-colors ${
-                  mode === 'javascript'
+                  mode === 'python'
                     ? 'bg-primary text-primary-foreground border-primary'
                     : 'border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground/40'
                 }`}
-                data-testid="btn-mode-js"
+                data-testid="btn-mode-python"
               >
                 <Code2 className="w-3 h-3" />
-                JavaScript
+                Python
               </button>
             </div>
           </div>
@@ -256,16 +273,16 @@ export function DerivedChannelDialog({
           {/* Expression input */}
           <div>
             <label className="block text-xs text-muted-foreground mb-1">
-              {mode === 'formula' ? 'Math Expression' : 'JavaScript (function body)'}
+              {mode === 'formula' ? 'Math Expression' : 'Python Script'}
             </label>
             <textarea
               value={expression}
               onChange={e => setExpression(e.target.value)}
-              rows={mode === 'javascript' ? 8 : 3}
+              rows={mode === 'python' ? 8 : 3}
               placeholder={
                 mode === 'formula'
                   ? 'e.g. Spd1 * 0.621371'
-                  : 'return { timestamps: [], values: [] };'
+                  : "result = {'timestamps': [...], 'values': [...]}"
               }
               className="w-full px-2.5 py-2 bg-[#080910] border border-border rounded text-xs text-foreground placeholder-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary font-mono resize-y leading-relaxed"
               spellCheck={false}
@@ -276,12 +293,30 @@ export function DerivedChannelDialog({
                 Use channel names as variables. Operators: +, −, ×, ÷, ^ (power). Functions: abs, sqrt, sin, cos, log, exp, diff, smooth, delay.
               </p>
             )}
-            {mode === 'javascript' && (
-              <p className="mt-1 text-xs text-muted-foreground/60">
-                Receives <code className="text-primary/80">channels</code> (object of channel data) and{' '}
-                <code className="text-primary/80">interpolate(ch, t)</code>. Must return{' '}
-                <code className="text-primary/80">{'{ timestamps, values }'}</code>.
-              </p>
+            {mode === 'python' && (
+              <div className="mt-2 space-y-2 text-xs text-muted-foreground/70 bg-muted/20 border border-border/40 rounded p-2.5">
+                <p className="text-muted-foreground font-medium">Your script receives:</p>
+                <ul className="space-y-1.5 ml-1">
+                  <li>
+                    <code className="text-primary/80">channels</code> — dict of all channel data.
+                    Access like <code className="text-primary/80">channels['Spd1']</code>,
+                    each is <code className="text-primary/80">{'{"timestamps": [...], "values": [...]}'}</code>
+                  </li>
+                  <li>
+                    <code className="text-primary/80">np</code> — numpy, for array math
+                  </li>
+                  <li>
+                    <code className="text-primary/80">math</code> — Python math module
+                  </li>
+                  <li>
+                    <code className="text-primary/80">interpolate(ch, t)</code> — get a channel's value at timestamp <code className="text-primary/80">t</code>.
+                    Useful when channels have different sample rates
+                  </li>
+                </ul>
+                <p className="text-muted-foreground font-medium pt-1 border-t border-border/30">
+                  Must assign: <code className="text-primary/80">{"result = {'timestamps': [...], 'values': [...]}"}</code>
+                </p>
+              </div>
             )}
           </div>
 
@@ -316,11 +351,11 @@ export function DerivedChannelDialog({
           <div className="space-y-2">
             <button
               onClick={handlePreview}
-              disabled={!name.trim() || !expression.trim()}
+              disabled={!name.trim() || !expression.trim() || isEvaluating}
               className="w-full py-1.5 rounded text-xs border border-primary/50 text-primary hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               data-testid="btn-preview"
             >
-              Preview
+              {isEvaluating ? 'Evaluating...' : 'Preview'}
             </button>
 
             {previewResult !== null && (
@@ -365,11 +400,11 @@ export function DerivedChannelDialog({
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!name.trim() || !expression.trim()}
+            disabled={!name.trim() || !expression.trim() || isEvaluating}
             className="px-4 py-1.5 rounded text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
             data-testid="btn-create-derived"
           >
-            {editing ? 'Update Channel' : 'Create Channel'}
+            {isEvaluating ? 'Evaluating...' : (editing ? 'Update Channel' : 'Create Channel')}
           </button>
         </div>
       </div>

@@ -113,17 +113,23 @@ export interface ChannelStats {
 
 export function computeStats(samples: ChannelSample[]): ChannelStats {
   if (samples.length === 0) return { min: 0, max: 0, mean: 0, stdDev: 0, count: 0, minTimestamp: 0, maxTimestamp: 0 };
-  let min = Infinity, max = -Infinity, sum = 0;
+  let min = Infinity, max = -Infinity, sum = 0, count = 0;
   let minTimestamp = 0, maxTimestamp = 0;
   for (const s of samples) {
+    if (!isFinite(s.value)) continue;
     if (s.value < min) { min = s.value; minTimestamp = s.timestamp; }
     if (s.value > max) { max = s.value; maxTimestamp = s.timestamp; }
     sum += s.value;
+    count++;
   }
-  const mean = sum / samples.length;
+  if (count === 0) return { min: 0, max: 0, mean: 0, stdDev: 0, count: 0, minTimestamp: 0, maxTimestamp: 0 };
+  const mean = sum / count;
   let variance = 0;
-  for (const s of samples) variance += (s.value - mean) ** 2;
-  return { min, max, mean, stdDev: Math.sqrt(variance / samples.length), count: samples.length, minTimestamp, maxTimestamp };
+  for (const s of samples) {
+    if (!isFinite(s.value)) continue;
+    variance += (s.value - mean) ** 2;
+  }
+  return { min, max, mean, stdDev: Math.sqrt(variance / count), count, minTimestamp, maxTimestamp };
 }
 
 export function formatTime(milliseconds: number): string {
