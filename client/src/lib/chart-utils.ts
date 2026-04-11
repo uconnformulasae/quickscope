@@ -48,6 +48,7 @@ export interface DrawContext {
   session: XRKSession;
   smoothedYRanges: Map<string, [number, number]>;
   needsDrawRef: { current: boolean };
+  colors: ChartColors;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -59,14 +60,40 @@ export const MIN_STRIP_HEIGHT = 140;
 export const AXIS_WIDTH = 50;
 export const MONO_FONT = 'JetBrains Mono, monospace';
 
-export const GRID_COLOR = 'rgba(255,255,255,0.05)';
-export const TEXT_COLOR = '#8b93a8';
-export const CURSOR_COLOR = 'rgba(255,255,255,0.5)';
-export const CURSOR_PILL_BG = 'rgba(13,14,20,0.9)';
-export const DELTA_FILL = 'rgba(34,211,238,0.10)';
-export const DELTA_LINE = 'rgba(34,211,238,0.7)';
-export const DELTA_PANEL_BG = 'rgba(13,14,20,0.92)';
-export const DELTA_ACCENT = '#22d3ee';
+export interface ChartColors {
+  grid: string;
+  text: string;
+  cursor: string;
+  cursorPill: string;
+  cursorPillText: string;
+  deltaFill: string;
+  deltaLine: string;
+  deltaPanel: string;
+  deltaAccent: string;
+  separator: string;
+  hoverLine: string;
+  lapMarker: string;
+  lapText: string;
+}
+
+export function getChartColors(el: HTMLElement): ChartColors {
+  const s = getComputedStyle(el);
+  return {
+    grid: s.getPropertyValue('--chart-grid').trim(),
+    text: s.getPropertyValue('--chart-text').trim(),
+    cursor: s.getPropertyValue('--chart-cursor').trim(),
+    cursorPill: s.getPropertyValue('--chart-cursor-pill').trim(),
+    cursorPillText: s.getPropertyValue('--chart-cursor-pill-text').trim(),
+    deltaFill: s.getPropertyValue('--chart-delta-fill').trim(),
+    deltaLine: s.getPropertyValue('--chart-delta-line').trim(),
+    deltaPanel: s.getPropertyValue('--chart-delta-panel').trim(),
+    deltaAccent: s.getPropertyValue('--chart-delta-accent').trim(),
+    separator: s.getPropertyValue('--chart-separator').trim(),
+    hoverLine: s.getPropertyValue('--chart-hover-line').trim(),
+    lapMarker: s.getPropertyValue('--chart-lap-marker').trim(),
+    lapText: s.getPropertyValue('--chart-lap-text').trim(),
+  };
+}
 
 export const DEBOUNCE_MS = 100;
 

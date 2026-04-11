@@ -6,8 +6,6 @@ import type { ChannelSample } from './xrk-parser';
 import type { DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT,
-  CURSOR_COLOR, CURSOR_PILL_BG,
-  DELTA_FILL, DELTA_LINE, DELTA_PANEL_BG, DELTA_ACCENT,
   clamp, interpolateValue, nearestSample, formatValue, formatTimeSec,
 } from './chart-utils';
 
@@ -39,7 +37,7 @@ function drawCursorLine(
     const pillH = 16;
     const pillX = Math.round(clamp(x - pillW / 2, lm, w - rm - pillW));
     const pillY = axisY + 2;
-    ctx.fillStyle = CURSOR_PILL_BG;
+    ctx.fillStyle = dc.colors.cursorPill;
     ctx.beginPath();
     ctx.roundRect(pillX, pillY, pillW, pillH, 3);
     ctx.fill();
@@ -106,7 +104,7 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
       ? strip.top + 4 + pillIndex * (pillH + 3)
       : strip.top + 4; // fixed at top of strip in separate mode
 
-    ctx.fillStyle = CURSOR_PILL_BG;
+    ctx.fillStyle = dc.colors.cursorPill;
     ctx.beginPath();
     ctx.roundRect(pillX, pillY, pillW, pillH, 4);
     ctx.fill();
@@ -117,7 +115,7 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
     ctx.fillText(nameText, pillX + pillPadX, pillY + 14);
 
     ctx.font = `10px ${MONO_FONT}`;
-    ctx.fillStyle = '#e2e4e9';
+    ctx.fillStyle = dc.colors.cursorPillText;
     ctx.fillText(valText, pillX + pillPadX + nameW + pillGap, pillY + 14);
     pillIndex++;
   }
@@ -132,7 +130,7 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
   const isHoverSameAsCursorA = cursor.cursorA !== null && Math.abs(hoverT - cursor.cursorA) < (xRange[1] - xRange[0]) * 0.002;
   const isHoverSameAsCursorB = cursor.cursorB !== null && Math.abs(hoverT - cursor.cursorB) < (xRange[1] - xRange[0]) * 0.002;
   if (!isHoverSameAsCursorA && !isHoverSameAsCursorB) {
-    drawCursorLine(dc, hoverT, 'rgba(255,255,255,0.25)', axisY, true);
+    drawCursorLine(dc, hoverT, dc.colors.hoverLine, axisY, true);
   }
 
   if (cursor.deltaMode && (cursor.cursorA !== null || cursor.cursorB !== null)) {
@@ -165,7 +163,7 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
         ? strip.top + 4 + hoverPillIndex * (pillH + 2)
         : Math.round(clamp(dotY - pillH / 2, strip.top + 2, strip.top + strip.height - pillH - 2));
 
-      ctx.fillStyle = 'rgba(13,14,20,0.75)';
+      ctx.fillStyle = dc.colors.cursorPill;
       ctx.beginPath();
       ctx.roundRect(pillX, pillY, pillW, pillH, 2);
       ctx.fill();
@@ -218,19 +216,19 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
   const panelX = w - rm - panelW - 10;
   const panelY = 8;
 
-  ctx.fillStyle = DELTA_PANEL_BG;
+  ctx.fillStyle = dc.colors.deltaPanel;
   ctx.beginPath();
   ctx.roundRect(panelX, panelY, panelW, panelH, 6);
   ctx.fill();
 
-  ctx.strokeStyle = 'rgba(34,211,238,0.2)';
+  ctx.strokeStyle = dc.colors.deltaLine;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.roundRect(panelX, panelY, panelW, panelH, 6);
   ctx.stroke();
 
   ctx.font = `bold 11px ${MONO_FONT}`;
-  ctx.fillStyle = DELTA_ACCENT;
+  ctx.fillStyle = dc.colors.deltaAccent;
   ctx.textAlign = 'left';
   ctx.fillText(`Δt = ${deltaT.toFixed(3)}s`, panelX + panelPad, panelY + panelPad + 12);
 
@@ -241,7 +239,7 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
 
   const colY = panelY + panelPad + headerH + 10;
   ctx.font = `9px ${MONO_FONT}`;
-  ctx.fillStyle = 'rgba(139,147,168,0.6)';
+  ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'left';
   ctx.fillText('Channel', col1, colY);
   ctx.textAlign = 'right';
@@ -250,7 +248,7 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
   ctx.fillText('Δ', col4, colY);
 
   const sepY = colY + 5;
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.strokeStyle = dc.colors.separator;
   ctx.beginPath();
   ctx.moveTo(col1, sepY);
   ctx.lineTo(panelX + panelW - panelPad, sepY);
@@ -267,13 +265,13 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
     ctx.fillText(row.label, col1, ry);
 
     ctx.font = `10px ${MONO_FONT}`;
-    ctx.fillStyle = '#a0a8b8';
+    ctx.fillStyle = dc.colors.text;
     ctx.textAlign = 'right';
     ctx.fillText(row.valA, col2, ry);
     ctx.fillText(row.valB, col3, ry);
 
     ctx.font = `bold 10px ${MONO_FONT}`;
-    ctx.fillStyle = DELTA_ACCENT;
+    ctx.fillStyle = dc.colors.deltaAccent;
     ctx.fillText(row.delta, col4, ry);
   }
 }
@@ -288,20 +286,20 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
     const xB = dc.timeToX(cursor.cursorB, xRange, plotW);
     const left = Math.max(lm, Math.min(xA, xB));
     const right = Math.min(w - rm, Math.max(xA, xB));
-    ctx.fillStyle = DELTA_FILL;
+    ctx.fillStyle = dc.colors.deltaFill;
     ctx.fillRect(left, 0, right - left, axisY);
   }
 
   // Cursor A line + pills
   if (cursor.cursorA !== null) {
-    const lineColor = cursor.cursorB !== null ? DELTA_LINE : CURSOR_COLOR;
+    const lineColor = cursor.cursorB !== null ? dc.colors.deltaLine : dc.colors.cursor;
     drawCursorLine(dc, cursor.cursorA, lineColor, axisY, true);
     drawCursorPills(dc, cursor.cursorA, axisY);
   }
 
   // Cursor B line
   if (cursor.cursorB !== null) {
-    drawCursorLine(dc, cursor.cursorB, DELTA_LINE, axisY, true);
+    drawCursorLine(dc, cursor.cursorB, dc.colors.deltaLine, axisY, true);
   }
 
   // Hover crosshair

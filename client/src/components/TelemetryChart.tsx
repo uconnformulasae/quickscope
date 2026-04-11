@@ -6,7 +6,7 @@ import {
   type TelemetryChartProps, type StripLayout, type DrawContext,
   LEFT_MARGIN, RIGHT_MARGIN, BOTTOM_AXIS_HEIGHT, MIN_STRIP_HEIGHT, AXIS_WIDTH,
   DEBOUNCE_MS,
-  clamp, niceAxisTicks,
+  clamp, niceAxisTicks, getChartColors,
 } from '../lib/chart-utils';
 import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawXAxis } from '../lib/chart-draw';
 import { drawCursors } from '../lib/chart-cursors';
@@ -278,6 +278,7 @@ export function TelemetryChart({
     const strips = computeStripLayouts(h);
     const xTicks = niceAxisTicks(xRange[0], xRange[1], Math.max(5, Math.floor(plotW / 80)));
     const sharedYRanges = new Map<string, [number, number]>();
+    const colors = getChartColors(canvas);
 
     const dc: DrawContext = {
       ctx, w, h, lm, rm, plotW, xRange, xTicks, strips,
@@ -285,6 +286,7 @@ export function TelemetryChart({
       timeToX, getDownsampled, overlayAxisLayout, session,
       smoothedYRanges: smoothedYRanges.current,
       needsDrawRef,
+      colors,
     };
 
     ctx.save();

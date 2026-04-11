@@ -5,7 +5,7 @@
 import type { ChannelSample } from './xrk-parser';
 import type { DrawContext, StripLayout } from './chart-utils';
 import {
-  GRID_COLOR, TEXT_COLOR, MONO_FONT, AXIS_WIDTH,
+  MONO_FONT, AXIS_WIDTH,
   BOTTOM_AXIS_HEIGHT,
   niceAxisTicks, formatValue, formatTimeSec, clamp, brightenColor,
 } from './chart-utils';
@@ -121,7 +121,7 @@ export function drawStrips(
     const shouldDrawGrid = chartMode !== 'overlay' || !gridDrawnForOverlay;
 
     if (shouldDrawGrid) {
-      ctx.strokeStyle = GRID_COLOR;
+      ctx.strokeStyle = dc.colors.grid;
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (const yt of yTicks) {
@@ -142,7 +142,7 @@ export function drawStrips(
       ctx.stroke();
 
       // Lap markers
-      ctx.strokeStyle = 'rgba(247,127,0,0.35)';
+      ctx.strokeStyle = dc.colors.lapMarker;
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
@@ -159,7 +159,7 @@ export function drawStrips(
 
       if (strip === strips[0]) {
         ctx.font = `9px ${MONO_FONT}`;
-        ctx.fillStyle = '#f77f00';
+        ctx.fillStyle = dc.colors.lapText;
         ctx.textAlign = 'center';
         session.lapMarkers.forEach((lap, i) => {
           const lt = lap.timestamp / 1000;
@@ -211,7 +211,7 @@ export function drawStrips(
 
     // Strip separator (separate mode)
     if (chartMode !== 'overlay') {
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.strokeStyle = dc.colors.separator;
       ctx.lineWidth = 1;
       ctx.beginPath();
       const sepY = Math.round(strip.top + strip.height) + 0.5;
@@ -297,7 +297,7 @@ function drawYAxis(
       : w - rm + 5 + sideIndex * AXIS_WIDTH;
 
     ctx.font = `10px ${MONO_FONT}`;
-    ctx.fillStyle = TEXT_COLOR;
+    ctx.fillStyle = dc.colors.text;
     ctx.textAlign = isLeft ? 'right' : 'left';
     for (const yt of yTicks) {
       const y = valToY(yt);
@@ -307,7 +307,7 @@ function drawYAxis(
     }
 
     const lineX = isLeft ? axX + 3 : axX - 3;
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.strokeStyle = dc.colors.separator;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(lineX, strip.top);
@@ -316,7 +316,7 @@ function drawYAxis(
 
     if (units) {
       ctx.font = `8px ${MONO_FONT}`;
-      ctx.fillStyle = TEXT_COLOR;
+      ctx.fillStyle = dc.colors.text;
       ctx.textAlign = isLeft ? 'right' : 'left';
       ctx.fillText(units, axX, strip.top + strip.height - 4);
     }
@@ -366,7 +366,7 @@ export function drawXAxis(dc: DrawContext): number {
     ? strips[strips.length - 1].top + strips[strips.length - 1].height
     : h - BOTTOM_AXIS_HEIGHT;
 
-  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.strokeStyle = dc.colors.separator;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(lm, Math.round(axisY) + 0.5);
@@ -374,7 +374,7 @@ export function drawXAxis(dc: DrawContext): number {
   ctx.stroke();
 
   ctx.font = `10px ${MONO_FONT}`;
-  ctx.fillStyle = TEXT_COLOR;
+  ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'center';
   for (const xt of xTicks) {
     const x = dc.timeToX(xt, xRange, plotW);
@@ -388,7 +388,7 @@ export function drawXAxis(dc: DrawContext): number {
   }
 
   ctx.font = `9px ${MONO_FONT}`;
-  ctx.fillStyle = TEXT_COLOR;
+  ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'right';
   ctx.fillText('Time (s)', w - rm, axisY + 30);
 
