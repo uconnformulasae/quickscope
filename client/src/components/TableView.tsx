@@ -164,7 +164,7 @@ export function TableView({
                     ? 'bg-primary/15 ring-1 ring-inset ring-primary/30'
                     : isEven
                       ? 'bg-background'
-                      : 'bg-muted/50'
+                      : 'bg-muted'
                 }`}
                 style={{
                   height: `${ROW_HEIGHT}px`,
