@@ -51,6 +51,31 @@ export interface DrawContext {
   colors: ChartColors;
 }
 
+// ─── Light-mode color overrides ─────────────────────────────────────────────
+// Dark-mode channel colors that lack contrast on #f0f1f5 (light bg).
+// Each maps to a darker variant of the same hue (≥ 3.5:1 ratio).
+const LIGHT_COLOR_MAP: Record<string, string> = {
+  '#f77f00': '#c2410c', // racing orange → orange-700
+  '#3de06a': '#15803d', // electric green → green-700
+  '#22d3ee': '#0e7490', // cyan → cyan-700
+  '#facc15': '#a16207', // yellow → yellow-700
+  '#06b6d4': '#0f766e', // teal → teal-700
+  '#84cc16': '#4d7c0f', // lime → lime-700
+  '#10b981': '#047857', // emerald → emerald-700
+  '#fb923c': '#b45309', // amber → amber-700
+  '#38bdf8': '#0284c7', // sky → sky-600
+  '#a3e635': '#65a30d', // lime bright → lime-600
+  '#f43f5e': '#be123c', // rose → rose-700
+  '#ec4899': '#be185d', // pink → pink-700
+  '#a855f7': '#7c3aed', // purple → violet-600
+};
+
+/** Map a channel color to a light-mode variant if needed. */
+export function resolveChartColor(hex: string, theme: 'dark' | 'light'): string {
+  if (theme === 'dark') return hex;
+  return LIGHT_COLOR_MAP[hex.toLowerCase()] || LIGHT_COLOR_MAP[hex] || hex;
+}
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 export const LEFT_MARGIN = 60;
