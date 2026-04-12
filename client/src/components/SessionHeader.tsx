@@ -72,7 +72,7 @@ export function SessionHeader({
   const lapCount = session ? Math.max(0, session.lapMarkers.length - 1) : 0;
 
   return (
-    <header className="flex items-center gap-3 px-3 h-10 border-b border-border bg-card flex-shrink-0 overflow-hidden">
+    <header className="flex items-center gap-3 px-3 h-10 border-b border-border bg-card flex-shrink-0 overflow-visible relative z-20">
       {/* Back + Logo + toggle */}
       <div className="flex items-center gap-2">
         {onBack && (
@@ -130,7 +130,7 @@ export function SessionHeader({
 
       {/* Session metadata pills */}
       {metadata && (
-        <div className="flex items-center gap-2 overflow-hidden">
+        <div className="flex items-center gap-2 overflow-hidden min-w-0">
           <MetaPill icon={<Car className="w-3 h-3" />} value={metadata.vehicle} />
           <MetaPill icon={<User className="w-3 h-3" />} value={metadata.driver} />
           <MetaPill icon={<Calendar className="w-3 h-3" />} value={metadata.date} />

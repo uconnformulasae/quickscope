@@ -44,13 +44,16 @@ export function buildTableData(
 
     for (let c = 0; c < channelIds.length; c++) {
       const ch = channelPointers[c];
-      const { samples, ptr } = ch;
+      const { samples } = ch;
 
       if (samples.length === 0) {
         values[c] = null;
         held[c] = false;
         continue;
       }
+
+      // Track whether the pointer advances (new sample consumed)
+      const prevPtr = ch.ptr;
 
       // Advance pointer to the last sample at or before this timestamp
       while (ch.ptr < samples.length - 1 && samples[ch.ptr + 1].timestamp <= ts) {
@@ -60,7 +63,8 @@ export function buildTableData(
       const sample = samples[ch.ptr];
       if (sample.timestamp <= ts) {
         values[c] = sample.value;
-        held[c] = sample.timestamp < ts;
+        // Held = pointer didn't move from the previous row (same sample repeated)
+        held[c] = (ch.ptr === prevPtr && i > 0);
       } else {
         values[c] = null;
         held[c] = false;
