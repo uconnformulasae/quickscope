@@ -358,7 +358,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, theme, onToggl
                   key={session.id}
                   onClick={() => handleSessionClick(session)}
                   disabled={isLoading || isPulling}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-card border border-border/50 hover:border-border hover:bg-muted transition-colors disabled:opacity-60 group"
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 hover:bg-[hsl(225,35%,91%)] dark:hover:bg-muted hover:border-[hsl(225,30%,78%)] dark:hover:border-border transition-colors disabled:opacity-60 group"
                 >
                   {/* Status indicator */}
                   <div className="flex-shrink-0">
