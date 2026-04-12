@@ -1,9 +1,10 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { uploadFile, fetchChannelData, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import type { DerivedChannel } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
+import { resolveChartColor } from './lib/chart-utils';
 import { ChannelSidebar } from './components/ChannelSidebar';
 import { TelemetryChart } from './components/TelemetryChart';
 import { AnalysisPanel } from './components/AnalysisPanel';
@@ -258,7 +259,13 @@ export default function App() {
     }
   }, [handleFileSelected]);
 
-  const { session, activeChannels, leftSidebarOpen, rightSidebarOpen } = state;
+  const { session, activeChannels: rawActiveChannels, leftSidebarOpen, rightSidebarOpen } = state;
+
+  // Resolve channel colors for current theme (dark colors need darker variants on light bg)
+  const activeChannels = useMemo(
+    () => rawActiveChannels.map(ac => ({ ...ac, color: resolveChartColor(ac.color, theme) })),
+    [rawActiveChannels, theme],
+  );
 
   // ─── Session Browser View ──────────────────────────────────────────────────
   if (view === 'browser') {

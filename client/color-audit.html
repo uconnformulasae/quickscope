@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>QuickScope Color Audit</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'DM Sans', system-ui, sans-serif; }
+  .container { display: flex; width: 100%; min-height: 100vh; }
+  .panel { flex: 1; padding: 32px; }
+  .dark-panel { background: #0d0e14; color: #dde1ec; }
+  .light-panel { background: #f0f1f5; color: #131520; }
+  h1 { font-size: 18px; margin-bottom: 8px; font-weight: 600; }
+  h2 { font-size: 14px; margin: 24px 0 12px; font-weight: 600; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.05em; }
+  .swatch-row { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
+  .swatch { width: 48px; height: 24px; border-radius: 4px; flex-shrink: 0; }
+  .swatch-line { width: 48px; height: 4px; border-radius: 2px; flex-shrink: 0; }
+  .label { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+  .name { font-size: 12px; opacity: 0.5; min-width: 140px; }
+  .flag { color: #f43f5e; font-size: 11px; font-weight: 600; margin-left: 8px; }
+  hr { border: none; border-top: 1px solid rgba(128,128,128,0.15); margin: 20px 0; }
+
+  /* Simulate line trace on background */
+  .trace-preview {
+    width: 100%; height: 40px; border-radius: 6px; margin: 4px 0 2px;
+    position: relative; overflow: hidden;
+  }
+  .dark-panel .trace-preview { background: #0d0e14; border: 1px solid rgba(255,255,255,0.08); }
+  .light-panel .trace-preview { background: #f0f1f5; border: 1px solid rgba(0,0,0,0.08); }
+  .trace-line {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- DARK MODE -->
+<div class="panel dark-panel">
+  <h1>Dark Mode</h1>
+  <p style="font-size:12px;opacity:0.4;">Background: #0d0e14 &mdash; hsl(232, 28%, 7%)</p>
+
+  <h2>Channel Colors (Main)</h2>
+  <div id="dark-main"></div>
+
+  <h2>Channel Colors (Derived)</h2>
+  <div id="dark-derived"></div>
+
+  <h2>UI Colors</h2>
+  <div id="dark-ui"></div>
+
+  <h2>Chart Chrome</h2>
+  <div id="dark-chrome"></div>
+</div>
+
+<!-- LIGHT MODE -->
+<div class="panel light-panel">
+  <h1>Light Mode</h1>
+  <p style="font-size:12px;opacity:0.4;">Background: #f0f1f5 &mdash; hsl(220, 14%, 96%)</p>
+
+  <h2>Channel Colors (Main)</h2>
+  <div id="light-main"></div>
+
+  <h2>Channel Colors (Derived)</h2>
+  <div id="light-derived"></div>
+
+  <h2>UI Colors</h2>
+  <div id="light-ui"></div>
+
+  <h2>Chart Chrome</h2>
+  <div id="light-chrome"></div>
+</div>
+
+</div>
+
+<script>
+const MAIN_COLORS_DARK = [
+  { hex: '#4361ee', name: 'Electric Blue' },
+  { hex: '#f77f00', name: 'Racing Orange' },
+  { hex: '#3de06a', name: 'Electric Green' },
+  { hex: '#a855f7', name: 'Purple' },
+  { hex: '#22d3ee', name: 'Cyan' },
+  { hex: '#facc15', name: 'Yellow' },
+  { hex: '#ec4899', name: 'Pink' },
+  { hex: '#06b6d4', name: 'Teal' },
+  { hex: '#84cc16', name: 'Lime' },
+  { hex: '#f43f5e', name: 'Rose' },
+  { hex: '#8b5cf6', name: 'Violet' },
+  { hex: '#10b981', name: 'Emerald' },
+  { hex: '#fb923c', name: 'Amber' },
+  { hex: '#38bdf8', name: 'Sky' },
+  { hex: '#a3e635', name: 'Lime (light)' },
+];
+
+const MAIN_COLORS_LIGHT = [
+  { hex: '#4361ee', name: 'Electric Blue' },
+  { hex: '#c2410c', name: 'Racing Orange (700)' },
+  { hex: '#15803d', name: 'Electric Green (700)' },
+  { hex: '#a855f7', name: 'Purple' },
+  { hex: '#0e7490', name: 'Cyan (700)' },
+  { hex: '#a16207', name: 'Yellow (700)' },
+  { hex: '#ec4899', name: 'Pink' },
+  { hex: '#0f766e', name: 'Teal (700)' },
+  { hex: '#4d7c0f', name: 'Lime (700)' },
+  { hex: '#f43f5e', name: 'Rose' },
+  { hex: '#8b5cf6', name: 'Violet' },
+  { hex: '#047857', name: 'Emerald (700)' },
+  { hex: '#b45309', name: 'Amber (700)' },
+  { hex: '#0284c7', name: 'Sky (600)' },
+  { hex: '#65a30d', name: 'Lime bright (600)' },
+];
+
+const DERIVED_COLORS_DARK = [
+  { hex: '#f43f5e', name: 'Rose' },
+  { hex: '#8b5cf6', name: 'Violet' },
+  { hex: '#06b6d4', name: 'Teal' },
+  { hex: '#84cc16', name: 'Lime' },
+  { hex: '#fb923c', name: 'Amber' },
+  { hex: '#a855f7', name: 'Purple' },
+  { hex: '#22d3ee', name: 'Cyan' },
+  { hex: '#facc15', name: 'Yellow' },
+  { hex: '#ec4899', name: 'Pink' },
+  { hex: '#10b981', name: 'Emerald' },
+];
+
+const DERIVED_COLORS_LIGHT = [
+  { hex: '#be123c', name: 'Rose (700)' },
+  { hex: '#8b5cf6', name: 'Violet' },
+  { hex: '#0f766e', name: 'Teal (700)' },
+  { hex: '#4d7c0f', name: 'Lime (700)' },
+  { hex: '#b45309', name: 'Amber (700)' },
+  { hex: '#7c3aed', name: 'Purple (600)' },
+  { hex: '#0e7490', name: 'Cyan (700)' },
+  { hex: '#a16207', name: 'Yellow (700)' },
+  { hex: '#be185d', name: 'Pink (700)' },
+  { hex: '#047857', name: 'Emerald (700)' },
+];
+
+const UI_COLORS = [
+  { hex: '#4361ee', name: 'Primary Blue' },
+  { hex: '#f77f00', name: 'Accent Orange' },
+  { hex: '#f5a623', name: 'Sun icon' },
+  { hex: '#dde1ec', name: 'Foreground text (dark)' },
+  { hex: '#131520', name: 'Foreground text (light)' },
+  { hex: '#8b93a8', name: 'Chart text (dark)' },
+];
+
+const DARK_CHROME = [
+  { hex: 'rgba(255,255,255,0.05)', name: 'Grid' },
+  { hex: '#8b93a8', name: 'Axis text' },
+  { hex: 'rgba(255,255,255,0.5)', name: 'Cursor line' },
+  { hex: 'rgba(13,14,20,0.9)', name: 'Cursor pill bg' },
+  { hex: '#dde1ec', name: 'Cursor pill text' },
+  { hex: 'rgba(34,211,238,0.7)', name: 'Delta line' },
+  { hex: '#22d3ee', name: 'Delta accent' },
+  { hex: 'rgba(255,255,255,0.08)', name: 'Separator' },
+  { hex: 'rgba(255,255,255,0.25)', name: 'Hover line' },
+  { hex: 'rgba(247,127,0,0.35)', name: 'Lap marker' },
+  { hex: '#f77f00', name: 'Lap text' },
+];
+
+const LIGHT_CHROME = [
+  { hex: 'rgba(0,0,0,0.06)', name: 'Grid' },
+  { hex: 'hsl(220,10%,42%)', name: 'Axis text' },
+  { hex: 'rgba(0,0,0,0.35)', name: 'Cursor line' },
+  { hex: 'rgba(255,255,255,0.92)', name: 'Cursor pill bg' },
+  { hex: '#131520', name: 'Cursor pill text' },
+  { hex: 'rgba(34,211,238,0.8)', name: 'Delta line' },
+  { hex: '#0ea5c9', name: 'Delta accent' },
+  { hex: 'rgba(0,0,0,0.06)', name: 'Separator' },
+  { hex: 'rgba(0,0,0,0.2)', name: 'Hover line' },
+  { hex: 'rgba(200,100,0,0.3)', name: 'Lap marker' },
+  { hex: '#c56600', name: 'Lap text' },
+];
+
+// Contrast ratio helpers
+function hexToRgb(hex) {
+  if (hex.startsWith('rgba') || hex.startsWith('hsl')) return null;
+  hex = hex.replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+  return { r: parseInt(hex.slice(0,2),16), g: parseInt(hex.slice(2,4),16), b: parseInt(hex.slice(4,6),16) };
+}
+
+function luminance(r, g, b) {
+  const [rs, gs, bs] = [r/255, g/255, b/255].map(c =>
+    c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+  );
+  return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+}
+
+function contrastRatio(rgb1, rgb2) {
+  const l1 = luminance(rgb1.r, rgb1.g, rgb1.b);
+  const l2 = luminance(rgb2.r, rgb2.g, rgb2.b);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+const darkBg = { r: 13, g: 14, b: 20 };   // #0d0e14
+const lightBg = { r: 240, g: 241, b: 245 }; // #f0f1f5
+
+function renderSwatches(containerId, colors, bgRgb) {
+  const container = document.getElementById(containerId);
+  colors.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'swatch-row';
+
+    const swatch = document.createElement('div');
+    swatch.className = 'swatch-line';
+    swatch.style.background = c.hex;
+    swatch.style.height = '6px';
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = c.name;
+
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = c.hex;
+
+    row.appendChild(swatch);
+    row.appendChild(name);
+    row.appendChild(label);
+
+    // Contrast check for solid colors
+    const rgb = hexToRgb(c.hex);
+    if (rgb) {
+      const ratio = contrastRatio(rgb, bgRgb);
+      if (ratio < 2.5) {
+        const flag = document.createElement('span');
+        flag.className = 'flag';
+        flag.textContent = `LOW CONTRAST (${ratio.toFixed(1)}:1)`;
+        row.appendChild(flag);
+      } else {
+        const ok = document.createElement('span');
+        ok.style.cssText = 'font-size:11px;opacity:0.3;margin-left:8px;';
+        ok.textContent = `${ratio.toFixed(1)}:1`;
+        row.appendChild(ok);
+      }
+    }
+
+    container.appendChild(row);
+  });
+}
+
+renderSwatches('dark-main', MAIN_COLORS_DARK, darkBg);
+renderSwatches('dark-derived', DERIVED_COLORS_DARK, darkBg);
+renderSwatches('dark-ui', UI_COLORS, darkBg);
+renderSwatches('dark-chrome', DARK_CHROME, darkBg);
+
+renderSwatches('light-main', MAIN_COLORS_LIGHT, lightBg);
+renderSwatches('light-derived', DERIVED_COLORS_LIGHT, lightBg);
+renderSwatches('light-ui', UI_COLORS, lightBg);
+renderSwatches('light-chrome', LIGHT_CHROME, lightBg);
+</script>
+</body>
+</html>

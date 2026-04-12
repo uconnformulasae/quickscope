@@ -174,8 +174,8 @@ export function TelemetryChart({
     }, DEBOUNCE_MS);
   }, [onViewRangeChange]);
 
-  // ─── Downsampling helper ───────────────────────────────────────────────
-  const getDownsampled = useCallback((
+  // ─── Visible-range filter ─────────────────────────────────────────────
+  const getVisibleSamples = useCallback((
     _channelId: number,
     allSamples: ChannelSample[],
     xRange: [number, number],
@@ -283,7 +283,7 @@ export function TelemetryChart({
     const dc: DrawContext = {
       ctx, w, h, lm, rm, plotW, xRange, xTicks, strips,
       channelDataMap, chartMode, sharedYRanges,
-      timeToX, getDownsampled, overlayAxisLayout, session,
+      timeToX, getVisibleSamples, overlayAxisLayout, session,
       smoothedYRanges: smoothedYRanges.current,
       needsDrawRef,
       colors,
@@ -304,7 +304,7 @@ export function TelemetryChart({
     }, axisY);
 
     ctx.restore();
-  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getDownsampled, leftMargin, rightMargin, chartMode, overlayAxisLayout]);
+  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout]);
 
 
   // ─── Animation loop ────────────────────────────────────────────────────

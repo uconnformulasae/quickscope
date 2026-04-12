@@ -30,7 +30,8 @@ function drawCursorLine(
   ctx.stroke();
 
   if (showTimestamp) {
-    const label = formatTimeSec(t);
+    const tickStep = dc.xTicks.length >= 2 ? dc.xTicks[1] - dc.xTicks[0] : undefined;
+    const label = formatTimeSec(t, tickStep);
     ctx.font = `10px ${MONO_FONT}`;
     const tw = ctx.measureText(label).width;
     const pillW = tw + 8;

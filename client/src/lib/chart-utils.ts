@@ -43,12 +43,37 @@ export interface DrawContext {
   chartMode: ChartMode;
   sharedYRanges: Map<string, [number, number]>;
   timeToX: (t: number, xRange: [number, number], plotW: number) => number;
-  getDownsampled: (channelId: number, allSamples: ChannelSample[], xRange: [number, number], canvasWidth: number) => ChannelSample[];
+  getVisibleSamples: (channelId: number, allSamples: ChannelSample[], xRange: [number, number], canvasWidth: number) => ChannelSample[];
   overlayAxisLayout: { unitAxes: Map<string, { side: 'left' | 'right'; sideIndex: number }>; axisCount: number };
   session: XRKSession;
   smoothedYRanges: Map<string, [number, number]>;
   needsDrawRef: { current: boolean };
   colors: ChartColors;
+}
+
+// ─── Light-mode color overrides ─────────────────────────────────────────────
+// Dark-mode channel colors that lack contrast on #f0f1f5 (light bg).
+// Each maps to a darker variant of the same hue (≥ 3.5:1 ratio).
+const LIGHT_COLOR_MAP: Record<string, string> = {
+  '#f77f00': '#c2410c', // racing orange → orange-700
+  '#3de06a': '#15803d', // electric green → green-700
+  '#22d3ee': '#0e7490', // cyan → cyan-700
+  '#facc15': '#a16207', // yellow → yellow-700
+  '#06b6d4': '#0f766e', // teal → teal-700
+  '#84cc16': '#4d7c0f', // lime → lime-700
+  '#10b981': '#047857', // emerald → emerald-700
+  '#fb923c': '#b45309', // amber → amber-700
+  '#38bdf8': '#0284c7', // sky → sky-600
+  '#a3e635': '#65a30d', // lime bright → lime-600
+  '#f43f5e': '#be123c', // rose → rose-700
+  '#ec4899': '#be185d', // pink → pink-700
+  '#a855f7': '#7c3aed', // purple → violet-600
+};
+
+/** Map a channel color to a light-mode variant if needed. */
+export function resolveChartColor(hex: string, theme: 'dark' | 'light'): string {
+  if (theme === 'dark') return hex;
+  return LIGHT_COLOR_MAP[hex.toLowerCase()] || LIGHT_COLOR_MAP[hex] || hex;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -184,12 +209,71 @@ export function formatValue(v: number): string {
   return v.toFixed(3);
 }
 
-/** Format time in seconds for the x-axis. */
-export function formatTimeSec(sec: number): string {
+/** Format time in seconds for the x-axis.
+ *  Precision adapts to tick spacing so zoomed-in views show milliseconds. */
+export function formatTimeSec(sec: number, tickStep?: number): string {
+  // Determine decimal places from tick spacing
+  let decimals = 1;
+  if (tickStep !== undefined) {
+    if (tickStep < 0.095) decimals = 3;
+    else if (tickStep < 0.95) decimals = 2;
+  }
+
   const mins = Math.floor(sec / 60);
   const secs = sec % 60;
   if (mins > 0) {
-    return `${mins}:${secs.toFixed(1).padStart(4, '0')}`;
+    return `${mins}:${secs.toFixed(decimals).padStart(decimals + 3, '0')}`;
   }
-  return secs.toFixed(1) + 's';
+  return secs.toFixed(decimals) + 's';
+}
+
+/**
+ * Min-max per-pixel trace for rendering optimization.
+ * For each pixel column, keeps the first, min, max, and last samples
+ * in temporal order. Produces pixel-identical output to drawing all
+ * points, while reducing Canvas2D draw calls for dense data.
+ *
+ * Returns the original array unchanged when point density is already
+ * low enough (fewer than 4 points per pixel on average).
+ */
+export function minMaxTrace(
+  samples: ChannelSample[],
+  timeToX: (tSec: number) => number,
+  plotW: number,
+): ChannelSample[] {
+  const n = samples.length;
+  if (n <= plotW * 4) return samples;
+
+  const trace: ChannelSample[] = [];
+  let i = 0;
+
+  while (i < n) {
+    const px = Math.round(timeToX(samples[i].timestamp / 1000));
+    let minIdx = i, maxIdx = i;
+    let j = i + 1;
+
+    while (j < n && Math.round(timeToX(samples[j].timestamp / 1000)) === px) {
+      if (samples[j].value < samples[minIdx].value) minIdx = j;
+      if (samples[j].value > samples[maxIdx].value) maxIdx = j;
+      j++;
+    }
+
+    const lastIdx = j - 1;
+
+    // Emit first sample (entry point for this pixel)
+    trace.push(samples[i]);
+
+    // Emit min and max in temporal order (skip if same as first or last)
+    const lo = Math.min(minIdx, maxIdx);
+    const hi = Math.max(minIdx, maxIdx);
+    if (lo > i && lo < lastIdx) trace.push(samples[lo]);
+    if (hi > i && hi < lastIdx && hi !== lo) trace.push(samples[hi]);
+
+    // Emit last sample (exit point, skip if same as first)
+    if (lastIdx > i) trace.push(samples[lastIdx]);
+
+    i = j;
+  }
+
+  return trace;
 }

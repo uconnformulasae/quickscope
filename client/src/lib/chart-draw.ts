@@ -7,7 +7,7 @@ import type { DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT, AXIS_WIDTH,
   BOTTOM_AXIS_HEIGHT,
-  niceAxisTicks, formatValue, formatTimeSec, clamp, brightenColor,
+  niceAxisTicks, formatValue, formatTimeSec, clamp, brightenColor, minMaxTrace,
 } from './chart-utils';
 
 const LERP_RATE = 0.18;
@@ -20,11 +20,11 @@ export function computeOverlayYRanges(dc: DrawContext): void {
     const data = dc.channelDataMap.get(strip.channelId);
     if (!data) continue;
     const units = data.def.units || '';
-    const ds = data.allSamples.length > 0
-      ? dc.getDownsampled(strip.channelId, data.allSamples, dc.xRange, dc.plotW)
+    const visible = data.allSamples.length > 0
+      ? dc.getVisibleSamples(strip.channelId, data.allSamples, dc.xRange, dc.plotW)
       : [];
     let mn = Infinity, mx = -Infinity;
-    for (const s of ds) {
+    for (const s of visible) {
       if (s.value < mn) mn = s.value;
       if (s.value > mx) mx = s.value;
     }
@@ -107,11 +107,13 @@ export function drawStrips(
     const data = channelDataMap.get(strip.channelId);
     if (!data) continue;
     const { allSamples, def } = data;
-    const ds = allSamples.length > 0
-      ? dc.getDownsampled(strip.channelId, allSamples, xRange, plotW)
+    const visible = allSamples.length > 0
+      ? dc.getVisibleSamples(strip.channelId, allSamples, xRange, plotW)
       : [];
 
-    const [yMin, yMax] = computeStripYRange(dc, strip, ds, def.units || '');
+    const [yMin, yMax] = computeStripYRange(dc, strip, visible, def.units || '');
+    // Min-max per-pixel optimization for rendering (pixel-identical output)
+    const ds = minMaxTrace(visible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
     const ySpan = yMax - yMin || 1;
     const valToY = (v: number) =>
       strip.top + strip.height - 4 - ((v - yMin) / ySpan) * (strip.height - 8);
@@ -186,6 +188,21 @@ export function drawStrips(
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
+    }
+
+    // Data point markers — visible when zoomed in tight (>8px between points)
+    if (visible.length > 1 && visible.length <= plotW / 4) {
+      ctx.fillStyle = strip.color;
+      ctx.beginPath();
+      for (const s of visible) {
+        const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
+        const y = valToY(s.value);
+        if (x >= lm && x <= w - rm) {
+          ctx.moveTo(x + 2.5, y);
+          ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        }
+      }
+      ctx.fill();
     }
 
     // Min/Max markers
@@ -376,6 +393,7 @@ export function drawXAxis(dc: DrawContext): number {
   ctx.font = `10px ${MONO_FONT}`;
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'center';
+  const tickStep = xTicks.length >= 2 ? xTicks[1] - xTicks[0] : undefined;
   for (const xt of xTicks) {
     const x = dc.timeToX(xt, xRange, plotW);
     if (x >= lm && x <= w - rm) {
@@ -383,7 +401,7 @@ export function drawXAxis(dc: DrawContext): number {
       ctx.moveTo(Math.round(x) + 0.5, axisY);
       ctx.lineTo(Math.round(x) + 0.5, axisY + 5);
       ctx.stroke();
-      ctx.fillText(formatTimeSec(xt), x, axisY + 18);
+      ctx.fillText(formatTimeSec(xt, tickStep), x, axisY + 18);
     }
   }
 
