@@ -23,9 +23,8 @@ export function computeOverlayYRanges(dc: DrawContext): void {
     const visible = data.allSamples.length > 0
       ? dc.getVisibleSamples(strip.channelId, data.allSamples, dc.xRange, dc.plotW)
       : [];
-    const ds = visible;
     let mn = Infinity, mx = -Infinity;
-    for (const s of ds) {
+    for (const s of visible) {
       if (s.value < mn) mn = s.value;
       if (s.value > mx) mx = s.value;
     }
