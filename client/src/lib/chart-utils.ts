@@ -201,3 +201,54 @@ export function formatTimeSec(sec: number, tickStep?: number): string {
   }
   return secs.toFixed(decimals) + 's';
 }
+
+/**
+ * Min-max per-pixel trace for rendering optimization.
+ * For each pixel column, keeps the first, min, max, and last samples
+ * in temporal order. Produces pixel-identical output to drawing all
+ * points, while reducing Canvas2D draw calls for dense data.
+ *
+ * Returns the original array unchanged when point density is already
+ * low enough (fewer than 4 points per pixel on average).
+ */
+export function minMaxTrace(
+  samples: ChannelSample[],
+  timeToX: (tSec: number) => number,
+  plotW: number,
+): ChannelSample[] {
+  const n = samples.length;
+  if (n <= plotW * 4) return samples;
+
+  const trace: ChannelSample[] = [];
+  let i = 0;
+
+  while (i < n) {
+    const px = Math.round(timeToX(samples[i].timestamp / 1000));
+    let minIdx = i, maxIdx = i;
+    let j = i + 1;
+
+    while (j < n && Math.round(timeToX(samples[j].timestamp / 1000)) === px) {
+      if (samples[j].value < samples[minIdx].value) minIdx = j;
+      if (samples[j].value > samples[maxIdx].value) maxIdx = j;
+      j++;
+    }
+
+    const lastIdx = j - 1;
+
+    // Emit first sample (entry point for this pixel)
+    trace.push(samples[i]);
+
+    // Emit min and max in temporal order (skip if same as first or last)
+    const lo = Math.min(minIdx, maxIdx);
+    const hi = Math.max(minIdx, maxIdx);
+    if (lo > i && lo < lastIdx) trace.push(samples[lo]);
+    if (hi > i && hi < lastIdx && hi !== lo) trace.push(samples[hi]);
+
+    // Emit last sample (exit point, skip if same as first)
+    if (lastIdx > i) trace.push(samples[lastIdx]);
+
+    i = j;
+  }
+
+  return trace;
+}

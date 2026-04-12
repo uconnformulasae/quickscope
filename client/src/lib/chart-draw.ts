@@ -7,7 +7,7 @@ import type { DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT, AXIS_WIDTH,
   BOTTOM_AXIS_HEIGHT,
-  niceAxisTicks, formatValue, formatTimeSec, clamp, brightenColor,
+  niceAxisTicks, formatValue, formatTimeSec, clamp, brightenColor, minMaxTrace,
 } from './chart-utils';
 
 const LERP_RATE = 0.18;
@@ -20,9 +20,10 @@ export function computeOverlayYRanges(dc: DrawContext): void {
     const data = dc.channelDataMap.get(strip.channelId);
     if (!data) continue;
     const units = data.def.units || '';
-    const ds = data.allSamples.length > 0
+    const visible = data.allSamples.length > 0
       ? dc.getVisibleSamples(strip.channelId, data.allSamples, dc.xRange, dc.plotW)
       : [];
+    const ds = visible;
     let mn = Infinity, mx = -Infinity;
     for (const s of ds) {
       if (s.value < mn) mn = s.value;
@@ -107,11 +108,13 @@ export function drawStrips(
     const data = channelDataMap.get(strip.channelId);
     if (!data) continue;
     const { allSamples, def } = data;
-    const ds = allSamples.length > 0
+    const visible = allSamples.length > 0
       ? dc.getVisibleSamples(strip.channelId, allSamples, xRange, plotW)
       : [];
 
-    const [yMin, yMax] = computeStripYRange(dc, strip, ds, def.units || '');
+    const [yMin, yMax] = computeStripYRange(dc, strip, visible, def.units || '');
+    // Min-max per-pixel optimization for rendering (pixel-identical output)
+    const ds = minMaxTrace(visible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
     const ySpan = yMax - yMin || 1;
     const valToY = (v: number) =>
       strip.top + strip.height - 4 - ((v - yMin) / ySpan) * (strip.height - 8);
