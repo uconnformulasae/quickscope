@@ -2,15 +2,17 @@ import { useCallback, useMemo, useState } from 'react';
 import { uploadFile, fetchChannelData, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
-import type { DerivedChannel } from './lib/useXRKStore';
+import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
 import { resolveChartColor } from './lib/chart-utils';
 import { ChannelSidebar } from './components/ChannelSidebar';
 import { TelemetryChart } from './components/TelemetryChart';
+import { TableView } from './components/TableView';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { SessionHeader } from './components/SessionHeader';
 import { DerivedChannelDialog } from './components/DerivedChannelDialog';
 import { ExportDialog } from './components/ExportDialog';
+import { SessionInfoModal } from './components/SessionInfoModal';
 import { SessionBrowser } from './components/SessionBrowser';
 import { SettingsDialog } from './components/SettingsDialog';
 import { Upload } from 'lucide-react';
@@ -42,6 +44,7 @@ export default function App() {
     updateDerivedChannel,
     previewDerivedChannel,
     setChartMode,
+    setViewMode,
   } = useAppState();
 
   const { theme, toggleTheme } = useTheme();
@@ -54,6 +57,10 @@ export default function App() {
   const [derivedDialogOpen, setDerivedDialogOpen] = useState(false);
   const [editingDerived, setEditingDerived] = useState<DerivedChannel | undefined>(undefined);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
+
+  // Session ID from backend
+  const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
 
   // Drag over state for chart area
   const [isDragOver, setIsDragOver] = useState(false);
@@ -124,7 +131,8 @@ export default function App() {
   }, [setSession, setProgress]);
 
   /** Called when session browser loads a session */
-  const handleSessionLoaded = useCallback(async (info: SessionInfo, _sessionId: string, fileName: string) => {
+  const handleSessionLoaded = useCallback(async (info: SessionInfo, sessionId: string, fileName: string) => {
+    setLoadedSessionId(sessionId);
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
@@ -150,6 +158,7 @@ export default function App() {
   }, [setLoading, setProgress, buildAndSetSession, setError]);
 
   const handleBackToBrowser = useCallback(() => {
+    setLoadedSessionId(null);
     clearSession();
     setView('browser');
   }, [clearSession]);
@@ -235,6 +244,11 @@ export default function App() {
     return addDerivedChannel(def);
   }, [editingDerived, addDerivedChannel, updateDerivedChannel]);
 
+  const handleFileRenamed = useCallback((newFileName: string) => {
+    if (!state.session) return;
+    setSession(state.session, newFileName);
+  }, [state.session, setSession]);
+
   // Drag-and-drop handlers for the chart area
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -299,6 +313,9 @@ export default function App() {
         onBack={handleBackToBrowser}
         theme={theme}
         onToggleTheme={toggleTheme}
+        viewMode={state.viewMode}
+        onViewModeChange={setViewMode}
+        onSessionInfoOpen={session ? () => setSessionInfoOpen(true) : undefined}
       />
 
       {/* Main layout */}
@@ -339,17 +356,26 @@ export default function App() {
           onDrop={handleDrop}
         >
           {session ? (
-            <TelemetryChart
-              session={session}
-              activeChannels={activeChannels}
-              viewRange={state.viewRange}
-              onViewRangeChange={setViewRange}
-              derivedChannels={state.derivedChannels}
-              derivedSamplesMap={derivedSamplesMap}
-              cursorTime={state.cursorTime}
-              onCursorTimeChange={setCursorTime}
-              chartMode={state.chartMode}
-            />
+            state.viewMode === 'table' ? (
+              <TableView
+                session={session}
+                activeChannels={activeChannels}
+                derivedChannels={state.derivedChannels}
+                derivedSamplesMap={derivedSamplesMap}
+              />
+            ) : (
+              <TelemetryChart
+                session={session}
+                activeChannels={activeChannels}
+                viewRange={state.viewRange}
+                onViewRangeChange={setViewRange}
+                derivedChannels={state.derivedChannels}
+                derivedSamplesMap={derivedSamplesMap}
+                cursorTime={state.cursorTime}
+                onCursorTimeChange={setCursorTime}
+                chartMode={state.chartMode}
+              />
+            )
           ) : (
             /* Empty state -- no file loaded */
             <div className={`flex-1 flex flex-col items-center justify-center gap-4 transition-colors ${isDragOver ? 'bg-primary/5' : ''}`}>
@@ -440,6 +466,19 @@ export default function App() {
           derivedChannels={state.derivedChannels}
           derivedSamplesMap={derivedSamplesMap}
           onClose={() => setExportDialogOpen(false)}
+        />
+      )}
+
+      {/* Session Info modal */}
+      {sessionInfoOpen && session && state.fileName && loadedSessionId && (
+        <SessionInfoModal
+          sessionId={loadedSessionId}
+          metadata={session.metadata}
+          durationMs={session.durationMs}
+          lapCount={Math.max(0, session.lapMarkers.length - 1)}
+          fileName={state.fileName}
+          onClose={() => setSessionInfoOpen(false)}
+          onFileRenamed={handleFileRenamed}
         />
       )}
     </div>
