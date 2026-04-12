@@ -43,7 +43,7 @@ export interface DrawContext {
   chartMode: ChartMode;
   sharedYRanges: Map<string, [number, number]>;
   timeToX: (t: number, xRange: [number, number], plotW: number) => number;
-  getDownsampled: (channelId: number, allSamples: ChannelSample[], xRange: [number, number], canvasWidth: number) => ChannelSample[];
+  getVisibleSamples: (channelId: number, allSamples: ChannelSample[], xRange: [number, number], canvasWidth: number) => ChannelSample[];
   overlayAxisLayout: { unitAxes: Map<string, { side: 'left' | 'right'; sideIndex: number }>; axisCount: number };
   session: XRKSession;
   smoothedYRanges: Map<string, [number, number]>;

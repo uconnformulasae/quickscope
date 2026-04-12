@@ -21,7 +21,7 @@ export function computeOverlayYRanges(dc: DrawContext): void {
     if (!data) continue;
     const units = data.def.units || '';
     const ds = data.allSamples.length > 0
-      ? dc.getDownsampled(strip.channelId, data.allSamples, dc.xRange, dc.plotW)
+      ? dc.getVisibleSamples(strip.channelId, data.allSamples, dc.xRange, dc.plotW)
       : [];
     let mn = Infinity, mx = -Infinity;
     for (const s of ds) {
@@ -108,7 +108,7 @@ export function drawStrips(
     if (!data) continue;
     const { allSamples, def } = data;
     const ds = allSamples.length > 0
-      ? dc.getDownsampled(strip.channelId, allSamples, xRange, plotW)
+      ? dc.getVisibleSamples(strip.channelId, allSamples, xRange, plotW)
       : [];
 
     const [yMin, yMax] = computeStripYRange(dc, strip, ds, def.units || '');
