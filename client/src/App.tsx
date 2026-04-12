@@ -255,6 +255,11 @@ export default function App() {
     setSession({ ...state.session, metadata: newMeta }, state.fileName || '');
   }, [state.session, state.fileName, setSession]);
 
+  const handleFileRenamed = useCallback((newFileName: string) => {
+    if (!state.session) return;
+    setSession(state.session, newFileName);
+  }, [state.session, setSession]);
+
   // Drag-and-drop handlers for the chart area
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -485,6 +490,7 @@ export default function App() {
           fileName={state.fileName}
           onClose={() => setSessionInfoOpen(false)}
           onMetadataUpdated={handleMetadataUpdated}
+          onFileRenamed={handleFileRenamed}
         />
       )}
     </div>

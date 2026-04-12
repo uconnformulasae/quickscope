@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { X } from 'lucide-react';
-import { updateSessionMetadata, type MetadataUpdate } from '../lib/api';
+import { updateSessionMetadata, renameSession, type MetadataUpdate } from '../lib/api';
 
 interface SessionInfoModalProps {
   sessionId: string;
@@ -19,6 +19,7 @@ interface SessionInfoModalProps {
   source?: string;
   onClose: () => void;
   onMetadataUpdated?: (fields: MetadataUpdate) => void;
+  onFileRenamed?: (newFileName: string) => void;
 }
 
 interface FieldDef {
@@ -44,6 +45,7 @@ export function SessionInfoModal({
   source,
   onClose,
   onMetadataUpdated,
+  onFileRenamed,
 }: SessionInfoModalProps) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -54,6 +56,7 @@ export function SessionInfoModal({
     venue: metadata.venue,
     date: metadata.date,
     championship: metadata.championship,
+    filename: fileName,
   });
   const backdropRef = useRef<HTMLDivElement>(null);
 
@@ -64,8 +67,9 @@ export function SessionInfoModal({
       venue: metadata.venue,
       date: metadata.date,
       championship: metadata.championship,
+      filename: fileName,
     });
-  }, [metadata]);
+  }, [metadata, fileName]);
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === backdropRef.current) onClose();
@@ -86,6 +90,7 @@ export function SessionInfoModal({
       venue: metadata.venue,
       date: metadata.date,
       championship: metadata.championship,
+      filename: fileName,
     });
     setError(null);
     setEditing(false);
@@ -102,20 +107,29 @@ export function SessionInfoModal({
       if (editValues.date !== metadata.date) fields.recorded_at = editValues.date;
       if (editValues.championship !== metadata.championship) fields.championship_name = editValues.championship;
 
-      if (Object.keys(fields).length === 0) {
+      const filenameChanged = editValues.filename !== fileName;
+      if (Object.keys(fields).length === 0 && !filenameChanged) {
         setEditing(false);
         return;
       }
 
-      await updateSessionMetadata(sessionId, fields);
-      onMetadataUpdated?.(fields);
+      if (Object.keys(fields).length > 0) {
+        await updateSessionMetadata(sessionId, fields);
+        onMetadataUpdated?.(fields);
+      }
+
+      if (filenameChanged) {
+        await renameSession(sessionId, editValues.filename);
+        onFileRenamed?.(editValues.filename);
+      }
+
       setEditing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSaving(false);
     }
-  }, [editValues, metadata, sessionId, onMetadataUpdated]);
+  }, [editValues, metadata, fileName, sessionId, onMetadataUpdated, onFileRenamed]);
 
   const fields: FieldDef[] = [
     { label: 'Driver', key: 'driver', value: editing ? editValues.driver : metadata.driver, editable: true },
@@ -126,7 +140,7 @@ export function SessionInfoModal({
     { label: 'Duration', key: 'duration', value: formatDuration(durationMs), editable: false },
     { label: 'Laps', key: 'laps', value: lapCount > 0 ? String(lapCount) : '\u2014', editable: false },
     { label: 'Source', key: 'source', value: source || 'Manual upload', editable: false },
-    { label: 'Filename', key: 'filename', value: fileName, editable: false },
+    { label: 'Filename', key: 'filename', value: editing ? editValues.filename : fileName, editable: true },
   ];
 
   return (
