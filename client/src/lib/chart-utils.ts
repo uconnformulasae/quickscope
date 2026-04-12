@@ -190,8 +190,8 @@ export function formatTimeSec(sec: number, tickStep?: number): string {
   // Determine decimal places from tick spacing
   let decimals = 1;
   if (tickStep !== undefined) {
-    if (tickStep < 0.1) decimals = 3;
-    else if (tickStep < 1) decimals = 2;
+    if (tickStep < 0.095) decimals = 3;
+    else if (tickStep < 0.95) decimals = 2;
   }
 
   const mins = Math.floor(sec / 60);
