@@ -22,6 +22,7 @@ export function TableView({
   derivedSamplesMap,
 }: TableViewProps) {
   const [searchValue, setSearchValue] = useState('');
+  const [highlightedRow, setHighlightedRow] = useState<number | null>(null);
   const parentRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -87,6 +88,7 @@ export function TableView({
     if (isNaN(seconds)) return;
     const ms = seconds * 1000;
     const idx = findRowByTimestamp(rows, ms);
+    setHighlightedRow(idx);
     virtualizer.scrollToIndex(idx, { align: 'center' });
   }, [searchValue, rows, virtualizer]);
 
@@ -153,16 +155,25 @@ export function TableView({
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const row = rows[virtualRow.index];
             const isEven = virtualRow.index % 2 === 0;
+            const isHighlighted = virtualRow.index === highlightedRow;
             return (
               <div
                 key={virtualRow.index}
-                className={`flex absolute w-full ${isEven ? 'bg-background' : 'bg-card/30'}`}
+                className={`flex absolute w-full ${
+                  isHighlighted
+                    ? 'bg-primary/15 ring-1 ring-inset ring-primary/30'
+                    : isEven
+                      ? 'bg-background'
+                      : 'bg-muted/50'
+                }`}
                 style={{
                   height: `${ROW_HEIGHT}px`,
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
-                <div className="w-24 flex-shrink-0 px-3 flex items-center text-[11px] text-muted-foreground font-mono border-r border-border/10">
+                <div className={`w-24 flex-shrink-0 px-3 flex items-center text-[11px] font-mono border-r border-border/10 ${
+                  isHighlighted ? 'text-primary font-semibold' : 'text-muted-foreground'
+                }`}>
                   {(row.timestamp / 1000).toFixed(3)}
                 </div>
                 {row.values.map((val, colIdx) => (

@@ -96,7 +96,7 @@ export function SessionHeader({
 
       {/* Chart / Table segmented toggle */}
       {session && (
-        <div className="flex items-center bg-muted/30 rounded-md p-0.5">
+        <div className="flex items-center bg-muted rounded-md p-0.5 border border-border/50">
           <button
             onClick={() => onViewModeChange('chart')}
             className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
@@ -222,7 +222,7 @@ export function SessionHeader({
 function MetaPill({ icon, value, label }: { icon: React.ReactNode; value: string; label?: string }) {
   if (value === 'Unknown' || !value) return null;
   return (
-    <div className="hidden lg:flex items-center gap-1 px-1.5 py-0.5 bg-muted/30 rounded text-xs text-muted-foreground whitespace-nowrap">
+    <div className="hidden lg:flex items-center gap-1 px-1.5 py-0.5 bg-muted border border-border/40 rounded text-xs text-foreground/70 whitespace-nowrap">
       <span className="text-primary">{icon}</span>
       <span>{value}</span>
     </div>
