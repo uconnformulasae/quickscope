@@ -86,6 +86,11 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
         },
         margin: { l: 50, r: 15, t: 15, b: 50 },
         font: { family: 'DM Sans', color: pc.fontColor, size: 11 },
+        hoverlabel: {
+          bgcolor: pc.hoverBg,
+          font: { color: pc.hoverText, family: 'JetBrains Mono', size: 11 },
+          bordercolor: pc.borderColor,
+        },
       };
 
       Plotly.react(chartRef.current, [trace], layout, {

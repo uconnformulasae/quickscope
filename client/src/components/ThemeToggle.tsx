@@ -9,7 +9,7 @@ export function ThemeToggle({ theme, onToggle }: ThemeToggleProps) {
   return (
     <button
       onClick={onToggle}
-      className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
+      className="p-1 hover:opacity-70 transition-opacity"
       title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
     >
       {theme === 'dark' ? (

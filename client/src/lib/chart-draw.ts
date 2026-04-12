@@ -191,7 +191,7 @@ export function drawStrips(
     }
 
     // Data point markers — visible when zoomed in tight (>8px between points)
-    if (visible.length > 1 && visible.length <= plotW / 8) {
+    if (visible.length > 1 && visible.length <= plotW / 4) {
       ctx.fillStyle = strip.color;
       ctx.beginPath();
       for (const s of visible) {

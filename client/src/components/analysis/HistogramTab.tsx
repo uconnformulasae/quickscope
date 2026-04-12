@@ -61,6 +61,11 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
         margin: { l: 45, r: 15, t: 15, b: 45 },
         bargap: 0.05,
         font: { family: 'DM Sans', color: pc.fontColor, size: 11 },
+        hoverlabel: {
+          bgcolor: pc.hoverBg,
+          font: { color: pc.hoverText, family: 'JetBrains Mono', size: 11 },
+          bordercolor: pc.borderColor,
+        },
       };
 
       Plotly.react(chartRef.current, [trace], layout, {

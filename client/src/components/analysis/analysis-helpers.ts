@@ -33,6 +33,9 @@ export function getPlotlyColors() {
     gridcolor: s.getPropertyValue('--chart-grid').trim(),
     tickfontColor: s.getPropertyValue('--chart-text').trim(),
     fontColor: s.getPropertyValue('--chart-text').trim(),
+    hoverBg: s.getPropertyValue('--chart-cursor-pill').trim(),
+    hoverText: s.getPropertyValue('--chart-cursor-pill-text').trim(),
+    borderColor: s.getPropertyValue('--chart-separator').trim(),
   };
 }
 
