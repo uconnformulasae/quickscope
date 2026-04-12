@@ -71,7 +71,7 @@ This is the most complex component. Key design:
 - **Single `<canvas>`** renders all channel strips in one `requestAnimationFrame` loop
 - **No third-party charting library** — pure Canvas2D drawing
 - **Strip layout**: each channel gets a vertical strip, height = `max(140px, available / numChannels)`
-- **Downsampling**: LTTB algorithm via `lttbDownsample()`, cached per channel+range
+- **Rendering**: Min-max per-pixel optimization for large datasets; no data reduction — every visible data point is rendered accurately
 - **Zoom**: scroll wheel with graduated intensity (`Math.exp(deltaY * 0.0008)`)
 - **Pan**: mouse drag shifts xRange
 - **Touch**: pinch-to-zoom + single-finger pan
@@ -82,7 +82,7 @@ This is the most complex component. Key design:
 **Performance rules:**
 - Never call `setState` from mouse/touch handlers — only set refs + `needsDrawRef.current = true`
 - `onViewRangeChange` is debounced at 100ms
-- Downsample cache avoids re-running LTTB on every frame
+- Min-max trace reduces draw calls for dense data without dropping visible information
 - `requestAnimationFrame` loop only draws when `needsDrawRef.current` is set
 
 ### Derived channels
