@@ -7,6 +7,7 @@ import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
 import { resolveChartColor } from './lib/chart-utils';
 import { ChannelSidebar } from './components/ChannelSidebar';
 import { TelemetryChart } from './components/TelemetryChart';
+import { TableView } from './components/TableView';
 import { AnalysisPanel } from './components/AnalysisPanel';
 import { SessionHeader } from './components/SessionHeader';
 import { DerivedChannelDialog } from './components/DerivedChannelDialog';
@@ -361,17 +362,26 @@ export default function App() {
           onDrop={handleDrop}
         >
           {session ? (
-            <TelemetryChart
-              session={session}
-              activeChannels={activeChannels}
-              viewRange={state.viewRange}
-              onViewRangeChange={setViewRange}
-              derivedChannels={state.derivedChannels}
-              derivedSamplesMap={derivedSamplesMap}
-              cursorTime={state.cursorTime}
-              onCursorTimeChange={setCursorTime}
-              chartMode={state.chartMode}
-            />
+            state.viewMode === 'table' ? (
+              <TableView
+                session={session}
+                activeChannels={activeChannels}
+                derivedChannels={state.derivedChannels}
+                derivedSamplesMap={derivedSamplesMap}
+              />
+            ) : (
+              <TelemetryChart
+                session={session}
+                activeChannels={activeChannels}
+                viewRange={state.viewRange}
+                onViewRangeChange={setViewRange}
+                derivedChannels={state.derivedChannels}
+                derivedSamplesMap={derivedSamplesMap}
+                cursorTime={state.cursorTime}
+                onCursorTimeChange={setCursorTime}
+                chartMode={state.chartMode}
+              />
+            )
           ) : (
             /* Empty state -- no file loaded */
             <div className={`flex-1 flex flex-col items-center justify-center gap-4 transition-colors ${isDragOver ? 'bg-primary/5' : ''}`}>
