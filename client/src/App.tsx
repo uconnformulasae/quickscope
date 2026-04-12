@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { uploadFile, fetchChannelData, type SessionInfo } from './lib/api';
+import { uploadFile, fetchChannelData, type SessionInfo, type MetadataUpdate } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
@@ -11,6 +11,7 @@ import { AnalysisPanel } from './components/AnalysisPanel';
 import { SessionHeader } from './components/SessionHeader';
 import { DerivedChannelDialog } from './components/DerivedChannelDialog';
 import { ExportDialog } from './components/ExportDialog';
+import { SessionInfoModal } from './components/SessionInfoModal';
 import { SessionBrowser } from './components/SessionBrowser';
 import { SettingsDialog } from './components/SettingsDialog';
 import { Upload } from 'lucide-react';
@@ -56,6 +57,9 @@ export default function App() {
   const [editingDerived, setEditingDerived] = useState<DerivedChannel | undefined>(undefined);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
+
+  // Session ID from backend
+  const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
 
   // Drag over state for chart area
   const [isDragOver, setIsDragOver] = useState(false);
@@ -126,7 +130,8 @@ export default function App() {
   }, [setSession, setProgress]);
 
   /** Called when session browser loads a session */
-  const handleSessionLoaded = useCallback(async (info: SessionInfo, _sessionId: string, fileName: string) => {
+  const handleSessionLoaded = useCallback(async (info: SessionInfo, sessionId: string, fileName: string) => {
+    setLoadedSessionId(sessionId);
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
@@ -152,6 +157,7 @@ export default function App() {
   }, [setLoading, setProgress, buildAndSetSession, setError]);
 
   const handleBackToBrowser = useCallback(() => {
+    setLoadedSessionId(null);
     clearSession();
     setView('browser');
   }, [clearSession]);
@@ -236,6 +242,17 @@ export default function App() {
     }
     return addDerivedChannel(def);
   }, [editingDerived, addDerivedChannel, updateDerivedChannel]);
+
+  const handleMetadataUpdated = useCallback((fields: MetadataUpdate) => {
+    if (!state.session) return;
+    const m = state.session.metadata;
+    if (fields.driver_name !== undefined) m.driver = fields.driver_name;
+    if (fields.vehicle_name !== undefined) m.vehicle = fields.vehicle_name;
+    if (fields.track_name !== undefined) m.venue = fields.track_name;
+    if (fields.recorded_at !== undefined) m.date = fields.recorded_at;
+    if (fields.championship_name !== undefined) m.championship = fields.championship_name;
+    setSession(state.session, state.fileName || '');
+  }, [state.session, state.fileName, setSession]);
 
   // Drag-and-drop handlers for the chart area
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -445,6 +462,19 @@ export default function App() {
           derivedChannels={state.derivedChannels}
           derivedSamplesMap={derivedSamplesMap}
           onClose={() => setExportDialogOpen(false)}
+        />
+      )}
+
+      {/* Session Info modal */}
+      {sessionInfoOpen && session && state.fileName && loadedSessionId && (
+        <SessionInfoModal
+          sessionId={loadedSessionId}
+          metadata={session.metadata}
+          durationMs={session.durationMs}
+          lapCount={Math.max(0, session.lapMarkers.length - 1)}
+          fileName={state.fileName}
+          onClose={() => setSessionInfoOpen(false)}
+          onMetadataUpdated={handleMetadataUpdated}
         />
       )}
     </div>
