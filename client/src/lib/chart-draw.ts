@@ -193,15 +193,16 @@ export function drawStrips(
     // Data point markers — visible when zoomed in tight (>8px between points)
     if (visible.length > 1 && visible.length <= plotW / 8) {
       ctx.fillStyle = strip.color;
+      ctx.beginPath();
       for (const s of visible) {
         const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
         const y = valToY(s.value);
         if (x >= lm && x <= w - rm) {
-          ctx.beginPath();
+          ctx.moveTo(x + 2.5, y);
           ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-          ctx.fill();
         }
       }
+      ctx.fill();
     }
 
     // Min/Max markers
