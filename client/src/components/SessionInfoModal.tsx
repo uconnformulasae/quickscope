@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { X } from 'lucide-react';
-import { updateSessionMetadata, renameSession, type MetadataUpdate } from '../lib/api';
+import { renameSession } from '../lib/api';
 
 interface SessionInfoModalProps {
   sessionId: string;
@@ -18,7 +18,6 @@ interface SessionInfoModalProps {
   fileName: string;
   source?: string;
   onClose: () => void;
-  onMetadataUpdated?: (fields: MetadataUpdate) => void;
   onFileRenamed?: (newFileName: string) => void;
 }
 
@@ -44,32 +43,17 @@ export function SessionInfoModal({
   fileName,
   source,
   onClose,
-  onMetadataUpdated,
   onFileRenamed,
 }: SessionInfoModalProps) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editValues, setEditValues] = useState({
-    driver: metadata.driver,
-    vehicle: metadata.vehicle,
-    venue: metadata.venue,
-    date: metadata.date,
-    championship: metadata.championship,
-    filename: fileName,
-  });
+  const [editFilename, setEditFilename] = useState(fileName);
   const backdropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setEditValues({
-      driver: metadata.driver,
-      vehicle: metadata.vehicle,
-      venue: metadata.venue,
-      date: metadata.date,
-      championship: metadata.championship,
-      filename: fileName,
-    });
-  }, [metadata, fileName]);
+    setEditFilename(fileName);
+  }, [fileName]);
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === backdropRef.current) onClose();
@@ -84,63 +68,40 @@ export function SessionInfoModal({
   }, [onClose]);
 
   const handleCancel = () => {
-    setEditValues({
-      driver: metadata.driver,
-      vehicle: metadata.vehicle,
-      venue: metadata.venue,
-      date: metadata.date,
-      championship: metadata.championship,
-      filename: fileName,
-    });
+    setEditFilename(fileName);
     setError(null);
     setEditing(false);
   };
 
   const handleSave = useCallback(async () => {
+    if (editFilename === fileName) {
+      setEditing(false);
+      return;
+    }
+
     setSaving(true);
     setError(null);
     try {
-      const fields: MetadataUpdate = {};
-      if (editValues.driver !== metadata.driver) fields.driver_name = editValues.driver;
-      if (editValues.vehicle !== metadata.vehicle) fields.vehicle_name = editValues.vehicle;
-      if (editValues.venue !== metadata.venue) fields.track_name = editValues.venue;
-      if (editValues.date !== metadata.date) fields.recorded_at = editValues.date;
-      if (editValues.championship !== metadata.championship) fields.championship_name = editValues.championship;
-
-      const filenameChanged = editValues.filename !== fileName;
-      if (Object.keys(fields).length === 0 && !filenameChanged) {
-        setEditing(false);
-        return;
-      }
-
-      if (Object.keys(fields).length > 0) {
-        await updateSessionMetadata(sessionId, fields);
-        onMetadataUpdated?.(fields);
-      }
-
-      if (filenameChanged) {
-        await renameSession(sessionId, editValues.filename);
-        onFileRenamed?.(editValues.filename);
-      }
-
+      await renameSession(sessionId, editFilename);
+      onFileRenamed?.(editFilename);
       setEditing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSaving(false);
     }
-  }, [editValues, metadata, fileName, sessionId, onMetadataUpdated, onFileRenamed]);
+  }, [editFilename, fileName, sessionId, onFileRenamed]);
 
   const fields: FieldDef[] = [
-    { label: 'Driver', key: 'driver', value: editing ? editValues.driver : metadata.driver, editable: true },
-    { label: 'Vehicle', key: 'vehicle', value: editing ? editValues.vehicle : metadata.vehicle, editable: true },
-    { label: 'Track', key: 'venue', value: editing ? editValues.venue : metadata.venue, editable: true },
-    { label: 'Date', key: 'date', value: editing ? editValues.date : metadata.date, editable: true },
-    { label: 'Championship', key: 'championship', value: editing ? editValues.championship : metadata.championship, editable: true },
+    { label: 'Filename', key: 'filename', value: editing ? editFilename : fileName, editable: true },
+    { label: 'Driver', key: 'driver', value: metadata.driver, editable: false },
+    { label: 'Vehicle', key: 'vehicle', value: metadata.vehicle, editable: false },
+    { label: 'Track', key: 'venue', value: metadata.venue, editable: false },
+    { label: 'Date', key: 'date', value: metadata.date, editable: false },
+    { label: 'Championship', key: 'championship', value: metadata.championship, editable: false },
     { label: 'Duration', key: 'duration', value: formatDuration(durationMs), editable: false },
     { label: 'Laps', key: 'laps', value: lapCount > 0 ? String(lapCount) : '\u2014', editable: false },
     { label: 'Source', key: 'source', value: source || 'Manual upload', editable: false },
-    { label: 'Filename', key: 'filename', value: editing ? editValues.filename : fileName, editable: true },
   ];
 
   return (
@@ -179,7 +140,7 @@ export function SessionInfoModal({
               label={field.label}
               value={field.value}
               editable={editing && field.editable}
-              onChange={(v) => setEditValues(prev => ({ ...prev, [field.key]: v }))}
+              onChange={(v) => setEditFilename(v)}
             />
           ))}
         </div>

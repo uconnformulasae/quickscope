@@ -140,27 +140,6 @@ export async function renameSession(sessionId: string, filename: string): Promis
   return res.json();
 }
 
-export interface MetadataUpdate {
-  driver_name?: string;
-  vehicle_name?: string;
-  track_name?: string;
-  recorded_at?: string;
-  championship_name?: string;
-}
-
-export async function updateSessionMetadata(sessionId: string, fields: MetadataUpdate): Promise<LocalSession> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/metadata`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(fields),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Metadata update failed: ${res.status}`);
-  }
-  return res.json();
-}
-
 export async function deleteSession(sessionId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);

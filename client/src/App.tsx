@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { uploadFile, fetchChannelData, type SessionInfo, type MetadataUpdate } from './lib/api';
+import { uploadFile, fetchChannelData, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
@@ -244,17 +244,6 @@ export default function App() {
     return addDerivedChannel(def);
   }, [editingDerived, addDerivedChannel, updateDerivedChannel]);
 
-  const handleMetadataUpdated = useCallback((fields: MetadataUpdate) => {
-    if (!state.session) return;
-    const newMeta = { ...state.session.metadata };
-    if (fields.driver_name !== undefined) newMeta.driver = fields.driver_name;
-    if (fields.vehicle_name !== undefined) newMeta.vehicle = fields.vehicle_name;
-    if (fields.track_name !== undefined) newMeta.venue = fields.track_name;
-    if (fields.recorded_at !== undefined) newMeta.date = fields.recorded_at;
-    if (fields.championship_name !== undefined) newMeta.championship = fields.championship_name;
-    setSession({ ...state.session, metadata: newMeta }, state.fileName || '');
-  }, [state.session, state.fileName, setSession]);
-
   const handleFileRenamed = useCallback((newFileName: string) => {
     if (!state.session) return;
     setSession(state.session, newFileName);
@@ -489,7 +478,6 @@ export default function App() {
           lapCount={Math.max(0, session.lapMarkers.length - 1)}
           fileName={state.fileName}
           onClose={() => setSessionInfoOpen(false)}
-          onMetadataUpdated={handleMetadataUpdated}
           onFileRenamed={handleFileRenamed}
         />
       )}

@@ -69,14 +69,6 @@ class RenameRequest(BaseModel):
     filename: str
 
 
-class MetadataUpdate(BaseModel):
-    driver_name: str | None = None
-    vehicle_name: str | None = None
-    track_name: str | None = None
-    recorded_at: str | None = None
-    championship_name: str | None = None
-
-
 @router.post("/sessions/{session_id}/rename")
 async def rename_session(session_id: str, body: RenameRequest):
     entry = session_store.get_session(session_id)
@@ -123,28 +115,6 @@ async def rename_session(session_id: str, body: RenameRequest):
         aim_session_id=Path(new_filename).stem,
         local_path=new_path or old_path,
     )
-    return updated
-
-
-@router.patch("/sessions/{session_id}/metadata")
-async def update_session_metadata(session_id: str, body: MetadataUpdate):
-    entry = session_store.get_session(session_id)
-    if not entry:
-        raise HTTPException(404, "Session not found")
-
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    if not updates:
-        return entry
-
-    updated = session_store.update_session(session_id, **updates)
-
-    remote_id = entry.get("remote_id")
-    if remote_id:
-        try:
-            await railway_client.update_session_metadata(remote_id, updates)
-        except Exception as exc:
-            logger.warning("Failed to sync metadata to Railway: %s", exc)
-
     return updated
 
 

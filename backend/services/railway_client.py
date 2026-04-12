@@ -73,17 +73,6 @@ async def rename_session(remote_id: int, new_name: str) -> dict:
         return resp.json()
 
 
-async def update_session_metadata(remote_id: int, fields: dict) -> dict:
-    """Update metadata fields on the Railway backend."""
-    base = _base_url()
-    async with httpx.AsyncClient(timeout=TIMEOUT_DEFAULT) as client:
-        resp = await client.patch(
-            f"{base}/sessions/{remote_id}/metadata",
-            json=fields,
-        )
-        resp.raise_for_status()
-        return resp.json()
-
 
 async def upload_session_file(file_path: Path) -> dict:
     """Upload a local session file to Railway."""
