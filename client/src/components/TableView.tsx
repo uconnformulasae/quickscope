@@ -170,7 +170,7 @@ export function TableView({
                     key={colIdx}
                     className={`flex-1 min-w-[100px] px-3 flex items-center text-[11px] font-mono border-r border-border/10 last:border-r-0 ${
                       row.held[colIdx]
-                        ? 'text-foreground/40'
+                        ? 'text-foreground/50'
                         : val === null
                           ? 'text-muted-foreground/30'
                           : 'text-foreground'

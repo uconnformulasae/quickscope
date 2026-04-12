@@ -246,13 +246,13 @@ export default function App() {
 
   const handleMetadataUpdated = useCallback((fields: MetadataUpdate) => {
     if (!state.session) return;
-    const m = state.session.metadata;
-    if (fields.driver_name !== undefined) m.driver = fields.driver_name;
-    if (fields.vehicle_name !== undefined) m.vehicle = fields.vehicle_name;
-    if (fields.track_name !== undefined) m.venue = fields.track_name;
-    if (fields.recorded_at !== undefined) m.date = fields.recorded_at;
-    if (fields.championship_name !== undefined) m.championship = fields.championship_name;
-    setSession(state.session, state.fileName || '');
+    const newMeta = { ...state.session.metadata };
+    if (fields.driver_name !== undefined) newMeta.driver = fields.driver_name;
+    if (fields.vehicle_name !== undefined) newMeta.vehicle = fields.vehicle_name;
+    if (fields.track_name !== undefined) newMeta.venue = fields.track_name;
+    if (fields.recorded_at !== undefined) newMeta.date = fields.recorded_at;
+    if (fields.championship_name !== undefined) newMeta.championship = fields.championship_name;
+    setSession({ ...state.session, metadata: newMeta }, state.fileName || '');
   }, [state.session, state.fileName, setSession]);
 
   // Drag-and-drop handlers for the chart area
