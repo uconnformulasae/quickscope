@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
 import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
-import { lttbDownsample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { resolveChannel, resolveSamples, ensurePlotly, getPlotlyColors } from './analysis-helpers';
 
@@ -41,7 +40,7 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
       const ySamplesRaw = resolveSamples(yChan.index, session, derivedSamplesMap);
       if (xSamplesRaw.length === 0 || ySamplesRaw.length === 0) return;
 
-      const xSamples = lttbDownsample(xSamplesRaw, 3000);
+      const xSamples = xSamplesRaw;
       const ySamples = ySamplesRaw;
 
       const xs: number[] = [];
