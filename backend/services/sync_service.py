@@ -28,12 +28,20 @@ async def sync_with_railway() -> dict:
         stats["errors"].append(f"Failed to fetch remote sessions: {exc}")
         return stats
 
+    # Metadata fields to sync from Railway
+    _meta_keys = ("track_name", "driver_name", "vehicle_name", "recorded_at",
+                  "duration_s", "lap_count", "championship_name")
+
     for remote in remote_sessions:
         remote_id = remote["id"]
+        remote_meta = {k: remote[k] for k in _meta_keys if k in remote and remote[k]}
 
         # Check if we already know this session
         existing = session_store.find_by_remote_id(remote_id)
         if existing:
+            # Update metadata from Railway so edits made remotely are reflected
+            if remote_meta:
+                session_store.update_session(existing["id"], **remote_meta)
             continue
 
         # Also check by filename or aim_session_id
@@ -47,6 +55,7 @@ async def sync_with_railway() -> dict:
                 by_name["id"],
                 remote_id=remote_id,
                 sync_status="synced" if by_name.get("local_path") else "remote_only",
+                **remote_meta,
             )
             continue
 
@@ -112,11 +121,19 @@ async def pull_session(session_id: str) -> dict:
     try:
         session_store.update_session(session_id, sync_status="downloading")
         await railway_client.download_session_file(remote_id, dest)
-        session_store.update_session(
-            session_id,
-            local_path=str(dest),
-            sync_status="synced",
-        )
+
+        # Fetch latest metadata from Railway so edits are preserved
+        update_fields = {"local_path": str(dest), "sync_status": "synced"}
+        try:
+            remote_data = await railway_client.get_remote_session(remote_id)
+            for key in ("track_name", "driver_name", "vehicle_name",
+                        "recorded_at", "duration_s", "lap_count", "championship_name"):
+                if key in remote_data and remote_data[key]:
+                    update_fields[key] = remote_data[key]
+        except Exception:
+            logger.warning("Could not fetch remote metadata for session %s", remote_id)
+
+        session_store.update_session(session_id, **update_fields)
         return {"ok": True, "local_path": str(dest)}
     except Exception as exc:
         session_store.update_session(session_id, sync_status="remote_only")
