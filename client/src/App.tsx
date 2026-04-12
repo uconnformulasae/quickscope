@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { uploadFile, fetchChannelData, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
-import type { DerivedChannel } from './lib/useXRKStore';
+import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
 import { resolveChartColor } from './lib/chart-utils';
 import { ChannelSidebar } from './components/ChannelSidebar';
@@ -42,6 +42,7 @@ export default function App() {
     updateDerivedChannel,
     previewDerivedChannel,
     setChartMode,
+    setViewMode,
   } = useAppState();
 
   const { theme, toggleTheme } = useTheme();
@@ -54,6 +55,7 @@ export default function App() {
   const [derivedDialogOpen, setDerivedDialogOpen] = useState(false);
   const [editingDerived, setEditingDerived] = useState<DerivedChannel | undefined>(undefined);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
 
   // Drag over state for chart area
   const [isDragOver, setIsDragOver] = useState(false);
@@ -299,6 +301,9 @@ export default function App() {
         onBack={handleBackToBrowser}
         theme={theme}
         onToggleTheme={toggleTheme}
+        viewMode={state.viewMode}
+        onViewModeChange={setViewMode}
+        onSessionInfoOpen={session ? () => setSessionInfoOpen(true) : undefined}
       />
 
       {/* Main layout */}

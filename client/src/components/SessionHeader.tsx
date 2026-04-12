@@ -1,5 +1,5 @@
-import { useRef } from 'react';
-import { Car, User, Calendar, Clock, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Upload, Gauge, Activity, Download, ArrowLeft } from 'lucide-react';
+import { useRef, useState, useEffect } from 'react';
+import { Car, User, Calendar, Clock, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Gauge, Activity, ArrowLeft, MoreVertical, MapPin, Upload, Download, Info } from 'lucide-react';
 import type { XRKSession } from '../lib/xrk-parser';
 import { formatTime } from '../lib/xrk-parser';
 import { QuickScopeLogo } from './QuickScopeLogo';
@@ -18,6 +18,9 @@ interface SessionHeaderProps {
   onBack?: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
+  viewMode: 'chart' | 'table';
+  onViewModeChange: (mode: 'chart' | 'table') => void;
+  onSessionInfoOpen?: () => void;
 }
 
 export function SessionHeader({
@@ -33,8 +36,24 @@ export function SessionHeader({
   onBack,
   theme,
   onToggleTheme,
+  viewMode,
+  onViewModeChange,
+  onSessionInfoOpen,
 }: SessionHeaderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
 
   const handleLoadClick = () => {
     fileInputRef.current?.click();
@@ -75,6 +94,32 @@ export function SessionHeader({
         <QuickScopeLogo size={24} textClass="text-sm" />
       </div>
 
+      {/* Chart / Table segmented toggle */}
+      {session && (
+        <div className="flex items-center bg-muted/30 rounded-md p-0.5">
+          <button
+            onClick={() => onViewModeChange('chart')}
+            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+              viewMode === 'chart'
+                ? 'bg-primary text-white'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Chart
+          </button>
+          <button
+            onClick={() => onViewModeChange('table')}
+            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+              viewMode === 'table'
+                ? 'bg-primary text-white'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Table
+          </button>
+        </div>
+      )}
+
       {/* File name */}
       {fileName && (
         <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-muted/30 rounded-md">
@@ -95,6 +140,9 @@ export function SessionHeader({
           {lapCount > 0 && (
             <MetaPill icon={<Gauge className="w-3 h-3" />} value={`${lapCount} laps`} />
           )}
+          {metadata.venue && metadata.venue !== 'Unknown' && (
+            <MetaPill icon={<MapPin className="w-3 h-3" />} value={metadata.venue} />
+          )}
         </div>
       )}
 
@@ -107,26 +155,45 @@ export function SessionHeader({
           </div>
         )}
 
-        {/* Export CSV button — only when a session is loaded */}
-        {session && onExportOpen && (
+        {/* 3-dot dropdown menu */}
+        <div className="relative" ref={menuRef}>
           <button
-            onClick={onExportOpen}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-            title="Export CSV"
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            title="Menu"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Export</span>
+            <MoreVertical className="w-4 h-4" />
           </button>
-        )}
-
-        {/* Load File button triggers hidden file input */}
-        <button
-          onClick={handleLoadClick}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-        >
-          <Upload className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Load File</span>
-        </button>
+          {menuOpen && (
+            <div className="absolute right-0 top-full mt-1 w-40 bg-card border border-border rounded-md shadow-lg z-50 py-1">
+              <button
+                onClick={() => { handleLoadClick(); setMenuOpen(false); }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                Load File
+              </button>
+              {session && onExportOpen && (
+                <button
+                  onClick={() => { onExportOpen(); setMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Export CSV
+                </button>
+              )}
+              {session && onSessionInfoOpen && (
+                <button
+                  onClick={() => { onSessionInfoOpen(); setMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                  Session Info
+                </button>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Hidden file input */}
         <input
