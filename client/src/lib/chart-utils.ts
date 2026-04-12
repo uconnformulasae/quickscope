@@ -184,12 +184,20 @@ export function formatValue(v: number): string {
   return v.toFixed(3);
 }
 
-/** Format time in seconds for the x-axis. */
-export function formatTimeSec(sec: number): string {
+/** Format time in seconds for the x-axis.
+ *  Precision adapts to tick spacing so zoomed-in views show milliseconds. */
+export function formatTimeSec(sec: number, tickStep?: number): string {
+  // Determine decimal places from tick spacing
+  let decimals = 1;
+  if (tickStep !== undefined) {
+    if (tickStep < 0.1) decimals = 3;
+    else if (tickStep < 1) decimals = 2;
+  }
+
   const mins = Math.floor(sec / 60);
   const secs = sec % 60;
   if (mins > 0) {
-    return `${mins}:${secs.toFixed(1).padStart(4, '0')}`;
+    return `${mins}:${secs.toFixed(decimals).padStart(decimals + 3, '0')}`;
   }
-  return secs.toFixed(1) + 's';
+  return secs.toFixed(decimals) + 's';
 }

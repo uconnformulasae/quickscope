@@ -376,6 +376,7 @@ export function drawXAxis(dc: DrawContext): number {
   ctx.font = `10px ${MONO_FONT}`;
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'center';
+  const tickStep = xTicks.length >= 2 ? xTicks[1] - xTicks[0] : undefined;
   for (const xt of xTicks) {
     const x = dc.timeToX(xt, xRange, plotW);
     if (x >= lm && x <= w - rm) {
@@ -383,7 +384,7 @@ export function drawXAxis(dc: DrawContext): number {
       ctx.moveTo(Math.round(x) + 0.5, axisY);
       ctx.lineTo(Math.round(x) + 0.5, axisY + 5);
       ctx.stroke();
-      ctx.fillText(formatTimeSec(xt), x, axisY + 18);
+      ctx.fillText(formatTimeSec(xt, tickStep), x, axisY + 18);
     }
   }
 
