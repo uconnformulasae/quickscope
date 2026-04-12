@@ -21,6 +21,8 @@ export type AnalysisTab = 'stats' | 'histogram' | 'xyplot' | 'lapanalysis' | 'gp
 
 export type ChartMode = 'separate' | 'overlay';
 
+export type ViewMode = 'chart' | 'table';
+
 export interface DerivedChannel {
   id: number;
   name: string;
@@ -58,6 +60,9 @@ export interface AppState {
 
   // Chart display mode
   chartMode: ChartMode;
+
+  // View mode (chart vs table)
+  viewMode: ViewMode;
 
   // UI state
   leftSidebarOpen: boolean;
@@ -172,6 +177,7 @@ export function useAppState() {
     xyYChannelId: null,
     cursorTime: null,
     chartMode: 'separate',
+    viewMode: 'chart' as ViewMode,
     leftSidebarOpen: true,
     rightSidebarOpen: true,
     channelSearch: '',
@@ -252,6 +258,10 @@ export function useAppState() {
 
   const setChartMode = useCallback((mode: ChartMode) => {
     setState(prev => ({ ...prev, chartMode: mode }));
+  }, []);
+
+  const setViewMode = useCallback((mode: ViewMode) => {
+    setState(prev => ({ ...prev, viewMode: mode }));
   }, []);
 
   const setChannelSamples = useCallback((channelId: number, samples: ChannelSample[]) => {
@@ -398,6 +408,7 @@ export function useAppState() {
     setChannelSearch,
     setShowOnlyWithData,
     setChartMode,
+    setViewMode,
     toggleLeftSidebar,
     toggleRightSidebar,
     setHistogramChannel,
