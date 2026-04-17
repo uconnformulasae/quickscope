@@ -5,10 +5,30 @@
 set -e
 cd "$(dirname "$0")"
 
-# Install Python deps if needed
-if ! python3 -c "import libxrk" 2>/dev/null; then
+# Pick a Python 3.10+ interpreter
+if command -v python3.12 >/dev/null 2>&1; then
+    PYTHON=python3.12
+elif command -v python3.11 >/dev/null 2>&1; then
+    PYTHON=python3.11
+elif command -v python3.10 >/dev/null 2>&1; then
+    PYTHON=python3.10
+else
+    PYTHON=python3
+fi
+
+# Create venv if missing
+if [ ! -d ".venv" ]; then
+    echo "Creating Python virtual environment (.venv)..."
+    "$PYTHON" -m venv .venv
+fi
+
+VENV_PY=".venv/bin/python"
+
+# Install Python deps if libxrk missing inside the venv
+if ! "$VENV_PY" -c "import libxrk" 2>/dev/null; then
     echo "Installing Python dependencies..."
-    pip install -r backend/requirements.txt
+    "$VENV_PY" -m pip install --upgrade pip
+    "$VENV_PY" -m pip install -r backend/requirements.txt
 fi
 
 # Install Node deps if needed
@@ -19,10 +39,8 @@ fi
 
 # Start backend
 echo "Starting QuickScope backend on :8000..."
-cd backend
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 &
+(cd backend && "../$VENV_PY" -m uvicorn main:app --host 0.0.0.0 --port 8000) &
 BACKEND_PID=$!
-cd ..
 
 # Start frontend dev server
 echo "Starting QuickScope frontend on :5000..."
