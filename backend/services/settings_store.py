@@ -10,7 +10,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
 DEFAULTS = {
-    "railway_url": "",
+    "railway_url": "https://grateful-nourishment-production-ef50.up.railway.app/api/v1",
     "aim_wifi_ssid": "AiM-EVO5-00740-UConn-EV",
     "aim_device_ip": "10.0.0.1",
     "aim_device_port": 2000,
