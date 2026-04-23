@@ -1,0 +1,126 @@
+name: Release
+
+# Builds QuickScope installers for macOS (arm64 + x64) and Windows (x64) and
+# attaches them to a GitHub Release.
+#
+# Triggers:
+#   - Push a git tag matching v*.*.*  (e.g. v1.0.0)  → publishes a Release
+#   - Manual run from the Actions tab                → builds artifacts only
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14        # Apple Silicon runner
+            arch: arm64
+            label: mac-arm64
+          - os: macos-13        # Intel runner
+            arch: x64
+            label: mac-x64
+          - os: windows-latest
+            arch: x64
+            label: win-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Python build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt pyinstaller
+
+      - name: Freeze Python backend
+        working-directory: backend
+        run: pyinstaller quickscope-backend.spec --noconfirm
+
+      - name: Install Node deps
+        run: npm ci
+
+      - name: Build frontend (Vite)
+        run: npm run build
+
+      # ─── macOS: write API key .p8 from secret, then build + sign/notarize ─
+      - name: Prepare Apple API key file
+        if: runner.os == 'macOS' && env.APPLE_API_KEY_CONTENT != ''
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          mkdir -p ~/.private_keys
+          echo "$APPLE_API_KEY_CONTENT" > ~/.private_keys/AuthKey.p8
+          echo "APPLE_API_KEY=$HOME/.private_keys/AuthKey.p8" >> $GITHUB_ENV
+
+      - name: Build macOS installer
+        if: runner.os == 'macOS'
+        env:
+          # Signing + notarization env vars are read by electron-builder when
+          # present. Leave secrets unset to produce an unsigned build.
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac --${{ matrix.arch }} --publish never
+
+      # ─── Windows: build unsigned ──────────────────────────────────────────
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickscope-${{ matrix.label }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.blockmap
+            release/latest*.yml
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}

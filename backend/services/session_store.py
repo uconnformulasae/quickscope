@@ -6,13 +6,15 @@ Thread-safe via a simple lock since QuickScope is single-user.
 """
 
 import json
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
 SESSIONS_FILE = DATA_DIR / "sessions.json"
 SESSIONS_DIR = DATA_DIR / "sessions"
 
