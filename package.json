@@ -122,9 +122,7 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": {
-        "teamId": "6359H2N4Q2"
-      }
+      "notarize": true
     },
     "dmg": {
       "title": "${productName} ${version}",
