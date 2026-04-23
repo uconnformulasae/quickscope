@@ -3,10 +3,12 @@ Settings persistence backed by ./data/settings.json.
 """
 
 import json
+import os
 import threading
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
 DEFAULTS = {

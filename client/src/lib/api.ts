@@ -3,7 +3,17 @@
  * Communicates with the Python/libxrk backend
  */
 
-const API_BASE = `http://${window.location.hostname}:8000`;
+// In packaged Electron builds, preload.js injects window.__QUICKSCOPE_BACKEND__.
+// In browser dev (`npm run dev`), fall back to the current hostname on port 8000.
+declare global {
+  interface Window {
+    __QUICKSCOPE_BACKEND__?: string;
+  }
+}
+
+const API_BASE =
+  (typeof window !== 'undefined' && window.__QUICKSCOPE_BACKEND__) ||
+  `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 

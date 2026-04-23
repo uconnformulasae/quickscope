@@ -7,3 +7,10 @@ __pycache__/
 .env
 data/
 .superpowers/
+
+# PyInstaller output
+backend/build/
+backend/dist/
+
+# electron-builder output
+release/

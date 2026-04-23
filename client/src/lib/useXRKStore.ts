@@ -123,7 +123,9 @@ function computeFormulaSamples(
   return result.timestamps.map((t, i) => ({ timestamp: t, value: result.values[i] }));
 }
 
-const BACKEND_URL = `http://${window.location.hostname}:8000`;
+const BACKEND_URL =
+  (typeof window !== 'undefined' && window.__QUICKSCOPE_BACKEND__) ||
+  `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
 
 /** Evaluate a Python expression via the backend */
 async function computePythonSamples(

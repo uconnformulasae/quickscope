@@ -2,12 +2,21 @@
   "name": "quickscope",
   "version": "1.0.0",
   "license": "MIT",
+  "description": "Racing telemetry analysis tool for AiM data logger files",
+  "author": "UConn Formula SAE Electric",
+  "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "vite build --config vite.config.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
-    "check": "tsc"
+    "check": "tsc",
+    "electron:dev": "NODE_ENV=development electron .",
+    "backend:freeze": "cd backend && pyinstaller quickscope-backend.spec --noconfirm",
+    "dist:mac": "npm run build && npm run backend:freeze && electron-builder --mac",
+    "dist:win": "npm run build && npm run backend:freeze && electron-builder --win",
+    "dist:linux": "npm run build && npm run backend:freeze && electron-builder --linux",
+    "dist": "npm run build && npm run backend:freeze && electron-builder"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.4",
@@ -65,11 +74,101 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.20",
+    "electron": "^32.2.0",
+    "electron-builder": "^25.1.8",
     "esbuild": "^0.25.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.20.5",
     "typescript": "5.6.3",
     "vite": "^7.3.0"
+  },
+  "build": {
+    "appId": "edu.uconn.formulasae.quickscope",
+    "productName": "QuickScope",
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*.cjs",
+      "dist/public/**/*",
+      "package.json",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "backend/dist/quickscope-backend",
+        "to": "backend",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64", "x64"]
+        }
+      ],
+      "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": {
+        "teamId": "6359H2N4Q2"
+      }
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "build/icon.png",
+      "background": null,
+      "contents": [
+        {
+          "x": 140,
+          "y": 200,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 400
+      }
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "QuickScope"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Development",
+      "icon": "build/icon.png"
+    }
   }
 }

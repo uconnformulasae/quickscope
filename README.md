@@ -25,7 +25,21 @@ The backend parses `.xrk`/`.xrz` files using [libxrk](https://pypi.org/project/l
 
 Sessions are persisted locally in `./data/sessions.json` with raw files cached in `./data/sessions/`. When configured, sessions sync bidirectionally with the Data-Development Railway backend.
 
-## Quick Start
+## Install (for end users)
+
+Download the latest installer from the [Releases page](../../releases/latest):
+
+- **macOS (Apple Silicon)** — `QuickScope-*-arm64.dmg`
+- **macOS (Intel)** — `QuickScope-*-x64.dmg`
+- **Windows (x64)** — `QuickScope-Setup-*.exe`
+
+Double-click to install. No Python or Node required. On first launch Windows
+may show a SmartScreen warning (click **More info → Run anyway**); unsigned
+Mac builds require right-click → Open once.
+
+See [docs/PACKAGING.md](docs/PACKAGING.md) for the release/signing workflow.
+
+## Quick Start (for contributors)
 
 ```bash
 ./start.sh
