@@ -76,6 +76,7 @@ jobs:
 
       - name: Build macOS installer
         if: runner.os == 'macOS'
+        timeout-minutes: 25
         env:
           # Signing + notarization env vars are read by electron-builder when
           # present. Leave secrets unset to produce an unsigned build.
@@ -90,6 +91,7 @@ jobs:
       # ─── Windows: build unsigned ──────────────────────────────────────────
       - name: Build Windows installer
         if: runner.os == 'Windows'
+        timeout-minutes: 20
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --x64 --publish never
