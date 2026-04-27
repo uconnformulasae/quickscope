@@ -30,17 +30,30 @@ class Frame:
     raw_offset: int         # offset within the per-direction stream
 
 
-# tshark "follow,tcp,raw" emits client->server lines unindented and
-# server->client lines prefixed with a single tab. That convention is what we
-# rely on to recover direction.
-
-CLIENT_PREFIX = ""
-SERVER_PREFIX = "\t"
+# tshark "follow,tcp,raw" emits one node's bytes unindented and the other's
+# tab-indented. WHICH node is which depends on which side initiated the
+# conversation — Node 0 is the originator. For us the device is on :2000;
+# whichever Node line names :2000 is the device (server side). Without this
+# detection, Live 2 (where the device happens to be on Node 0) silently has
+# every direction labeled wrong.
 
 
 def load_stream(path: Path) -> tuple[bytes, bytes]:
     """Returns (client_to_server_bytes, server_to_client_bytes)."""
     text = path.read_text()
+    # First pass: figure out which prefix maps to which direction. tshark
+    # emits "Node 0: 10.0.0.1:2000" and "Node 1: 10.0.0.10:60025" headers;
+    # Node 0 is unindented, Node 1 is tab-indented. The device is the one
+    # listening on :2000.
+    server_is_indented = True  # default to old behaviour if header missing
+    for raw_line in text.splitlines():
+        if raw_line.startswith("Node 0:"):
+            if ":2000" in raw_line:
+                server_is_indented = False  # device is unindented
+        elif raw_line.startswith("Node 1:"):
+            if ":2000" in raw_line:
+                server_is_indented = True   # device is tab-indented
+
     c2s = bytearray()
     s2c = bytearray()
     in_data = False
@@ -52,15 +65,16 @@ def load_stream(path: Path) -> tuple[bytes, bytes]:
             continue
         if raw_line.startswith(("Follow:", "Filter:", "Node 0:", "Node 1:")):
             continue
-        # Server-to-client lines are tab-indented in the tshark dump.
-        if raw_line.startswith("\t"):
-            hex_text = raw_line.strip()
-            if re.fullmatch(r"[0-9a-fA-F]+", hex_text):
-                s2c.extend(bytes.fromhex(hex_text))
+        is_indented = raw_line.startswith("\t")
+        is_server = is_indented if server_is_indented else not is_indented
+        hex_text = raw_line.strip()
+        if not re.fullmatch(r"[0-9a-fA-F]+", hex_text):
+            continue
+        chunk = bytes.fromhex(hex_text)
+        if is_server:
+            s2c.extend(chunk)
         else:
-            hex_text = raw_line.strip()
-            if re.fullmatch(r"[0-9a-fA-F]+", hex_text):
-                c2s.extend(bytes.fromhex(hex_text))
+            c2s.extend(chunk)
     return bytes(c2s), bytes(s2c)
 
 

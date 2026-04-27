@@ -5,12 +5,18 @@ Reverse-engineered from `docs/protocol/captures/live1.pcapng` and
 findings here come from observed traffic; the byte-level layout has been
 validated against ≥194 server live frames in Live 1 and ≥860 in Live 2.
 
-> **Status:** working draft — sufficient to implement a connect-and-read-live
-> client. A few byte ranges in the 547-byte live frame are still labeled
-> "unknown / channel value" because the channel-config table that maps offsets
-> to channel names is itself transmitted over the same protocol (the 13608-byte
-> `hhh...MCLK Master Clk...` frame at idx 47) and hasn't been decoded yet. See
-> [§7](#7-open-questions).
+> **Status:** spec validated by deep-dive analysis. The trailer u16 formula
+> is decoded (`sum(payload) & 0xFFFF`, **2,318 / 2,318 captured outer frames
+> match**). The 547-byte live frame's channel-offset → name map is extracted
+> via the 13,608-byte channel-definitions frame (103 channels). The "iSLV /
+> iHW / iUSR / iPTH / iLCK / iSST / iLTS / iPRL" inner-command set is
+> structurally decoded. See companion documents for the byte-level work:
+> - [aim-live-protocol-deep-dive.md](aim-live-protocol-deep-dive.md) —
+>   per-question empirical decoding (CRC verification, STNC structure,
+>   3-pass enumeration diff, kkk heartbeat, full channel map)
+> - [aim-protocol-research.md](aim-protocol-research.md) — pointers into
+>   `libxrk` and the wider AiM ecosystem confirming our findings against
+>   independent sources
 
 ---
 
@@ -111,7 +117,7 @@ the same outer envelope:
 | `data` | `LEN` | payload (often contains an inner `<h<CMD>...><CMD>...>` sub-frame) |
 | `<` | 1 | trailer start |
 | `CMD4` | 4 | same command code as header (must match) |
-| `TR` | 2 | little-endian u16; varies across frames — appears to be a XOR-like checksum or a per-command sequence/length-mod marker. **Not yet decoded.** Receivers can ignore it for read-only clients; senders should set it to a value the device accepts (any value seems to work for our STNC poll, but this needs confirmation on a real device). |
+| `TR` | 2 | little-endian u16; **`sum(payload_bytes) & 0xFFFF`**. Decoded by the deep-dive against 2,318 / 2,318 captured outer frames + 27 / 27 inner sub-frames with no exceptions; cross-confirmed against `libxrk`'s parser source. Senders MUST compute it correctly — empty-checksum or wrong-checksum frames are silently dropped by the device. |
 | `>` | 1 | trailer end |
 
 Total frame size = `LEN + 20`.
@@ -398,22 +404,55 @@ session whose samples grow as new frames arrive).
 
 ---
 
-## 7. Open questions
+## 7. Resolved questions and remaining gaps
 
-1. **STCP/STNC trailer u16** (offset `LEN+5..LEN+6` in the outer envelope).
-   Varies across frames — almost certainly a checksum or sequence. Not
-   needed for read-only; required for write-side. We may try CRC-16/CCITT
-   over [header..end-of-payload] and verify against captures.
-2. **3-pass enumeration semantics.** Why three? Are they delta/snapshot/end,
-   or just "Race Studio's belt-and-suspenders"?
-3. **Channel offset → channel name mapping** inside the 547-byte frame.
-   Decoding requires parsing the 13608-byte channel-def frame.
-4. **Subsystem tag set** at bytes [4..14]. We've seen `System`, `Fuel Use`,
-   and `kkk` — there may be more (CAN streams, ECU stream, GPS, ...).
-5. **The `idn 0x01 0x38 0x00 0x11` magic** in the UDP discovery reply —
-   appears in two places (244-byte UDP and 3462-byte iMST) with the same
-   value, so it's a shared identifier marker, but the bits inside are
-   undecoded.
+The original "Open questions" section in this doc has been answered as
+follows. Full evidence and per-question scripts live in
+[`aim-live-protocol-deep-dive.md`](aim-live-protocol-deep-dive.md).
+
+**Resolved:**
+
+1. **Trailer u16** — DECODED as `sum(payload) & 0xFFFF`, 2,318/2,318 match.
+   See §3.
+2. **3-pass enumeration** — DECODED. The three copies are byte-identical
+   except for one byte in `iLTS` (the seconds digit of the device's wall
+   clock). It's plain redundancy, not delta/snapshot/end. A client can
+   safely take the first pass and ignore the other two.
+3. **Channel offset → name mapping** — HIGH confidence. The 13,608-byte
+   channel-definitions frame is **103 records of 132 bytes each**, parsed
+   directly via `libxrk`'s `parse_xrk_bytes`. The mapping rule is
+   `live_offset = channel_def_logical_offset + 12`. 103 channels mapped;
+   sanity-checked against known stationary-EV values: SOC=85.5%,
+   Pack_Voltage=405.5V, Pack_Temp=20.0°C, BMS_Disch_Lim=120A.
+4. **Subsystem tag set at [4..14]** — three values observed in our
+   captures: `System` (system info update), `Fuel Use` (fuel sample), and
+   `kkk\x01\x00\x00\x00\x00` (generic state — most common). What
+   determines which fires when is still uncertain (only one each of
+   `System`/`Fuel Use` was captured).
+5. **The IMU block** — RECLASSIFIED. The original spec called bytes
+   [212..224] the "main float block" (4× float32). It's actually 6× s16
+   covering InlA, LatA, VerA, RollRate, PitchRate, YawRate.
+6. **STNC payload structure** — DECODED. 64-byte payload: bytes 8..10 are
+   a u24 selector, byte 24 is opcode `'A'` (REQUEST), the rest is zero.
+   Two steady-state selectors: `0x00020003` triggers a 547-byte live
+   snapshot, `0x00020053` triggers a 12-byte heartbeat.
+7. **Server STCP-64 ack format** — bytes 16..19 of the `Q` ack carry
+   `(next-frame-payload-length) - 4` — a load-bearing length hint that
+   clients can use for buffer pre-allocation.
+
+**Remaining gaps (low priority — none block read-only live streaming):**
+
+- **GPS sub-struct field meanings** — need a moving capture with GPS
+  lock; our test vehicle was stationary.
+- **Exact unit / scale calibration for raw-count channels** (LogT,
+  external VBat, several IMU channels). The `u32_at_84..u32_at_92` fields
+  in the channel-def record are likely scale + unit codes but the
+  encoding isn't fully decoded.
+- **The `idn 0x01 0x38 0x00 0x11` magic** in the UDP reply and 3462-byte
+  iMST. Constant across our captures; appears to be a shared identifier
+  marker.
+- **The `kkk` heartbeat byte 7** (`0x01` in all captures). Could be a
+  version field or a status nibble; can't tell from our data.
 
 ---
 
