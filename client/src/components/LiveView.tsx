@@ -85,6 +85,56 @@ const PREVIEW_CHANNELS: ChannelMeta[] = [
   // ── External voltages / logger ───────────────────────────────────────
   { name: 'External Voltage',   unit: 'V',   precision: 2, gen: (n) => 12.4 + Math.sin(n * 0.04) * 0.2 },
   { name: 'Logger Temperature', unit: '°C',  precision: 1, gen: (n) => 30 + Math.sin(n * 0.03) * 1.5 },
+  // ── GPS (channel #13 in the channel-def, 56-byte struct at offset 168
+  //    of the live frame). Real-device decode of the sub-struct field
+  //    layout needs a moving capture; our captures were stationary.
+  { name: 'GPS_Lat',            unit: '°',   precision: 6, gen: (n) => 41.80800 + Math.sin(n * 0.04) * 0.00080 + Math.sin(n * 0.10) * 0.00020 },
+  { name: 'GPS_Lon',            unit: '°',   precision: 6, gen: (n) => -72.25100 + Math.cos(n * 0.04) * 0.00120 + Math.cos(n * 0.07) * 0.00030 },
+  { name: 'GPS_Speed',          unit: 'kph', precision: 1, gen: (n) => Math.max(0, 55 + Math.sin(n * 0.05) * 38 + Math.sin(n * 0.21) * 8) },
+  { name: 'GPS_Heading',        unit: '°',   precision: 1, gen: (n) => ((n * 0.04 * 180 / Math.PI) % 360 + 360) % 360 },
+  { name: 'GPS_Altitude',       unit: 'm',   precision: 1, gen: () => 47.5 },
+  { name: 'GPS_Sats',           unit: '',    precision: 0, gen: () => 12 },
+];
+
+// Boolean / state channels from the AiM channel-config. Each carries 0/1
+// (or a small enum) on the wire — meaningless as a number, very meaningful
+// as a label. These come from q6_full_records.py rows 25-52, 75-77, 82, 91-95.
+//
+// `on` field describes what the value means for the LIVE state of the car;
+// for fault-style channels, "1" usually means "fault active" (red). For
+// enable-style channels "1" means "enabled" (green). Polarity is tracked
+// per-channel.
+type BoolKind = 'state' | 'fault';
+interface BoolChannelMeta {
+  name: string;
+  label: string;
+  kind: BoolKind;
+  /** Generator returns 0 or 1 in preview mode. */
+  gen: (n: number) => number;
+}
+const BOOL_CHANNELS: BoolChannelMeta[] = [
+  // ── Enable / state (1 = active / good) ──────────────────────────────
+  { name: 'BMS_Disch_Enable',   label: 'BMS Discharge',  kind: 'state', gen: () => 1 },
+  { name: 'InverterEnable',     label: 'Inverter',       kind: 'state', gen: () => 1 },
+  { name: 'lc_enabled',         label: 'Launch Control', kind: 'state', gen: () => 0 },
+  { name: 'lc_sensor_health',   label: 'LC Sensors OK',  kind: 'state', gen: () => 1 },
+  { name: 'cut_rate_active',    label: 'Cut-rate Active',kind: 'state', gen: () => 0 },
+  { name: 'StartRec',           label: 'Logging',        kind: 'state', gen: () => 1 },
+  // ── Faults (1 = fault active / BAD) ─────────────────────────────────
+  { name: 'RTD_Fault',           label: 'RTD',                 kind: 'fault', gen: () => 0 },
+  { name: 'BSE_Fault',           label: 'BSE Plausibility',    kind: 'fault', gen: () => 0 },
+  { name: 'TPS1_OOR_Fault',      label: 'TPS1 Out of Range',   kind: 'fault', gen: () => 0 },
+  { name: 'TPS2_OOR_Fault',      label: 'TPS2 Out of Range',   kind: 'fault', gen: () => 0 },
+  { name: 'APPS_Dist_Fault',     label: 'APPS Plausibility',   kind: 'fault', gen: () => 0 },
+  { name: 'DC_Undervoltage',     label: 'DC Undervoltage',     kind: 'fault', gen: () => 0 },
+  { name: 'InverterTempHi',      label: 'Inverter Temp Hi',    kind: 'fault', gen: () => 0 },
+  { name: 'InverterTempLo',      label: 'Inverter Temp Lo',    kind: 'fault', gen: () => 0 },
+  { name: 'MCU_LV_Out_of_Range', label: 'MCU LV OOR',          kind: 'fault', gen: () => 0 },
+  { name: 'MotorOverTemp',       label: 'Motor Over Temp',     kind: 'fault', gen: () => 0 },
+  { name: 'MotorOverSpeed',      label: 'Motor Over Speed',    kind: 'fault', gen: () => 0 },
+  { name: 'InvOverVolt',         label: 'Inverter OverVolt',   kind: 'fault', gen: () => 0 },
+  { name: 'HWOverCurrent',       label: 'HW Over Current',     kind: 'fault', gen: () => 0 },
+  { name: 'CANCommandLost',      label: 'CAN Cmd Lost',        kind: 'fault', gen: () => 0 },
 ];
 
 // CT-17 has 5 modules of 20s4p (80 cells/module). Per-module data is NOT
@@ -112,12 +162,25 @@ const PANEL_OWNED_CHANNELS = new Set<string>([
   'Torque_Command', 'Torque_Feedback', 'MCU_Torque_Limit', 'MCU_DC_Current',
   'Phase_A_Current', 'Phase_B_Current', 'Phase_C_Current',
   'Id_Feeback', 'Iq_Feedback', 'InverterEnable',
+  // GPS (rendered in the Track panel)
+  'GPS_Lat', 'GPS_Lon', 'GPS_Speed', 'GPS_Heading', 'GPS_Altitude', 'GPS_Sats',
+  // Boolean state + fault channels (rendered in the Status & Faults panel)
+  ...BOOL_CHANNELS.map((b) => b.name),
 ]);
 
 function generatePreviewChannels(frameNo: number): Record<string, number> {
   const out: Record<string, number> = {};
   for (const ch of PREVIEW_CHANNELS) {
     out[ch.name] = ch.gen(frameNo);
+  }
+  for (const b of BOOL_CHANNELS) {
+    out[b.name] = b.gen(frameNo);
+  }
+  // Throw a transient fault every minute (~240 frames at 4 Hz) so the
+  // status panel doesn't look static. Cycles through a few fault channels.
+  if (frameNo > 60 && frameNo % 240 < 12) {
+    const cycle = ['InverterTempHi', 'BSE_Fault', 'TPS1_OOR_Fault', 'CANCommandLost'];
+    out[cycle[Math.floor(frameNo / 240) % cycle.length]] = 1;
   }
   // Demo channels for the "Other" panel — exemplars of what real-device
   // mode will surface (lap timing, launch control, faults/alarms). Names
@@ -149,10 +212,12 @@ export function LiveView({ onBack }: Props) {
   const [count, setCount] = useState(0);
   const [bufferStats, setBufferStats] = useState({ bySubsystem: {} as Record<string, number> });
   const [previewMode, setPreviewMode] = useState(false);
+  const [gpsTrail, setGpsTrail] = useState<{ lat: number; lon: number; speed: number }[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const previewTimerRef = useRef<number | null>(null);
   const ringRef = useRef<Snapshot[]>([]);
+  const gpsTrailRef = useRef<{ lat: number; lon: number; speed: number }[]>([]);
   const pausedRef = useRef(false);
   // Once the user has taken any explicit action (Connect, Preview), the
   // mount-time UDP probe's late-arriving response must not clobber state.
@@ -208,6 +273,18 @@ export function LiveView({ onBack }: Props) {
           if (ringRef.current.length > RING_BUFFER_SIZE) {
             ringRef.current.shift();
           }
+          // GPS trail — once channel decoding lands, snap.channels.GPS_Lat
+          // / GPS_Lon arrive here and we append. Until then, real-device
+          // mode just won't have GPS points; preview mode generates them
+          // synthetically in startPreview's pump.
+          const lat = snap.channels?.['GPS_Lat'];
+          const lon = snap.channels?.['GPS_Lon'];
+          if (lat !== undefined && lon !== undefined && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1) {
+            gpsTrailRef.current.push({ lat, lon, speed: snap.channels?.['GPS_Speed'] ?? 0 });
+            if (gpsTrailRef.current.length > 2000) {
+              gpsTrailRef.current.shift();
+            }
+          }
           setLatest(snap);
           setCount(ringRef.current.length);
           if (ringRef.current.length % 8 === 0) {
@@ -216,6 +293,7 @@ export function LiveView({ onBack }: Props) {
               bySubsystem[s.subsystem] = (bySubsystem[s.subsystem] || 0) + 1;
             }
             setBufferStats({ bySubsystem });
+            setGpsTrail([...gpsTrailRef.current]);
           }
         } else if (msg.type === 'error') {
           setStatus('error');
@@ -242,10 +320,40 @@ export function LiveView({ onBack }: Props) {
     wsRef.current?.close();
     wsRef.current = null;
     ringRef.current = [];
+    gpsTrailRef.current = [];
     setCount(0);
     setLatest(null);
     setBufferStats({ bySubsystem: {} });
+    setGpsTrail([]);
     setStatus('idle');
+  };
+
+  const exportGpx = () => {
+    if (gpsTrailRef.current.length === 0) return;
+    const now = new Date().toISOString();
+    const points = gpsTrailRef.current
+      .map((p) => `      <trkpt lat="${p.lat.toFixed(6)}" lon="${p.lon.toFixed(6)}"></trkpt>`)
+      .join('\n');
+    const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="QuickScope" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><time>${now}</time></metadata>
+  <trk>
+    <name>QuickScope Live${previewMode ? ' (preview)' : ''}</name>
+    <trkseg>
+${points}
+    </trkseg>
+  </trk>
+</gpx>
+`;
+    const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `quickscope-live-${now.replace(/[:.]/g, '-')}.gpx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const togglePause = () => {
@@ -268,10 +376,12 @@ export function LiveView({ onBack }: Props) {
       wsRef.current = null;
     }
     ringRef.current = [];
+    gpsTrailRef.current = [];
     pausedRef.current = false;
     setCount(0);
     setLatest(null);
     setBufferStats({ bySubsystem: {} });
+    setGpsTrail([]);
     setPreviewMode(true);
     setError(null);
     setDevice({ ip: 'preview', model: 'EVO5', serial: '00740', vehicle: 'UConn-EV (preview)' });
@@ -291,6 +401,16 @@ export function LiveView({ onBack }: Props) {
       if (ringRef.current.length > RING_BUFFER_SIZE) {
         ringRef.current.shift();
       }
+      // GPS trail — keep up to 2000 points (~8 minutes at 4 Hz). Real-device
+      // mode appends here too once GPS_Lat/GPS_Lon decode is wired up.
+      const lat = snap.channels?.['GPS_Lat'];
+      const lon = snap.channels?.['GPS_Lon'];
+      if (lat !== undefined && lon !== undefined && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1) {
+        gpsTrailRef.current.push({ lat, lon, speed: snap.channels?.['GPS_Speed'] ?? 0 });
+        if (gpsTrailRef.current.length > 2000) {
+          gpsTrailRef.current.shift();
+        }
+      }
       setLatest(snap);
       setCount(ringRef.current.length);
       if (frameNo % 8 === 0) {
@@ -299,6 +419,8 @@ export function LiveView({ onBack }: Props) {
           bySubsystem[s.subsystem] = (bySubsystem[s.subsystem] || 0) + 1;
         }
         setBufferStats({ bySubsystem });
+        // Trail re-renders on the same cadence to keep React updates manageable.
+        setGpsTrail([...gpsTrailRef.current]);
       }
       frameNo += 1;
     }, 250);
@@ -458,6 +580,8 @@ export function LiveView({ onBack }: Props) {
               count={count}
               bufferStats={bufferStats}
               previewMode={previewMode}
+              gpsTrail={gpsTrail}
+              onExportGpx={exportGpx}
             />
           </div>
         )}
@@ -495,11 +619,15 @@ function Dashboard({
   count,
   bufferStats,
   previewMode,
+  gpsTrail,
+  onExportGpx,
 }: {
   latest: Snapshot | null;
   count: number;
   bufferStats: { bySubsystem: Record<string, number> };
   previewMode: boolean;
+  gpsTrail: { lat: number; lon: number; speed: number }[];
+  onExportGpx: () => void;
 }) {
   const ch = latest?.channels ?? {};
   return (
@@ -606,6 +734,108 @@ function Dashboard({
             <VehicleStat label="Roll"   value={fmt(ch['RollRate'], 1)} unit="°/s" />
             <VehicleStat label="Lat G"  value={fmt(ch['LateralAcc'], 2)} unit="g" />
             <VehicleStat label="Long G" value={fmt(ch['InlineAcc'], 2)}  unit="g" />
+          </div>
+        </div>
+      </Panel>
+
+      {/* MID STRIP — Track (live GPS path) + Status & Faults */}
+      <Panel
+        title="Track"
+        className="lg:col-span-6"
+        rightSlot={
+          <button
+            onClick={onExportGpx}
+            disabled={gpsTrail.length === 0}
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-40 disabled:hover:bg-primary/10 transition-colors"
+            title={gpsTrail.length === 0 ? 'No GPS points yet' : `Download ${gpsTrail.length} points as GPX`}
+          >
+            Export GPX
+          </button>
+        }
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <TrackCanvas trail={gpsTrail} latest={latest} />
+          <div className="space-y-2 text-xs">
+            <div className="grid grid-cols-2 gap-1.5">
+              <VehicleStat label="Lat"      value={fmt(ch['GPS_Lat'], 5)} unit="°" />
+              <VehicleStat label="Lon"      value={fmt(ch['GPS_Lon'], 5)} unit="°" />
+              <VehicleStat label="Speed"    value={fmt(ch['GPS_Speed'], 1)} unit="kph" />
+              <VehicleStat label="Heading"  value={fmt(ch['GPS_Heading'], 0)} unit="°" />
+              <VehicleStat label="Altitude" value={fmt(ch['GPS_Altitude'], 1)} unit="m" />
+              <VehicleStat label="Sats"     value={fmt(ch['GPS_Sats'], 0)} unit="" />
+            </div>
+            <div className="pt-1.5 border-t border-border/40 flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>Trail points</span>
+              <span className="tabular font-semibold text-foreground">{gpsTrail.length}</span>
+            </div>
+            <p className="text-[10px] text-muted-foreground/60 leading-snug">
+              Trail accumulates while connected (up to 2000 points / ~8 min at
+              4 Hz). Export drops a .gpx file you can drop into the session
+              browser later.
+            </p>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="Status & Faults" className="lg:col-span-6">
+        <div className="space-y-3">
+          {/* State row — colored ON/OFF pills */}
+          <div>
+            <h4 className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">State</h4>
+            <div className="grid grid-cols-3 sm:grid-cols-3 gap-1.5">
+              {BOOL_CHANNELS.filter((b) => b.kind === 'state').map((b) => {
+                const v = ch[b.name];
+                const on = v === 1;
+                return (
+                  <div
+                    key={b.name}
+                    className={`flex items-center justify-between rounded-md px-2 py-1.5 border text-[11px] ${
+                      on
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
+                        : 'bg-muted/40 border-border/40 text-muted-foreground'
+                    }`}
+                    title={`${b.name} = ${v ?? '—'} (1 = on, 0 = off)`}
+                  >
+                    <span className="font-medium truncate">{b.label}</span>
+                    <span className="font-mono ml-2">{on ? 'ON' : 'OFF'}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Fault row — green dot when 0, red when 1 */}
+          <div>
+            <h4 className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5 flex items-center justify-between">
+              <span>Faults</span>
+              <span className="text-muted-foreground/60 font-normal normal-case">
+                1 = active fault · 0 = healthy
+              </span>
+            </h4>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+              {BOOL_CHANNELS.filter((b) => b.kind === 'fault').map((b) => {
+                const v = ch[b.name];
+                const fault = v === 1;
+                return (
+                  <div
+                    key={b.name}
+                    className={`flex items-center gap-1.5 rounded-md px-2 py-1 border text-[10px] ${
+                      fault
+                        ? 'bg-red-500/10 border-red-500/40 text-red-600 dark:text-red-400'
+                        : 'bg-emerald-500/5 border-emerald-500/20 text-muted-foreground'
+                    }`}
+                    title={`${b.name} = ${v ?? '—'}`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                        fault ? 'bg-red-500 animate-pulse' : 'bg-emerald-500/60'
+                      }`}
+                    />
+                    <span className="truncate">{b.label}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </Panel>
@@ -795,6 +1025,83 @@ function VehicleStat({ label, value, unit }: { label: string; value: string; uni
         {value}
         {unit && <span className="text-[9px] text-muted-foreground font-normal ml-0.5">{unit}</span>}
       </p>
+    </div>
+  );
+}
+
+function TrackCanvas({
+  trail,
+  latest,
+}: {
+  trail: { lat: number; lon: number; speed: number }[];
+  latest: Snapshot | null;
+}) {
+  // Empty state — no GPS points yet.
+  if (trail.length < 2) {
+    return (
+      <div
+        className="rounded-md bg-muted/30 dark:bg-background/40 border border-border/40 flex items-center justify-center text-[11px] text-muted-foreground"
+        style={{ aspectRatio: '1 / 1', minHeight: 160 }}
+      >
+        Waiting for GPS fix…
+      </div>
+    );
+  }
+
+  // Bounds + aspect-correction (lon shrinks as lat moves away from equator).
+  const minLat = Math.min(...trail.map((p) => p.lat));
+  const maxLat = Math.max(...trail.map((p) => p.lat));
+  const minLon = Math.min(...trail.map((p) => p.lon));
+  const maxLon = Math.max(...trail.map((p) => p.lon));
+  const midLat = (minLat + maxLat) / 2;
+  const lonM = (maxLon - minLon) * 111_320 * Math.cos((midLat * Math.PI) / 180);
+  const latM = (maxLat - minLat) * 111_320;
+  const span = Math.max(lonM, latM) || 1;
+
+  const VB = 200;  // viewBox size — coords scale into [0..VB]
+  const project = (lat: number, lon: number) => {
+    const xM = (lon - minLon) * 111_320 * Math.cos((midLat * Math.PI) / 180);
+    const yM = (lat - minLat) * 111_320;
+    const cx = (span - lonM) / 2;
+    const cy = (span - latM) / 2;
+    const x = ((xM + cx) / span) * VB;
+    const y = VB - ((yM + cy) / span) * VB;  // SVG y grows downward
+    return [x, y] as const;
+  };
+
+  const path = trail
+    .map((p, i) => {
+      const [x, y] = project(p.lat, p.lon);
+      return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(' ');
+
+  const [sx, sy] = project(trail[0].lat, trail[0].lon);
+  const [cx, cy] = project(trail[trail.length - 1].lat, trail[trail.length - 1].lon);
+  const heading = latest?.channels?.['GPS_Heading'] ?? 0;
+
+  return (
+    <div
+      className="rounded-md bg-muted/30 dark:bg-background/40 border border-border/40 overflow-hidden"
+      style={{ aspectRatio: '1 / 1', minHeight: 160 }}
+    >
+      <svg viewBox={`0 0 ${VB} ${VB}`} width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+        <path
+          d={path}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.6}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          className="text-primary"
+        />
+        {/* Start marker */}
+        <circle cx={sx} cy={sy} r={2.5} className="fill-emerald-500" />
+        {/* Current position with heading triangle */}
+        <g transform={`translate(${cx}, ${cy}) rotate(${heading})`}>
+          <polygon points="0,-5 4,4 0,2 -4,4" className="fill-amber-500 stroke-amber-700" strokeWidth={0.5} />
+        </g>
+      </svg>
     </div>
   );
 }
