@@ -290,6 +290,38 @@ export async function fetchGPSPreview(sessionId: string): Promise<GPSPreview | n
   return data.preview;
 }
 
+// ─── Live streaming ─────────────────────────────────────────────────────────
+
+export interface LiveDeviceInfo {
+  ip: string;
+  model: string;
+  serial: string;
+  vehicle: string;
+}
+
+export interface LiveStatus {
+  reachable: boolean;
+  host: string;
+  device?: LiveDeviceInfo;
+}
+
+export async function fetchLiveStatus(): Promise<LiveStatus> {
+  const res = await fetch(`${API_BASE}/api/live/status`);
+  if (!res.ok) throw new Error(`Live status failed: ${res.status}`);
+  return res.json();
+}
+
+export type LiveWSMessage =
+  | { type: 'connected'; device: LiveDeviceInfo }
+  | { type: 'snapshot'; ts: number; subsystem: string; raw: string }
+  | { type: 'error'; message: string };
+
+export function liveWebSocketUrl(): string {
+  // Replace http(s) with ws(s) for the live endpoint.
+  const wsBase = API_BASE.replace(/^http/, 'ws');
+  return `${wsBase}/api/live/ws`;
+}
+
 export async function exportCSV(channels: string[]): Promise<Blob> {
   const res = await fetch(
     `${API_BASE}/api/export?channels=${encodeURIComponent(channels.join(','))}`,

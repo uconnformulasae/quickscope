@@ -15,9 +15,10 @@ import { ExportDialog } from './components/ExportDialog';
 import { SessionInfoModal } from './components/SessionInfoModal';
 import { SessionBrowser } from './components/SessionBrowser';
 import { SettingsDialog } from './components/SettingsDialog';
+import { LiveView } from './components/LiveView';
 import { Upload } from 'lucide-react';
 
-type View = 'browser' | 'analysis';
+type View = 'browser' | 'analysis' | 'live';
 
 export default function App() {
   const {
@@ -310,10 +311,20 @@ export default function App() {
         <SessionBrowser
           onSessionLoaded={handleSessionLoaded}
           onOpenSettings={() => setSettingsOpen(true)}
+          onOpenLive={() => setView('live')}
           theme={theme}
           onToggleTheme={toggleTheme}
         />
         {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      </div>
+    );
+  }
+
+  // ─── Live View ─────────────────────────────────────────────────────────────
+  if (view === 'live') {
+    return (
+      <div className="flex flex-col h-full bg-background overflow-hidden">
+        <LiveView onBack={() => setView('browser')} />
       </div>
     );
   }

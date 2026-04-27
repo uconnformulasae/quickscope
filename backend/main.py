@@ -9,7 +9,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes import sessions, analysis, settings
+from routes import sessions, analysis, settings, live
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +28,7 @@ app.add_middleware(
 app.include_router(sessions.router)
 app.include_router(analysis.router)
 app.include_router(settings.router)
+app.include_router(live.router)
 
 
 if __name__ == "__main__":

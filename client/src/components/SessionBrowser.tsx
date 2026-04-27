@@ -7,7 +7,7 @@ import {
 import {
   RefreshCw, Cloud, Wifi, WifiOff, Upload, Trash2,
   Download, CheckCircle, Loader2, HardDrive, Radio,
-  ChevronRight, Search, Settings, Pencil,
+  ChevronRight, Search, Settings, Pencil, Activity,
 } from 'lucide-react';
 import { AimSessionPicker } from './AimSessionPicker';
 import { QuickScopeLogo } from './QuickScopeLogo';
@@ -17,6 +17,7 @@ import { GPSThumbnail } from './GPSThumbnail';
 interface SessionBrowserProps {
   onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
   onOpenSettings: () => void;
+  onOpenLive: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
 }
@@ -60,7 +61,7 @@ const SOURCE_CONFIG = {
   railway: { icon: Cloud, label: 'Railway' },
 } as const;
 
-export function SessionBrowser({ onSessionLoaded, onOpenSettings, theme, onToggleTheme }: SessionBrowserProps) {
+export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, theme, onToggleTheme }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<LocalSession[]>([]);
   const [aimStatus, setAimStatus] = useState<AimStatus | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -294,13 +295,23 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, theme, onToggl
         </button>
 
         {aimStatus?.connected && (
-          <button
-            onClick={() => setAimPickerOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Pull from AiM
-          </button>
+          <>
+            <button
+              onClick={() => setAimPickerOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Pull from AiM
+            </button>
+            <button
+              onClick={onOpenLive}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+              title="Stream live data from the AiM device"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              Live
+            </button>
+          </>
         )}
 
         <div className="flex-1" />
