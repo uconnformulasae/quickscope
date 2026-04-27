@@ -332,24 +332,33 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         </button>
 
         {aimStatus?.connected && (
-          <>
-            <button
-              onClick={() => setAimPickerOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" />
-              Pull from AiM
-            </button>
-            <button
-              onClick={onOpenLive}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-              title="Stream live data from the AiM device"
-            >
-              <Activity className="w-3.5 h-3.5" />
-              Live
-            </button>
-          </>
+          <button
+            onClick={() => setAimPickerOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Pull from AiM
+          </button>
         )}
+
+        {/*
+         * Live button is always visible. The LiveView itself probes the
+         * device on mount and shows a friendly "device not reachable" state
+         * when offline, so users can find the feature without an AiM
+         * connected and developers can dev against the empty state.
+         */}
+        <button
+          onClick={onOpenLive}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+            aimStatus?.connected
+              ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20'
+              : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+          }`}
+          title={aimStatus?.connected ? 'Stream live data from the AiM device' : 'Open live view (AiM device not currently reachable)'}
+        >
+          <Activity className="w-3.5 h-3.5" />
+          Live
+        </button>
 
         <button
           onClick={async () => {
