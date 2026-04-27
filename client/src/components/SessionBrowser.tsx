@@ -406,7 +406,9 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, theme, onToggl
                     {session.lap_count > 0 && (
                       <span>{session.lap_count} laps</span>
                     )}
-                    <SourceIcon className="w-3 h-3" title={sourceCfg.label} />
+                    <span title={sourceCfg.label} className="inline-flex">
+                      <SourceIcon className="w-3 h-3" />
+                    </span>
                   </div>
 
                   {/* Actions */}

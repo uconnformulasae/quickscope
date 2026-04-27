@@ -1,9 +1,23 @@
 import { useMemo } from 'react';
-import type { XRKSession } from '../../lib/xrk-parser';
+import type { XRKSession, LapSource } from '../../lib/xrk-parser';
 import { computeStats, formatLapTime } from '../../lib/xrk-parser';
 import type { ActiveChannel } from '../../lib/useXRKStore';
 import { Timer } from 'lucide-react';
 import { formatNum } from './analysis-helpers';
+
+const LAP_SOURCE_LABEL: Record<LapSource, string> = {
+  device: 'Device markers',
+  gps_auto: 'Auto-detected (GPS)',
+  beacon_auto: 'Auto-detected (beacon)',
+  none: 'No laps',
+};
+
+const LAP_SOURCE_TONE: Record<LapSource, string> = {
+  device: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30',
+  gps_auto: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30',
+  beacon_auto: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30',
+  none: 'bg-muted text-muted-foreground border-border',
+};
 
 export function LapAnalysisTab({ session, activeChannels }: {
   session: XRKSession;
@@ -20,7 +34,7 @@ export function LapAnalysisTab({ session, activeChannels }: {
     for (let i = 0; i < markers.length - 1; i++) {
       const startMs = markers[i].timestamp;
       const endMs = markers[i + 1].timestamp;
-      const lapTimeS = (endMs - startMs) / 1e6;
+      const lapTimeS = (endMs - startMs) / 1000;
 
       if (lapTimeS < bestTime && lapTimeS > 10) {
         bestTime = lapTimeS;
@@ -53,9 +67,14 @@ export function LapAnalysisTab({ session, activeChannels }: {
   }
 
   const bestTime = lapData.find(l => l.isBest)?.lapTimeS;
+  const sourceTag = LAP_SOURCE_LABEL[session.lapSource] ?? 'Unknown source';
+  const sourceTone = LAP_SOURCE_TONE[session.lapSource] ?? LAP_SOURCE_TONE.none;
 
   return (
     <div className="p-2">
+      <div className={`mb-2 inline-flex items-center px-2 py-0.5 rounded-full border text-xs font-medium ${sourceTone}`}>
+        {sourceTag}
+      </div>
       {bestTime && (
         <div className="mb-3 p-2.5 rounded-lg bg-primary/10 border border-primary/20">
           <p className="text-xs text-muted-foreground">Best Lap</p>

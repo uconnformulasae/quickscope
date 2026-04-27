@@ -23,6 +23,8 @@ export interface ChannelSample {
   value: number;
 }
 
+export type LapSource = 'device' | 'gps_auto' | 'beacon_auto' | 'none';
+
 export interface LapMarker {
   timestamp: number;
   lapNumber: number;
@@ -43,6 +45,7 @@ export interface XRKSession {
   channels: Map<number, ChannelDef>;
   samples: Map<number, ChannelSample[]>;
   lapMarkers: LapMarker[];
+  lapSource: LapSource;
   durationMs: number;
   totalSamples: number;
 }

@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { uploadFile, fetchChannelData, type SessionInfo } from './lib/api';
+import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
@@ -109,6 +109,27 @@ export default function App() {
       });
     }
 
+    setProgress({ stage: 'Detecting laps...', percent: 85 });
+    let lapMarkers: { timestamp: number; lapNumber: number }[] = [];
+    let lapSource: 'device' | 'gps_auto' | 'beacon_auto' | 'none' = 'none';
+    try {
+      const lapsResp = await fetchLaps();
+      lapSource = lapsResp.source;
+      // The device returns startTime/endTime per lap in milliseconds; the
+      // chart's lapMarkers convention is one marker per lap boundary.
+      // Use startTime of each lap; the last lap's endTime closes the set.
+      if (lapsResp.laps.length > 0) {
+        lapMarkers = lapsResp.laps.map(l => ({
+          timestamp: l.startTime,
+          lapNumber: l.lapNumber,
+        }));
+        const last = lapsResp.laps[lapsResp.laps.length - 1];
+        lapMarkers.push({ timestamp: last.endTime, lapNumber: last.lapNumber + 1 });
+      }
+    } catch {
+      // Non-fatal: leave laps empty. The Lap tab will show "no markers".
+    }
+
     const session: XRKSession = {
       metadata: {
         vehicle: info.metadata.vehicle || 'Unknown',
@@ -121,7 +142,8 @@ export default function App() {
       },
       channels,
       samples,
-      lapMarkers: [],
+      lapMarkers,
+      lapSource,
       durationMs: info.durationMs,
       totalSamples: info.totalSamples,
     };

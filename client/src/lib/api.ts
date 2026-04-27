@@ -249,6 +249,26 @@ export async function fetchGPS(): Promise<GPSData | null> {
   return data.gps || null;
 }
 
+export type LapSource = 'device' | 'gps_auto' | 'beacon_auto' | 'none';
+
+export interface LapsResponse {
+  laps: {
+    lapNumber: number;
+    startTime: number;
+    endTime: number;
+    source: LapSource;
+  }[];
+  source: LapSource;
+}
+
+export async function fetchLaps(): Promise<LapsResponse> {
+  const res = await fetch(`${API_BASE}/api/laps`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch laps: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function exportCSV(channels: string[]): Promise<Blob> {
   const res = await fetch(
     `${API_BASE}/api/export?channels=${encodeURIComponent(channels.join(','))}`,

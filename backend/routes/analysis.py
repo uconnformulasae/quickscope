@@ -9,7 +9,7 @@ from fastapi import APIRouter, UploadFile, File, Query, HTTPException, Backgroun
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from services import session_store
+from services import session_store, lap_detection
 from state import (
     state, logger, background_sync, CHART_COLORS,
     parse_file, extract_session_info, parse_recorded_at,
@@ -113,15 +113,13 @@ async def get_laps():
     if not state.loaded:
         raise HTTPException(400, "No file loaded")
 
-    laps = []
-    if state.log.laps is not None and state.log.laps.num_rows > 0:
-        for i in range(state.log.laps.num_rows):
-            laps.append({
-                "lapNumber": state.log.laps.column("num")[i].as_py(),
-                "startTime": state.log.laps.column("start_time")[i].as_py(),
-                "endTime": state.log.laps.column("end_time")[i].as_py(),
-            })
-    return {"laps": laps}
+    def _channel_data(name: str):
+        if name in state.log.channels:
+            return channel_data(name, state.log.channels[name])
+        return None
+
+    laps, source = lap_detection.detect_laps(state.log, _channel_data)
+    return {"laps": laps, "source": source}
 
 
 @router.get("/gps")
