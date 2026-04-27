@@ -16,6 +16,8 @@ const RING_BUFFER_SIZE = 240; // 60 s at ~4 Hz
 
 type Status = 'idle' | 'probing' | 'connecting' | 'streaming' | 'paused' | 'error';
 
+const SUBSYSTEMS_PREVIEW = ['kkk', 'Syst', 'Fuel'] as const;
+
 export function LiveView({ onBack }: Props) {
   const [status, setStatus] = useState<Status>('idle');
   const [device, setDevice] = useState<LiveDeviceInfo | null>(null);
@@ -23,8 +25,10 @@ export function LiveView({ onBack }: Props) {
   const [latest, setLatest] = useState<Snapshot | null>(null);
   const [count, setCount] = useState(0);
   const [bufferStats, setBufferStats] = useState({ bySubsystem: {} as Record<string, number> });
+  const [previewMode, setPreviewMode] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const previewTimerRef = useRef<number | null>(null);
   const ringRef = useRef<Snapshot[]>([]);
   const pausedRef = useRef(false);
 
@@ -48,6 +52,10 @@ export function LiveView({ onBack }: Props) {
     return () => {
       wsRef.current?.close();
       wsRef.current = null;
+      if (previewTimerRef.current !== null) {
+        window.clearInterval(previewTimerRef.current);
+        previewTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -116,6 +124,54 @@ export function LiveView({ onBack }: Props) {
     setStatus(pausedRef.current ? 'paused' : 'streaming');
   };
 
+  const startPreview = () => {
+    if (previewTimerRef.current !== null) return;
+    setPreviewMode(true);
+    setError(null);
+    setDevice({ ip: 'preview', model: 'EVO5', serial: '00740', vehicle: 'UConn-EV (preview)' });
+    setStatus('streaming');
+    let frameNo = 0;
+    const baseTs = Math.floor(Date.now() % 1e7);
+    previewTimerRef.current = window.setInterval(() => {
+      if (pausedRef.current) return;
+      const subsystem = SUBSYSTEMS_PREVIEW[frameNo % SUBSYSTEMS_PREVIEW.length];
+      const snap: Snapshot = {
+        ts: baseTs + frameNo * 250,
+        subsystem,
+        raw: '',
+      };
+      ringRef.current.push(snap);
+      if (ringRef.current.length > RING_BUFFER_SIZE) {
+        ringRef.current.shift();
+      }
+      setLatest(snap);
+      setCount(ringRef.current.length);
+      if (frameNo % 8 === 0) {
+        const bySubsystem: Record<string, number> = {};
+        for (const s of ringRef.current) {
+          bySubsystem[s.subsystem] = (bySubsystem[s.subsystem] || 0) + 1;
+        }
+        setBufferStats({ bySubsystem });
+      }
+      frameNo += 1;
+    }, 250);
+  };
+
+  const stopPreview = () => {
+    if (previewTimerRef.current !== null) {
+      window.clearInterval(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+    setPreviewMode(false);
+    ringRef.current = [];
+    setCount(0);
+    setLatest(null);
+    setBufferStats({ bySubsystem: {} });
+    setStatus('idle');
+    setDevice(null);
+    pausedRef.current = false;
+  };
+
   const isLive = status === 'streaming' || status === 'paused';
 
   return (
@@ -177,14 +233,24 @@ export function LiveView({ onBack }: Props) {
       {/* Action bar — mirrors SessionBrowser */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border/50 bg-card/50">
         {!isLive ? (
-          <button
-            onClick={connect}
-            disabled={status === 'connecting' || status === 'probing'}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
-          >
-            <Wifi className="w-3.5 h-3.5" />
-            Connect
-          </button>
+          <>
+            <button
+              onClick={connect}
+              disabled={status === 'connecting' || status === 'probing'}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+            >
+              <Wifi className="w-3.5 h-3.5" />
+              Connect
+            </button>
+            <button
+              onClick={startPreview}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
+              title="Run the dashboard with synthetic data so you can see what it looks like without a connected AiM device"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              Preview UI (mock data)
+            </button>
+          </>
         ) : (
           <>
             <button
@@ -194,16 +260,22 @@ export function LiveView({ onBack }: Props) {
               {status === 'paused' ? <><Play className="w-3.5 h-3.5" /> Resume</> : <><Pause className="w-3.5 h-3.5" /> Pause</>}
             </button>
             <button
-              onClick={disconnect}
+              onClick={previewMode ? stopPreview : disconnect}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-red-500/10 text-red-500 dark:text-red-400 hover:bg-red-500/20 transition-colors"
             >
               <WifiOff className="w-3.5 h-3.5" />
-              Disconnect
+              {previewMode ? 'Exit preview' : 'Disconnect'}
             </button>
           </>
         )}
 
         <div className="flex-1" />
+
+        {previewMode && (
+          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 font-medium">
+            Preview mode — mock data
+          </span>
+        )}
 
         {isLive && (
           <span className="text-xs text-muted-foreground tabular">
@@ -214,12 +286,19 @@ export function LiveView({ onBack }: Props) {
 
       <main className="flex-1 overflow-auto">
         {status === 'error' && error && (
-          <div className="max-w-2xl mx-auto mt-6 mx-4">
+          <div className="max-w-2xl mx-auto mt-6 px-4">
             <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 flex items-start gap-3">
               <AlertCircle className="w-4 h-4 text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5" />
-              <div className="text-xs">
+              <div className="text-xs flex-1">
                 <p className="font-medium text-red-500 dark:text-red-400">Connection error</p>
                 <p className="text-muted-foreground mt-1">{error}</p>
+                <button
+                  onClick={startPreview}
+                  className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
+                >
+                  <Activity className="w-3 h-3" />
+                  Preview UI with mock data
+                </button>
               </div>
             </div>
           </div>
