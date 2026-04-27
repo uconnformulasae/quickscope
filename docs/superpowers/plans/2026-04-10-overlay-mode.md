@@ -1,8 +1,20 @@
 # Overlay Mode Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **STATUS — SHIPPED.** This feature was implemented and is live on `main`. The
+> chart-mode toggle (`ChartMode = 'separate' | 'overlay'`) is in
+> `client/src/lib/useXRKStore.ts`, the segmented control is in
+> `client/src/components/ChannelSidebar.tsx`, and the dynamic-margin / shared-
+> strip / alternating-Y-axis rendering lives in
+> `client/src/components/TelemetryChart.tsx` (search for `chartMode`,
+> `overlayAxisLayout`).
+>
+> The implementation diverged from this plan in one notable way: instead of
+> assigning each channel its own Y-axis on alternating sides, axes are grouped
+> by **unit** (`overlayAxisLayout` → `unitAxes` map keyed by units string), so
+> two channels in `°C` share one axis. The checkbox tasks below are kept as
+> historical reference — do not re-execute them.
 
-**Goal:** Add an overlay display mode that draws all selected channels on a single shared graph with independent color-coded Y-axes alternating left/right, toggled via a segmented control in the channel sidebar.
+**Goal (original):** Add an overlay display mode that draws all selected channels on a single shared graph with independent color-coded Y-axes alternating left/right, toggled via a segmented control in the channel sidebar.
 
 **Architecture:** A new `chartMode` state field controls whether `TelemetryChart` computes one strip (overlay) or N strips (separate). In overlay mode, the draw loop renders all channel traces in a single vertical area with dynamically expanded margins to accommodate alternating Y-axes. Cursor, delta, zoom, and pan behavior are unchanged.
 

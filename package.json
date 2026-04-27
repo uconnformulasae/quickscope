@@ -1,6 +1,6 @@
 {
   "name": "quickscope",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "MIT",
   "description": "Racing telemetry analysis tool for AiM data logger files",
   "author": "UConn Formula SAE Electric",
@@ -122,7 +122,7 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": true
+      "notarize": false
     },
     "dmg": {
       "title": "${productName} ${version}",
