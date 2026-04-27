@@ -24,67 +24,111 @@ interface ChannelMeta {
 
 const RING_BUFFER_SIZE = 240; // 60 s at ~4 Hz
 
-// Subset of the 103-channel EVO5 map (extracted from the channel-def frame
-// in the deep-dive). Used by preview mode to drive realistic-looking
-// values across the dashboard so users can see what live streaming will
-// look like without an actual device on the network.
+// Channel names below match the EXACT names the AiM device publishes in
+// its channel-config frame (verified against
+// docs/protocol/captures/analysis/q6_full_records.py extraction of the
+// 103-channel record list). Generators are tuned to CT-17 EV (UConn FSAE
+// Electric, 2026): 100s4p pack, 5 modules of 20s4p, 4.15 V/cell ESF cap →
+// pack max ~415 V, nominal ~370 V (per CT17_EV_Powertrain_Binder_Context).
+const PACK_V_MAX = 415;
+const PACK_V_NOMINAL = 370;
+const PACK_V_DERATE_LOW = 320;
+const PACK_TEMP_DERATE = 45;
 const PREVIEW_CHANNELS: ChannelMeta[] = [
-  { name: 'RPM',           unit: 'rpm', precision: 0, gen: (n) => 4500 + Math.sin(n * 0.08) * 1500 + Math.sin(n * 0.31) * 500 },
-  { name: 'Speed',         unit: 'kph', precision: 1, gen: (n) => 60 + Math.sin(n * 0.05) * 35 + Math.sin(n * 0.21) * 8 },
-  { name: 'Throttle',      unit: '%',   precision: 0, gen: (n) => Math.max(0, Math.min(100, 50 + Math.sin(n * 0.07) * 50)) },
-  { name: 'Brake',         unit: '%',   precision: 0, gen: (n) => Math.max(0, -Math.sin(n * 0.07) * 80) },
-  { name: 'Pack Voltage',  unit: 'V',   precision: 1, gen: (n) => 405 - Math.abs(Math.sin(n * 0.05)) * 40 },
-  { name: 'Pack Current',  unit: 'A',   precision: 1, gen: (n) => 45 + Math.sin(n * 0.09) * 30 },
-  { name: 'Pack Power',    unit: 'kW',  precision: 1, gen: (n) => 24 + Math.sin(n * 0.09) * 18 },
-  { name: 'Pack Temp',     unit: '°C',  precision: 1, gen: (n) => 28 + n * 0.001 + Math.sin(n * 0.02) * 1.5 },
-  { name: 'Motor Temp',    unit: '°C',  precision: 1, gen: (n) => 65 + Math.abs(Math.sin(n * 0.08)) * 35 },
-  { name: 'Inverter Temp', unit: '°C',  precision: 1, gen: (n) => 45 + Math.abs(Math.sin(n * 0.06)) * 25 },
-  { name: 'Coolant Temp',  unit: '°C',  precision: 1, gen: (n) => 26 + Math.sin(n * 0.04) * 2 },
-  { name: 'SOC',           unit: '%',   precision: 1, gen: (n) => Math.max(0, 85 - n * 0.005) },
-  { name: 'Lat G',         unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.13) * 1.4 },
-  { name: 'Long G',        unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.07) * 1.1 - 0.1 },
-  { name: 'Yaw Rate',      unit: '°/s', precision: 1, gen: (n) => Math.sin(n * 0.11) * 35 },
-  { name: 'Steering',      unit: '°',   precision: 0, gen: (n) => Math.sin(n * 0.10) * 90 },
-  { name: 'Pump 1',        unit: 'A',   precision: 2, gen: (n) => 1.5 + Math.sin(n * 0.05) * 0.2 },
-  { name: 'Pump 2',        unit: 'A',   precision: 2, gen: (n) => 2.0 + Math.sin(n * 0.07) * 0.15 },
+  // ── Vehicle dynamics ─────────────────────────────────────────────────
+  { name: 'RPM',                unit: 'rpm', precision: 0, gen: (n) => Math.max(0, 3500 + Math.sin(n * 0.08) * 2000 + Math.sin(n * 0.31) * 600) },
+  { name: 'LFspeed',            unit: 'kph', precision: 1, gen: (n) => Math.max(0, 55 + Math.sin(n * 0.05) * 38 + Math.sin(n * 0.21) * 8) },
+  { name: 'Throttle_Pos',       unit: '%',   precision: 0, gen: (n) => Math.max(0, Math.min(100, 50 + Math.sin(n * 0.07) * 50)) },
+  { name: 'BSE_Voltage',        unit: 'V',   precision: 2, gen: (n) => 0.5 + Math.max(0, -Math.sin(n * 0.07) * 3.5) },
+  { name: 'Direction',          unit: '',    precision: 0, gen: () => 1 },
+  { name: 'BrakeBias',          unit: '%',   precision: 1, gen: () => 58 },
+  // ── IMU ─────────────────────────────────────────────────────────────
+  { name: 'LateralAcc',         unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.13) * 1.4 },
+  { name: 'InlineAcc',          unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.07) * 1.1 - 0.1 },
+  { name: 'VerticalAcc',        unit: 'g',   precision: 2, gen: (n) => 1.0 + Math.sin(n * 0.21) * 0.15 },
+  { name: 'YawRate',            unit: '°/s', precision: 1, gen: (n) => Math.sin(n * 0.11) * 35 },
+  { name: 'RollRate',           unit: '°/s', precision: 1, gen: (n) => Math.sin(n * 0.10) * 8 },
+  { name: 'PitchRate',          unit: '°/s', precision: 1, gen: (n) => Math.sin(n * 0.09) * 5 },
+  // ── Brake pressure ───────────────────────────────────────────────────
+  { name: 'FrBrakePressure',    unit: 'psi', precision: 0, gen: (n) => Math.max(0, -Math.sin(n * 0.07) * 800) },
+  { name: 'RBrkPressure',       unit: 'psi', precision: 0, gen: (n) => Math.max(0, -Math.sin(n * 0.07) * 600) },
+  // ── Pack (Orion BMS aggregates — only what the live stream carries) ──
+  { name: 'Pack_Voltage',       unit: 'V',   precision: 1, gen: (n) => {
+      const throttle = Math.max(0, Math.min(100, 50 + Math.sin(n * 0.07) * 50));
+      const sag = (throttle / 100) * 30;
+      const soc = Math.max(0.3, 0.85 - n * 0.00005);
+      const restingV = PACK_V_DERATE_LOW + (PACK_V_MAX - PACK_V_DERATE_LOW) * soc;
+      return Math.min(PACK_V_MAX, restingV - sag);
+  } },
+  { name: 'Pack_Current',       unit: 'A',   precision: 1, gen: (n) => {
+      const throttle = Math.max(0, Math.min(100, 50 + Math.sin(n * 0.07) * 50));
+      return throttle * 0.85;  // CT-16 measured peak ~70 A; ~85 A headroom for CT-17
+  } },
+  { name: 'State_of_Charge',    unit: '%',   precision: 1, gen: (n) => Math.max(0, 85 - n * 0.005) },
+  { name: 'Pack_Temp',          unit: '°C',  precision: 1, gen: (n) => 28 + n * 0.001 + Math.sin(n * 0.02) * 1.5 },
+  { name: 'Min_Cell_Voltage',   unit: 'V',   precision: 3, gen: (n) => 3.65 + Math.sin(n * 0.06) * 0.05 },
+  { name: 'BMS_Disch_Lim',      unit: 'A',   precision: 0, gen: () => 120 },
+  { name: 'BMS_Disch_Enable',   unit: '',    precision: 0, gen: () => 1 },
+  { name: 'BMS_LV_input',       unit: 'V',   precision: 2, gen: (n) => 12.4 + Math.sin(n * 0.04) * 0.2 },
+  // ── Motor + Inverter (Cascadia CM200DX → Emrax 228 LC) ───────────────
+  { name: 'Motor_Temp',         unit: '°C',  precision: 1, gen: (n) => 55 + Math.abs(Math.sin(n * 0.08)) * 25 },
+  { name: 'Torque_Command',     unit: 'Nm',  precision: 0, gen: (n) => Math.max(0, Math.sin(n * 0.07) * 130) },
+  { name: 'Torque_Feedback',    unit: 'Nm',  precision: 0, gen: (n) => Math.max(0, Math.sin(n * 0.07) * 125) },
+  { name: 'MCU_Torque_Limit',   unit: 'Nm',  precision: 0, gen: () => 240 },
+  { name: 'MCU_DC_Current',     unit: 'A',   precision: 1, gen: (n) => Math.max(0, Math.sin(n * 0.07) * 80) },
+  { name: 'Phase_A_Current',    unit: 'A',   precision: 0, gen: (n) => Math.sin(n * 0.07) * 200 },
+  { name: 'Phase_B_Current',    unit: 'A',   precision: 0, gen: (n) => Math.sin(n * 0.07 + 2.094) * 200 },
+  { name: 'Phase_C_Current',    unit: 'A',   precision: 0, gen: (n) => Math.sin(n * 0.07 + 4.189) * 200 },
+  { name: 'Id_Feeback',         unit: 'A',   precision: 0, gen: (n) => -Math.sin(n * 0.07) * 30 },
+  { name: 'Iq_Feedback',        unit: 'A',   precision: 0, gen: (n) => Math.max(0, Math.sin(n * 0.07) * 180) },
+  { name: 'InverterEnable',     unit: '',    precision: 0, gen: () => 1 },
+  // ── External voltages / logger ───────────────────────────────────────
+  { name: 'External Voltage',   unit: 'V',   precision: 2, gen: (n) => 12.4 + Math.sin(n * 0.04) * 0.2 },
+  { name: 'Logger Temperature', unit: '°C',  precision: 1, gen: (n) => 30 + Math.sin(n * 0.03) * 1.5 },
 ];
 
-// Five segments / modules in the actual UConn FSAE accumulator.
+// CT-17 has 5 modules of 20s4p (80 cells/module). Per-module data is NOT
+// in the AiM live stream — Orion BMS broadcasts pack-level aggregates only
+// (Pack_Voltage, Pack_Temp, Min_Cell_Voltage, SOC). The Accumulator panel
+// is structured around those plus BMS state channels.
 const NUM_MODULES = 5;
 
-// Names of every channel rendered by an explicit panel above. The "Other"
-// panel filters anything NOT in this set so newly-added channels appear
+// Channels rendered by an explicit panel. The "Other" panel filters
+// everything NOT in this set so newly-added device channels (e.g. the ~70
+// fault/alarm bits, launch-control telemetry, lap timing) appear
 // automatically without layout edits.
 const PANEL_OWNED_CHANNELS = new Set<string>([
   // Pack hero
-  'Pack Voltage', 'Pack Current', 'SOC', 'Pack Power',
+  'Pack_Voltage', 'Pack_Current', 'State_of_Charge',
+  // Accumulator (Orion-exposed)
+  'Pack_Temp', 'Min_Cell_Voltage', 'BMS_Disch_Lim', 'BMS_Disch_Enable', 'BMS_LV_input',
   // Cooling
-  'Pump 1', 'Pump 2', 'Motor Temp', 'Inverter Temp', 'Coolant Temp', 'Pack Temp',
-  // Vehicle
-  'Throttle', 'Brake', 'Speed', 'RPM', 'Steering', 'Yaw Rate', 'Lat G', 'Long G',
+  'Motor_Temp',
+  // Vehicle dynamics
+  'Throttle_Pos', 'BSE_Voltage', 'LFspeed', 'RPM', 'YawRate', 'RollRate', 'PitchRate',
+  'LateralAcc', 'InlineAcc', 'VerticalAcc',
+  'FrBrakePressure', 'RBrkPressure', 'BrakeBias', 'Direction',
+  // Inverter / motor
+  'Torque_Command', 'Torque_Feedback', 'MCU_Torque_Limit', 'MCU_DC_Current',
+  'Phase_A_Current', 'Phase_B_Current', 'Phase_C_Current',
+  'Id_Feeback', 'Iq_Feedback', 'InverterEnable',
 ]);
-
-function isModuleChannel(name: string): boolean {
-  return /^Module \d+ [VT]$/.test(name);
-}
 
 function generatePreviewChannels(frameNo: number): Record<string, number> {
   const out: Record<string, number> = {};
   for (const ch of PREVIEW_CHANNELS) {
     out[ch.name] = ch.gen(frameNo);
   }
-  // Per-module pack voltage + temp (5 modules, segment-level reporting).
-  for (let i = 0; i < NUM_MODULES; i++) {
-    out[`Module ${i + 1} V`] = 80 + Math.sin(frameNo * 0.05 + i * 0.5) * 1.5;
-    out[`Module ${i + 1} T`] = 25 + Math.sin(frameNo * 0.03 + i * 0.7) * 2.0;
-  }
-  // A few demo "uncategorized" channels so the Other panel is visibly
-  // populated in preview. In real-device mode any channel name we haven't
-  // wired into an explicit panel will land here automatically.
-  out['IMD Resistance'] = 17 + Math.sin(frameNo * 0.02) * 0.5;
-  out['Air Pressure F'] = 12 + Math.sin(frameNo * 0.08) * 1;
-  out['Air Pressure R'] = 11.5 + Math.sin(frameNo * 0.08 + 1) * 1;
-  out['Battery 12V'] = 12.4 + Math.sin(frameNo * 0.04) * 0.2;
+  // Demo channels for the "Other" panel — exemplars of what real-device
+  // mode will surface (lap timing, launch control, faults/alarms). Names
+  // match the actual AiM channel-config frame.
+  out['Lap Time']        = 45 + Math.sin(frameNo * 0.005) * 3;
+  out['Best Time']       = 43.359;
+  out['Predictive Time'] = 0.5 + Math.sin(frameNo * 0.05) * 2;
+  out['Total Odometer']  = 1234.5 + frameNo * 0.001;
+  out['lc_slip_ratio']   = Math.abs(Math.sin(frameNo * 0.09)) * 0.08;
+  out['lc_enabled']      = 1;
+  out['lvcu_motor_speed'] = out['RPM'] ?? 0;
   return out;
 }
 
@@ -460,79 +504,108 @@ function Dashboard({
   const ch = latest?.channels ?? {};
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 max-w-[1600px] mx-auto">
-      {/* TOP STRIP — pack-level summary (4 stat cards across 12 cols) */}
-      <Panel title="Pack" className="lg:col-span-12" tone="primary">
+      {/* TOP STRIP — pack-level summary. CT-17 nominal 370 V / max 415 V. */}
+      <Panel title="Pack · 100s4p · max 415 V" className="lg:col-span-12" tone="primary">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <BigStat label="Voltage"  value={fmt(ch['Pack Voltage'], 1)} unit="V"  tone="primary" />
-          <BigStat label="Current"  value={fmt(ch['Pack Current'], 1)} unit="A"  tone="primary" />
-          <BigStat label="SOC"      value={fmt(ch['SOC'], 1)}          unit="%"  tone="emerald" />
-          <BigStat label="Power"    value={fmt(ch['Pack Power'], 1)}   unit="kW" tone="amber" />
+          <BigStat label="Pack Voltage" value={fmt(ch['Pack_Voltage'], 1)}     unit="V"  tone="primary" />
+          <BigStat label="Pack Current" value={fmt(ch['Pack_Current'], 1)}     unit="A"  tone="primary" />
+          <BigStat label="SOC"          value={fmt(ch['State_of_Charge'], 1)}  unit="%"  tone="emerald" />
+          <BigStat
+            label="Pack Power"
+            value={fmt(((ch['Pack_Voltage'] ?? 0) * (ch['Pack_Current'] ?? 0)) / 1000, 1)}
+            unit="kW"
+            tone="amber"
+          />
+        </div>
+        <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] text-muted-foreground">
+          <span>Max V <span className="tabular text-foreground">{PACK_V_MAX}</span> · Nom <span className="tabular text-foreground">{PACK_V_NOMINAL}</span></span>
+          <span>I limit <span className="tabular text-foreground">{fmt(ch['BMS_Disch_Lim'], 0)}</span> A</span>
+          <span>Min cell V <span className="tabular text-foreground">{fmt(ch['Min_Cell_Voltage'], 3)}</span></span>
+          <span>Disch <span className={`tabular ${ch['BMS_Disch_Enable'] ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+            {ch['BMS_Disch_Enable'] ? 'ENABLED' : 'DISABLED'}
+          </span></span>
         </div>
       </Panel>
 
-      {/* LEFT COLUMN — Accumulator + Cooling */}
-      <Panel title={`Accumulator · ${NUM_MODULES} modules`} className="lg:col-span-5">
-        <div className="grid grid-cols-5 gap-1.5">
+      {/* Accumulator — Orion broadcasts pack-level only; no per-module
+          channels in the live stream. Display the structural breakdown so
+          users know it's 5 modules × 20s4p, but data is pack-aggregate. */}
+      <Panel title={`Accumulator · ${NUM_MODULES} modules · 20s4p each`} className="lg:col-span-5">
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <CoolStat label="Pack Voltage"  value={fmt(ch['Pack_Voltage'], 1)}      unit="V"  borderClass="border-emerald-500/40" />
+          <CoolStat label="Pack Temp"     value={fmt(ch['Pack_Temp'], 1)}         unit="°C" borderClass={ (ch['Pack_Temp'] ?? 0) > PACK_TEMP_DERATE ? 'border-red-500/60' : 'border-emerald-500/40' } />
+          <CoolStat label="Min Cell V"    value={fmt(ch['Min_Cell_Voltage'], 3)}  unit="V"  borderClass="border-emerald-500/40" />
+          <CoolStat label="BMS LV"        value={fmt(ch['BMS_LV_input'], 2)}      unit="V"  borderClass="border-emerald-500/40" />
+        </div>
+        {/* Module structural map — visual reminder that there are 5
+            segments even though we only get aggregate data. Each block
+            renders the pack voltage divided by 5 (estimated per-module
+            average) and the single Pack_Temp value. */}
+        <div className="grid grid-cols-5 gap-1">
           {Array.from({ length: NUM_MODULES }, (_, i) => {
-            const v = ch[`Module ${i + 1} V`] ?? 0;
-            const t = ch[`Module ${i + 1} T`] ?? 0;
-            // Module nominal range ~ 70..90 V (5 modules × ~16-18 V each
-            // depending on cell count). Display is just a relative bar.
-            const pct = Math.max(0, Math.min(1, (v - 70) / 20));
+            const avgV = (ch['Pack_Voltage'] ?? 0) / NUM_MODULES;
+            const t = ch['Pack_Temp'] ?? 0;
             return (
               <div
                 key={i}
-                className="rounded-md border border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-500/10 px-1.5 py-2"
+                className="rounded border border-emerald-500/25 bg-emerald-500/5 px-1.5 py-1.5 text-center"
+                title={`Module ${i + 1} of ${NUM_MODULES} · 20s4p · estimated avg from pack aggregate`}
               >
                 <p className="text-[9px] uppercase tracking-wide text-muted-foreground">M{i + 1}</p>
-                <p className="text-base font-bold tabular text-emerald-600 dark:text-emerald-400 mt-0.5">{v.toFixed(1)}V</p>
-                <p className="text-[10px] text-muted-foreground tabular mt-0.5">{t.toFixed(1)}°C</p>
-                <div className="mt-1.5 h-1 rounded-full bg-emerald-500/20 overflow-hidden">
-                  <div className="h-full bg-emerald-500" style={{ width: `${pct * 100}%` }} />
-                </div>
+                <p className="text-xs font-bold tabular text-emerald-600 dark:text-emerald-400 mt-0.5">~{avgV.toFixed(0)}V</p>
+                <p className="text-[9px] text-muted-foreground tabular">{t.toFixed(0)}°C</p>
               </div>
             );
           })}
         </div>
+        <p className="text-[10px] text-muted-foreground/60 mt-2 leading-snug">
+          Per-module voltages aren't broadcast on the AiM live stream — Orion BMS
+          only exposes pack aggregates. Module values shown are <span className="font-medium">estimates</span> (Pack ÷ {NUM_MODULES}).
+        </p>
       </Panel>
 
       <Panel title="Cooling" className="lg:col-span-4">
         <div className="grid grid-cols-2 gap-2">
-          <CoolStat label="Pump 1"    value={fmt(ch['Pump 1'], 2)}     unit="A"   borderClass="border-amber-500/40" />
-          <CoolStat label="Pump 2"    value={fmt(ch['Pump 2'], 2)}     unit="A"   borderClass="border-amber-500/40" />
-          <CoolStat label="Motor"     value={fmt(ch['Motor Temp'], 0)} unit="°C"  borderClass="border-emerald-500/40" />
-          <CoolStat label="Inverter"  value={fmt(ch['Inverter Temp'], 0)} unit="°C" borderClass="border-emerald-500/40" />
-          <CoolStat label="Coolant"   value={fmt(ch['Coolant Temp'], 1)} unit="°C" borderClass="border-cyan-500/40" />
-          <CoolStat label="Pack"      value={fmt(ch['Pack Temp'], 1)}    unit="°C" borderClass="border-red-500/40" />
+          <CoolStat label="Motor Temp" value={fmt(ch['Motor_Temp'], 1)}  unit="°C" borderClass="border-emerald-500/40" />
+          <CoolStat label="Pack Temp"  value={fmt(ch['Pack_Temp'], 1)}   unit="°C" borderClass={ (ch['Pack_Temp'] ?? 0) > PACK_TEMP_DERATE ? 'border-red-500/60' : 'border-cyan-500/40' } />
+          <CoolStat label="Logger"     value={fmt(ch['Logger Temperature'], 1)} unit="°C" borderClass="border-muted-foreground/30" />
+          <CoolStat label="Ambient"    value="—"                          unit=""   borderClass="border-muted-foreground/30" />
         </div>
+        <p className="text-[10px] text-muted-foreground/60 mt-2 leading-snug">
+          AiM live stream exposes <span className="font-medium">Motor_Temp</span> and <span className="font-medium">Pack_Temp</span> as the only thermal readings.
+          Inverter/coolant/pump telemetry runs on the Cascadia/PMC CAN bus
+          (not bridged into AiM logging in this firmware).
+        </p>
       </Panel>
 
-      {/* RIGHT COLUMN — Vehicle Overview */}
+      {/* Vehicle dynamics. Channel names match AiM exactly. */}
       <Panel title="Vehicle" className="lg:col-span-3">
         <div className="space-y-2.5">
-          {/* Throttle / Brake bar like Athena's THR/BRK header */}
+          {/* Throttle / Brake bar */}
           <div>
             <div className="flex items-center justify-between text-[10px] mb-1">
-              <span className="text-emerald-600 dark:text-emerald-400 font-medium">THR {fmt(ch['Throttle'], 0)}%</span>
-              <span className="text-red-500 dark:text-red-400 font-medium">BRK {fmt(ch['Brake'], 0)}%</span>
+              <span className="text-emerald-600 dark:text-emerald-400 font-medium">THR {fmt(ch['Throttle_Pos'], 0)}%</span>
+              <span className="text-red-500 dark:text-red-400 font-medium">
+                FR/RR {fmt(ch['FrBrakePressure'], 0)}/{fmt(ch['RBrkPressure'], 0)}
+              </span>
             </div>
             <div className="flex gap-0.5 h-1.5">
               <div className="flex-1 bg-muted/50 rounded-l-full overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-l-full" style={{ width: `${ch['Throttle'] ?? 0}%` }} />
+                <div className="h-full bg-emerald-500 rounded-l-full" style={{ width: `${ch['Throttle_Pos'] ?? 0}%` }} />
               </div>
               <div className="flex-1 bg-muted/50 rounded-r-full overflow-hidden">
-                <div className="h-full bg-red-500 rounded-r-full ml-auto" style={{ width: `${ch['Brake'] ?? 0}%` }} />
+                <div className="h-full bg-red-500 rounded-r-full ml-auto" style={{ width: `${Math.min(100, (ch['FrBrakePressure'] ?? 0) / 8)}%` }} />
               </div>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <VehicleStat label="Speed"    value={fmt(ch['Speed'], 0)} unit="kph" />
-            <VehicleStat label="RPM"      value={fmt(ch['RPM'], 0)}   unit="" />
-            <VehicleStat label="Steering" value={fmt(ch['Steering'], 0)} unit="°" />
-            <VehicleStat label="Yaw"      value={fmt(ch['Yaw Rate'], 1)} unit="°/s" />
-            <VehicleStat label="Lat G"    value={fmt(ch['Lat G'], 2)}  unit="g" />
-            <VehicleStat label="Long G"   value={fmt(ch['Long G'], 2)} unit="g" />
+            <VehicleStat label="Speed"  value={fmt(ch['LFspeed'], 0)}  unit="kph" />
+            <VehicleStat label="RPM"    value={fmt(ch['RPM'], 0)}      unit="" />
+            <VehicleStat label="Yaw"    value={fmt(ch['YawRate'], 1)}  unit="°/s" />
+            <VehicleStat label="Roll"   value={fmt(ch['RollRate'], 1)} unit="°/s" />
+            <VehicleStat label="Lat G"  value={fmt(ch['LateralAcc'], 2)} unit="g" />
+            <VehicleStat label="Long G" value={fmt(ch['InlineAcc'], 2)}  unit="g" />
           </div>
         </div>
       </Panel>
@@ -554,7 +627,7 @@ function Dashboard({
       >
         {(() => {
           const otherEntries = Object.entries(ch).filter(
-            ([name]) => !PANEL_OWNED_CHANNELS.has(name) && !isModuleChannel(name),
+            ([name]) => !PANEL_OWNED_CHANNELS.has(name),
           );
           if (otherEntries.length === 0) {
             return (
