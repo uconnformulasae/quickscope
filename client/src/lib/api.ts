@@ -269,6 +269,27 @@ export async function fetchLaps(): Promise<LapsResponse> {
   return res.json();
 }
 
+export interface GPSPreview {
+  points: [number, number][];
+  bounds: {
+    minLat: number;
+    maxLat: number;
+    minLon: number;
+    maxLon: number;
+  };
+  pointCount: number;
+}
+
+export async function fetchGPSPreview(sessionId: string): Promise<GPSPreview | null> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/gps-preview`);
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    throw new Error(`Failed to fetch GPS preview: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.preview;
+}
+
 export async function exportCSV(channels: string[]): Promise<Blob> {
   const res = await fetch(
     `${API_BASE}/api/export?channels=${encodeURIComponent(channels.join(','))}`,

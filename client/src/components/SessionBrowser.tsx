@@ -12,6 +12,7 @@ import {
 import { AimSessionPicker } from './AimSessionPicker';
 import { QuickScopeLogo } from './QuickScopeLogo';
 import { ThemeToggle } from './ThemeToggle';
+import { GPSThumbnail } from './GPSThumbnail';
 
 interface SessionBrowserProps {
   onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
@@ -365,9 +366,14 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, theme, onToggl
                     <StatusIcon className={`w-4 h-4 ${statusCfg.color}`} />
                   </div>
 
+                  {/* GPS thumbnail (only for sessions with a local file) */}
+                  {session.local_path && (
+                    <GPSThumbnail sessionId={session.id} size={36} />
+                  )}
+
                   {/* Main info */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       {renamingId === session.id ? (
                         <input
                           ref={renameInputRef}
@@ -387,6 +393,11 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, theme, onToggl
                           {session.aim_session_id || session.filename}
                         </span>
                       )}
+                      {session.track_name && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary dark:text-primary border border-primary/20 flex-shrink-0">
+                          {session.track_name}
+                        </span>
+                      )}
                       {session.sync_status === 'remote_only' && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 dark:text-blue-400 flex-shrink-0">
                           click to download
@@ -394,8 +405,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, theme, onToggl
                       )}
                     </div>
                     <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                      {session.track_name && <span>{session.track_name}</span>}
                       {session.driver_name && <span>{session.driver_name}</span>}
+                      {session.vehicle_name && <span>{session.vehicle_name}</span>}
                       {session.recorded_at && <span>{formatDate(session.recorded_at)}</span>}
                     </div>
                   </div>
