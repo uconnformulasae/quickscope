@@ -49,18 +49,42 @@ const PREVIEW_CHANNELS: ChannelMeta[] = [
   { name: 'Pump 2',        unit: 'A',   precision: 2, gen: (n) => 2.0 + Math.sin(n * 0.07) * 0.15 },
 ];
 
-const NUM_CELLS = 8;
+// Five segments / modules in the actual UConn FSAE accumulator.
+const NUM_MODULES = 5;
+
+// Names of every channel rendered by an explicit panel above. The "Other"
+// panel filters anything NOT in this set so newly-added channels appear
+// automatically without layout edits.
+const PANEL_OWNED_CHANNELS = new Set<string>([
+  // Pack hero
+  'Pack Voltage', 'Pack Current', 'SOC', 'Pack Power',
+  // Cooling
+  'Pump 1', 'Pump 2', 'Motor Temp', 'Inverter Temp', 'Coolant Temp', 'Pack Temp',
+  // Vehicle
+  'Throttle', 'Brake', 'Speed', 'RPM', 'Steering', 'Yaw Rate', 'Lat G', 'Long G',
+]);
+
+function isModuleChannel(name: string): boolean {
+  return /^Module \d+ [VT]$/.test(name);
+}
 
 function generatePreviewChannels(frameNo: number): Record<string, number> {
   const out: Record<string, number> = {};
   for (const ch of PREVIEW_CHANNELS) {
     out[ch.name] = ch.gen(frameNo);
   }
-  // 8 synthetic cell voltages + temps
-  for (let i = 0; i < NUM_CELLS; i++) {
-    out[`Cell ${i + 1} V`] = 3.86 + Math.sin(frameNo * 0.05 + i * 0.5) * 0.03;
-    out[`Cell ${i + 1} T`] = 25 + Math.sin(frameNo * 0.03 + i * 0.7) * 1.5;
+  // Per-module pack voltage + temp (5 modules, segment-level reporting).
+  for (let i = 0; i < NUM_MODULES; i++) {
+    out[`Module ${i + 1} V`] = 80 + Math.sin(frameNo * 0.05 + i * 0.5) * 1.5;
+    out[`Module ${i + 1} T`] = 25 + Math.sin(frameNo * 0.03 + i * 0.7) * 2.0;
   }
+  // A few demo "uncategorized" channels so the Other panel is visibly
+  // populated in preview. In real-device mode any channel name we haven't
+  // wired into an explicit panel will land here automatically.
+  out['IMD Resistance'] = 17 + Math.sin(frameNo * 0.02) * 0.5;
+  out['Air Pressure F'] = 12 + Math.sin(frameNo * 0.08) * 1;
+  out['Air Pressure R'] = 11.5 + Math.sin(frameNo * 0.08 + 1) * 1;
+  out['Battery 12V'] = 12.4 + Math.sin(frameNo * 0.04) * 0.2;
   return out;
 }
 
@@ -447,21 +471,23 @@ function Dashboard({
       </Panel>
 
       {/* LEFT COLUMN — Accumulator + Cooling */}
-      <Panel title="Accumulator" className="lg:col-span-5">
-        <div className="grid grid-cols-4 gap-1.5">
-          {Array.from({ length: NUM_CELLS }, (_, i) => {
-            const v = ch[`Cell ${i + 1} V`] ?? 0;
-            const t = ch[`Cell ${i + 1} T`] ?? 0;
-            const pct = Math.max(0, Math.min(1, (v - 3.0) / 1.2));
+      <Panel title={`Accumulator · ${NUM_MODULES} modules`} className="lg:col-span-5">
+        <div className="grid grid-cols-5 gap-1.5">
+          {Array.from({ length: NUM_MODULES }, (_, i) => {
+            const v = ch[`Module ${i + 1} V`] ?? 0;
+            const t = ch[`Module ${i + 1} T`] ?? 0;
+            // Module nominal range ~ 70..90 V (5 modules × ~16-18 V each
+            // depending on cell count). Display is just a relative bar.
+            const pct = Math.max(0, Math.min(1, (v - 70) / 20));
             return (
               <div
                 key={i}
-                className="rounded-md border border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-500/10 px-1.5 py-1.5"
+                className="rounded-md border border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-500/10 px-1.5 py-2"
               >
-                <p className="text-[9px] uppercase tracking-wide text-muted-foreground">S{i + 1}</p>
-                <p className="text-sm font-bold tabular text-emerald-600 dark:text-emerald-400 mt-0.5">{v.toFixed(2)}V</p>
-                <p className="text-[9px] text-muted-foreground tabular mt-0.5">{t.toFixed(0)}°C</p>
-                <div className="mt-1 h-0.5 rounded-full bg-emerald-500/20 overflow-hidden">
+                <p className="text-[9px] uppercase tracking-wide text-muted-foreground">M{i + 1}</p>
+                <p className="text-base font-bold tabular text-emerald-600 dark:text-emerald-400 mt-0.5">{v.toFixed(1)}V</p>
+                <p className="text-[10px] text-muted-foreground tabular mt-0.5">{t.toFixed(1)}°C</p>
+                <div className="mt-1.5 h-1 rounded-full bg-emerald-500/20 overflow-hidden">
                   <div className="h-full bg-emerald-500" style={{ width: `${pct * 100}%` }} />
                 </div>
               </div>
@@ -511,31 +537,60 @@ function Dashboard({
         </div>
       </Panel>
 
-      {/* BOTTOM STRIP — full channel grid + buffer composition */}
+      {/* BOTTOM STRIP — uncategorized channels (auto-fallback) */}
       <Panel
-        title="All channels"
+        title="Other channels"
         className="lg:col-span-9"
-        rightSlot={previewMode && (
-          <span className="text-[10px] text-amber-600 dark:text-amber-400">synthetic preview values</span>
-        )}
+        rightSlot={
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-muted-foreground">
+              channels not yet wired into a panel
+            </span>
+            {previewMode && (
+              <span className="text-[10px] text-amber-600 dark:text-amber-400">synthetic preview values</span>
+            )}
+          </div>
+        }
       >
-        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1.5">
-          {PREVIEW_CHANNELS.map((cm) => {
-            const val = ch[cm.name];
+        {(() => {
+          const otherEntries = Object.entries(ch).filter(
+            ([name]) => !PANEL_OWNED_CHANNELS.has(name) && !isModuleChannel(name),
+          );
+          if (otherEntries.length === 0) {
             return (
-              <div
-                key={cm.name}
-                className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5"
-              >
-                <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate">{cm.name}</p>
-                <p className="text-sm font-semibold tabular mt-0.5 text-foreground">
-                  {fmt(val, cm.precision)}
-                  <span className="text-[9px] text-muted-foreground font-normal ml-1">{cm.unit}</span>
-                </p>
-              </div>
+              <p className="text-[11px] text-muted-foreground/60">
+                No other channels in this snapshot. New channels added to the device's
+                channel-config will appear here automatically.
+              </p>
             );
-          })}
-        </div>
+          }
+          // Sort alphabetically so the panel is stable across renders.
+          otherEntries.sort(([a], [b]) => a.localeCompare(b));
+          return (
+            <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1.5">
+              {otherEntries.map(([name, val]) => {
+                // Try to find an explicit precision; fall back to a sensible default.
+                const meta = PREVIEW_CHANNELS.find((m) => m.name === name);
+                const precision = meta?.precision ?? (Math.abs(val) >= 100 ? 0 : 2);
+                const unit = meta?.unit ?? '';
+                return (
+                  <div
+                    key={name}
+                    className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5"
+                  >
+                    <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={name}>
+                      {name}
+                    </p>
+                    <p className="text-sm font-semibold tabular mt-0.5 text-foreground">
+                      {fmt(val, precision)}
+                      {unit && <span className="text-[9px] text-muted-foreground font-normal ml-1">{unit}</span>}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </Panel>
 
       <Panel title="Stream health" className="lg:col-span-3">
