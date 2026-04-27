@@ -31,20 +31,35 @@ const RING_BUFFER_SIZE = 240; // 60 s at ~4 Hz
 const PREVIEW_CHANNELS: ChannelMeta[] = [
   { name: 'RPM',           unit: 'rpm', precision: 0, gen: (n) => 4500 + Math.sin(n * 0.08) * 1500 + Math.sin(n * 0.31) * 500 },
   { name: 'Speed',         unit: 'kph', precision: 1, gen: (n) => 60 + Math.sin(n * 0.05) * 35 + Math.sin(n * 0.21) * 8 },
-  { name: 'Throttle',      unit: '%',   precision: 1, gen: (n) => 50 + Math.sin(n * 0.07) * 45 },
-  { name: 'Brake',         unit: '%',   precision: 1, gen: (n) => Math.max(0, -Math.sin(n * 0.07) * 80) },
+  { name: 'Throttle',      unit: '%',   precision: 0, gen: (n) => Math.max(0, Math.min(100, 50 + Math.sin(n * 0.07) * 50)) },
+  { name: 'Brake',         unit: '%',   precision: 0, gen: (n) => Math.max(0, -Math.sin(n * 0.07) * 80) },
   { name: 'Pack Voltage',  unit: 'V',   precision: 1, gen: (n) => 405 - Math.abs(Math.sin(n * 0.05)) * 40 },
+  { name: 'Pack Current',  unit: 'A',   precision: 1, gen: (n) => 45 + Math.sin(n * 0.09) * 30 },
+  { name: 'Pack Power',    unit: 'kW',  precision: 1, gen: (n) => 24 + Math.sin(n * 0.09) * 18 },
   { name: 'Pack Temp',     unit: '°C',  precision: 1, gen: (n) => 28 + n * 0.001 + Math.sin(n * 0.02) * 1.5 },
   { name: 'Motor Temp',    unit: '°C',  precision: 1, gen: (n) => 65 + Math.abs(Math.sin(n * 0.08)) * 35 },
+  { name: 'Inverter Temp', unit: '°C',  precision: 1, gen: (n) => 45 + Math.abs(Math.sin(n * 0.06)) * 25 },
+  { name: 'Coolant Temp',  unit: '°C',  precision: 1, gen: (n) => 26 + Math.sin(n * 0.04) * 2 },
   { name: 'SOC',           unit: '%',   precision: 1, gen: (n) => Math.max(0, 85 - n * 0.005) },
   { name: 'Lat G',         unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.13) * 1.4 },
   { name: 'Long G',        unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.07) * 1.1 - 0.1 },
+  { name: 'Yaw Rate',      unit: '°/s', precision: 1, gen: (n) => Math.sin(n * 0.11) * 35 },
+  { name: 'Steering',      unit: '°',   precision: 0, gen: (n) => Math.sin(n * 0.10) * 90 },
+  { name: 'Pump 1',        unit: 'A',   precision: 2, gen: (n) => 1.5 + Math.sin(n * 0.05) * 0.2 },
+  { name: 'Pump 2',        unit: 'A',   precision: 2, gen: (n) => 2.0 + Math.sin(n * 0.07) * 0.15 },
 ];
+
+const NUM_CELLS = 8;
 
 function generatePreviewChannels(frameNo: number): Record<string, number> {
   const out: Record<string, number> = {};
   for (const ch of PREVIEW_CHANNELS) {
     out[ch.name] = ch.gen(frameNo);
+  }
+  // 8 synthetic cell voltages + temps
+  for (let i = 0; i < NUM_CELLS; i++) {
+    out[`Cell ${i + 1} V`] = 3.86 + Math.sin(frameNo * 0.05 + i * 0.5) * 0.03;
+    out[`Cell ${i + 1} T`] = 25 + Math.sin(frameNo * 0.03 + i * 0.7) * 1.5;
   }
   return out;
 }
@@ -71,11 +86,15 @@ export function LiveView({ onBack }: Props) {
   const previewTimerRef = useRef<number | null>(null);
   const ringRef = useRef<Snapshot[]>([]);
   const pausedRef = useRef(false);
+  // Once the user has taken any explicit action (Connect, Preview), the
+  // mount-time UDP probe's late-arriving response must not clobber state.
+  const userActionTakenRef = useRef(false);
 
   useEffect(() => {
     setStatus('probing');
     fetchLiveStatus()
       .then(s => {
+        if (userActionTakenRef.current) return;
         if (s.reachable && s.device) {
           setDevice(s.device);
           setStatus('idle');
@@ -85,6 +104,7 @@ export function LiveView({ onBack }: Props) {
         }
       })
       .catch(err => {
+        if (userActionTakenRef.current) return;
         setStatus('error');
         setError(err instanceof Error ? err.message : String(err));
       });
@@ -101,6 +121,7 @@ export function LiveView({ onBack }: Props) {
 
   const connect = () => {
     if (wsRef.current) return;
+    userActionTakenRef.current = true;
     setStatus('connecting');
     setError(null);
     const ws = new WebSocket(liveWebSocketUrl());
@@ -166,6 +187,7 @@ export function LiveView({ onBack }: Props) {
 
   const startPreview = () => {
     if (previewTimerRef.current !== null) return;
+    userActionTakenRef.current = true;
     // Tear down any in-flight WebSocket *and* its callbacks before starting
     // preview. Otherwise a pending ws.onclose (e.g. from a failed Connect a
     // moment ago) will fire after we set status='streaming' and clobber it
@@ -362,76 +384,13 @@ export function LiveView({ onBack }: Props) {
         )}
 
         {isLive && (
-          <div className="max-w-4xl mx-auto p-4 space-y-3">
-            <div className="grid grid-cols-3 gap-2">
-              <Stat label="Frames received" value={count.toString()} />
-              <Stat
-                label="Latest timestamp"
-                value={latest ? `${(latest.ts / 1000).toFixed(2)}s` : '—'}
-              />
-              <Stat label="Latest subsystem" value={latest?.subsystem || '—'} mono />
-            </div>
-
-            {/* Live channel grid — populated in preview mode; real frames will
-                drive this once the offset→name decoder lands. */}
-            {latest?.channels && (
-              <div className="rounded-lg bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 p-3">
-                <h3 className="text-xs font-medium text-foreground mb-3 flex items-center justify-between">
-                  <span>Live channels</span>
-                  {previewMode && (
-                    <span className="text-[10px] text-amber-600 dark:text-amber-400 font-normal">synthetic preview values</span>
-                  )}
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                  {PREVIEW_CHANNELS.map((ch) => {
-                    const val = latest.channels?.[ch.name];
-                    const display = val !== undefined ? formatChannelValue(val, ch.precision) : '—';
-                    return (
-                      <div
-                        key={ch.name}
-                        className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2.5 py-2"
-                      >
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{ch.name}</p>
-                        <p className="text-base font-semibold tabular mt-0.5 text-foreground">
-                          {display}
-                          <span className="text-[10px] text-muted-foreground font-normal ml-1">{ch.unit}</span>
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <div className="rounded-lg bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 p-3">
-              <h3 className="text-xs font-medium text-foreground mb-2.5">
-                Buffer composition
-                <span className="text-muted-foreground font-normal ml-2">last {RING_BUFFER_SIZE} frames</span>
-              </h3>
-              <div className="space-y-1.5">
-                {Object.entries(bufferStats.bySubsystem).map(([subsystem, n]) => (
-                  <div key={subsystem} className="flex items-center gap-2 text-xs">
-                    <span className="font-mono text-muted-foreground w-20 truncate">{subsystem}</span>
-                    <div className="flex-1 h-1.5 bg-muted/50 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-primary rounded-full"
-                        style={{ width: `${(n / Math.max(1, count)) * 100}%` }}
-                      />
-                    </div>
-                    <span className="tabular text-muted-foreground w-10 text-right">{n}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {!previewMode && (
-              <div className="rounded-lg border border-border/50 bg-card/50 p-3 text-[11px] text-muted-foreground leading-relaxed">
-                Field-level decoding of real-device channel values is in progress —
-                the offset→name decoder is being wired in. Once it lands, the Live
-                channels grid above will populate from the actual 547-byte snapshots.
-                For now this view confirms the live stream is healthy.
-              </div>
-            )}
+          <div className="p-3 space-y-3">
+            <Dashboard
+              latest={latest}
+              count={count}
+              bufferStats={bufferStats}
+              previewMode={previewMode}
+            />
           </div>
         )}
 
@@ -451,6 +410,263 @@ export function LiveView({ onBack }: Props) {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Dashboard — multi-panel telemetry layout. Modeled on Athena's pit-side
+// view (Accumulator / Cooling / Vehicle Overview / PDU / Buffer composition)
+// but rendered in QuickScope's own design tokens so it feels like one app.
+// Each Panel uses the same card chrome as SessionBrowser rows:
+//   bg-[hsl(225,30%,95%)] dark:bg-card / border-[hsl(225,25%,85%)] dark:border-border/50
+// ────────────────────────────────────────────────────────────────────────────
+
+function Dashboard({
+  latest,
+  count,
+  bufferStats,
+  previewMode,
+}: {
+  latest: Snapshot | null;
+  count: number;
+  bufferStats: { bySubsystem: Record<string, number> };
+  previewMode: boolean;
+}) {
+  const ch = latest?.channels ?? {};
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 max-w-[1600px] mx-auto">
+      {/* TOP STRIP — pack-level summary (4 stat cards across 12 cols) */}
+      <Panel title="Pack" className="lg:col-span-12" tone="primary">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <BigStat label="Voltage"  value={fmt(ch['Pack Voltage'], 1)} unit="V"  tone="primary" />
+          <BigStat label="Current"  value={fmt(ch['Pack Current'], 1)} unit="A"  tone="primary" />
+          <BigStat label="SOC"      value={fmt(ch['SOC'], 1)}          unit="%"  tone="emerald" />
+          <BigStat label="Power"    value={fmt(ch['Pack Power'], 1)}   unit="kW" tone="amber" />
+        </div>
+      </Panel>
+
+      {/* LEFT COLUMN — Accumulator + Cooling */}
+      <Panel title="Accumulator" className="lg:col-span-5">
+        <div className="grid grid-cols-4 gap-1.5">
+          {Array.from({ length: NUM_CELLS }, (_, i) => {
+            const v = ch[`Cell ${i + 1} V`] ?? 0;
+            const t = ch[`Cell ${i + 1} T`] ?? 0;
+            const pct = Math.max(0, Math.min(1, (v - 3.0) / 1.2));
+            return (
+              <div
+                key={i}
+                className="rounded-md border border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-500/10 px-1.5 py-1.5"
+              >
+                <p className="text-[9px] uppercase tracking-wide text-muted-foreground">S{i + 1}</p>
+                <p className="text-sm font-bold tabular text-emerald-600 dark:text-emerald-400 mt-0.5">{v.toFixed(2)}V</p>
+                <p className="text-[9px] text-muted-foreground tabular mt-0.5">{t.toFixed(0)}°C</p>
+                <div className="mt-1 h-0.5 rounded-full bg-emerald-500/20 overflow-hidden">
+                  <div className="h-full bg-emerald-500" style={{ width: `${pct * 100}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <Panel title="Cooling" className="lg:col-span-4">
+        <div className="grid grid-cols-2 gap-2">
+          <CoolStat label="Pump 1"    value={fmt(ch['Pump 1'], 2)}     unit="A"   borderClass="border-amber-500/40" />
+          <CoolStat label="Pump 2"    value={fmt(ch['Pump 2'], 2)}     unit="A"   borderClass="border-amber-500/40" />
+          <CoolStat label="Motor"     value={fmt(ch['Motor Temp'], 0)} unit="°C"  borderClass="border-emerald-500/40" />
+          <CoolStat label="Inverter"  value={fmt(ch['Inverter Temp'], 0)} unit="°C" borderClass="border-emerald-500/40" />
+          <CoolStat label="Coolant"   value={fmt(ch['Coolant Temp'], 1)} unit="°C" borderClass="border-cyan-500/40" />
+          <CoolStat label="Pack"      value={fmt(ch['Pack Temp'], 1)}    unit="°C" borderClass="border-red-500/40" />
+        </div>
+      </Panel>
+
+      {/* RIGHT COLUMN — Vehicle Overview */}
+      <Panel title="Vehicle" className="lg:col-span-3">
+        <div className="space-y-2.5">
+          {/* Throttle / Brake bar like Athena's THR/BRK header */}
+          <div>
+            <div className="flex items-center justify-between text-[10px] mb-1">
+              <span className="text-emerald-600 dark:text-emerald-400 font-medium">THR {fmt(ch['Throttle'], 0)}%</span>
+              <span className="text-red-500 dark:text-red-400 font-medium">BRK {fmt(ch['Brake'], 0)}%</span>
+            </div>
+            <div className="flex gap-0.5 h-1.5">
+              <div className="flex-1 bg-muted/50 rounded-l-full overflow-hidden">
+                <div className="h-full bg-emerald-500 rounded-l-full" style={{ width: `${ch['Throttle'] ?? 0}%` }} />
+              </div>
+              <div className="flex-1 bg-muted/50 rounded-r-full overflow-hidden">
+                <div className="h-full bg-red-500 rounded-r-full ml-auto" style={{ width: `${ch['Brake'] ?? 0}%` }} />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <VehicleStat label="Speed"    value={fmt(ch['Speed'], 0)} unit="kph" />
+            <VehicleStat label="RPM"      value={fmt(ch['RPM'], 0)}   unit="" />
+            <VehicleStat label="Steering" value={fmt(ch['Steering'], 0)} unit="°" />
+            <VehicleStat label="Yaw"      value={fmt(ch['Yaw Rate'], 1)} unit="°/s" />
+            <VehicleStat label="Lat G"    value={fmt(ch['Lat G'], 2)}  unit="g" />
+            <VehicleStat label="Long G"   value={fmt(ch['Long G'], 2)} unit="g" />
+          </div>
+        </div>
+      </Panel>
+
+      {/* BOTTOM STRIP — full channel grid + buffer composition */}
+      <Panel
+        title="All channels"
+        className="lg:col-span-9"
+        rightSlot={previewMode && (
+          <span className="text-[10px] text-amber-600 dark:text-amber-400">synthetic preview values</span>
+        )}
+      >
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1.5">
+          {PREVIEW_CHANNELS.map((cm) => {
+            const val = ch[cm.name];
+            return (
+              <div
+                key={cm.name}
+                className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5"
+              >
+                <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate">{cm.name}</p>
+                <p className="text-sm font-semibold tabular mt-0.5 text-foreground">
+                  {fmt(val, cm.precision)}
+                  <span className="text-[9px] text-muted-foreground font-normal ml-1">{cm.unit}</span>
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <Panel title="Stream health" className="lg:col-span-3">
+        <div className="space-y-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Frames</span>
+            <span className="tabular font-semibold">{count} / {RING_BUFFER_SIZE}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Latest ts</span>
+            <span className="tabular font-semibold">{latest ? `${(latest.ts / 1000).toFixed(2)}s` : '—'}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Subsystem</span>
+            <span className="font-mono font-semibold">{latest?.subsystem || '—'}</span>
+          </div>
+          <div className="pt-1.5 border-t border-border/40 space-y-1">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Buffer composition</p>
+            {Object.entries(bufferStats.bySubsystem).length === 0 && (
+              <p className="text-[10px] text-muted-foreground/60">collecting…</p>
+            )}
+            {Object.entries(bufferStats.bySubsystem).map(([subsystem, n]) => (
+              <div key={subsystem} className="flex items-center gap-2">
+                <span className="font-mono text-muted-foreground w-12 truncate">{subsystem}</span>
+                <div className="flex-1 h-1 bg-muted/50 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full"
+                    style={{ width: `${(n / Math.max(1, count)) * 100}%` }}
+                  />
+                </div>
+                <span className="tabular text-muted-foreground w-7 text-right">{n}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function fmt(v: number | undefined, precision: number): string {
+  if (v === undefined || !Number.isFinite(v)) return '—';
+  return v.toFixed(precision);
+}
+
+function Panel({
+  title,
+  children,
+  className = '',
+  rightSlot,
+  tone,
+}: {
+  title: string;
+  children: React.ReactNode;
+  className?: string;
+  rightSlot?: React.ReactNode;
+  tone?: 'primary';
+}) {
+  return (
+    <section
+      className={`rounded-lg bg-[hsl(225,30%,95%)] dark:bg-card border ${
+        tone === 'primary'
+          ? 'border-primary/30'
+          : 'border-[hsl(225,25%,85%)] dark:border-border/50'
+      } p-3 ${className}`}
+    >
+      <header className="flex items-center justify-between mb-2.5">
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
+        {rightSlot}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+function BigStat({
+  label,
+  value,
+  unit,
+  tone,
+}: {
+  label: string;
+  value: string;
+  unit: string;
+  tone?: 'primary' | 'emerald' | 'amber';
+}) {
+  const colorClass =
+    tone === 'emerald' ? 'text-emerald-600 dark:text-emerald-400' :
+    tone === 'amber' ? 'text-amber-600 dark:text-amber-400' :
+    'text-primary';
+  return (
+    <div className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-3 py-2">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={`text-2xl font-bold tabular mt-0.5 ${colorClass}`}>
+        {value}
+        <span className="text-xs text-muted-foreground font-normal ml-1">{unit}</span>
+      </p>
+    </div>
+  );
+}
+
+function CoolStat({
+  label,
+  value,
+  unit,
+  borderClass,
+}: {
+  label: string;
+  value: string;
+  unit: string;
+  borderClass: string;
+}) {
+  return (
+    <div className={`rounded-md border ${borderClass} bg-background/60 dark:bg-background/30 px-2.5 py-2`}>
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-base font-bold tabular mt-0.5 text-foreground">
+        {value}
+        <span className="text-[10px] text-muted-foreground font-normal ml-1">{unit}</span>
+      </p>
+    </div>
+  );
+}
+
+function VehicleStat({ label, value, unit }: { label: string; value: string; unit: string }) {
+  return (
+    <div className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5 text-center">
+      <p className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-sm font-bold tabular mt-0.5 text-foreground">
+        {value}
+        {unit && <span className="text-[9px] text-muted-foreground font-normal ml-0.5">{unit}</span>}
+      </p>
     </div>
   );
 }
