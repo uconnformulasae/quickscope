@@ -10,9 +10,49 @@ interface Snapshot {
   ts: number;
   subsystem: string;
   raw: string;
+  channels?: Record<string, number>;  // populated in preview mode; real frames decode this client-side later
+}
+
+interface ChannelMeta {
+  name: string;
+  unit: string;
+  /** rendering hint — how many decimals to show */
+  precision: number;
+  /** value generator from the integer frame number */
+  gen: (frameNo: number) => number;
 }
 
 const RING_BUFFER_SIZE = 240; // 60 s at ~4 Hz
+
+// Subset of the 103-channel EVO5 map (extracted from the channel-def frame
+// in the deep-dive). Used by preview mode to drive realistic-looking
+// values across the dashboard so users can see what live streaming will
+// look like without an actual device on the network.
+const PREVIEW_CHANNELS: ChannelMeta[] = [
+  { name: 'RPM',           unit: 'rpm', precision: 0, gen: (n) => 4500 + Math.sin(n * 0.08) * 1500 + Math.sin(n * 0.31) * 500 },
+  { name: 'Speed',         unit: 'kph', precision: 1, gen: (n) => 60 + Math.sin(n * 0.05) * 35 + Math.sin(n * 0.21) * 8 },
+  { name: 'Throttle',      unit: '%',   precision: 1, gen: (n) => 50 + Math.sin(n * 0.07) * 45 },
+  { name: 'Brake',         unit: '%',   precision: 1, gen: (n) => Math.max(0, -Math.sin(n * 0.07) * 80) },
+  { name: 'Pack Voltage',  unit: 'V',   precision: 1, gen: (n) => 405 - Math.abs(Math.sin(n * 0.05)) * 40 },
+  { name: 'Pack Temp',     unit: '°C',  precision: 1, gen: (n) => 28 + n * 0.001 + Math.sin(n * 0.02) * 1.5 },
+  { name: 'Motor Temp',    unit: '°C',  precision: 1, gen: (n) => 65 + Math.abs(Math.sin(n * 0.08)) * 35 },
+  { name: 'SOC',           unit: '%',   precision: 1, gen: (n) => Math.max(0, 85 - n * 0.005) },
+  { name: 'Lat G',         unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.13) * 1.4 },
+  { name: 'Long G',        unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.07) * 1.1 - 0.1 },
+];
+
+function generatePreviewChannels(frameNo: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const ch of PREVIEW_CHANNELS) {
+    out[ch.name] = ch.gen(frameNo);
+  }
+  return out;
+}
+
+function formatChannelValue(value: number, precision: number): string {
+  if (!Number.isFinite(value)) return '—';
+  return value.toFixed(precision);
+}
 
 type Status = 'idle' | 'probing' | 'connecting' | 'streaming' | 'paused' | 'error';
 
@@ -126,6 +166,22 @@ export function LiveView({ onBack }: Props) {
 
   const startPreview = () => {
     if (previewTimerRef.current !== null) return;
+    // Tear down any in-flight WebSocket *and* its callbacks before starting
+    // preview. Otherwise a pending ws.onclose (e.g. from a failed Connect a
+    // moment ago) will fire after we set status='streaming' and clobber it
+    // back to 'idle'.
+    if (wsRef.current) {
+      wsRef.current.onmessage = null;
+      wsRef.current.onerror = null;
+      wsRef.current.onclose = null;
+      try { wsRef.current.close(); } catch { /* ignore */ }
+      wsRef.current = null;
+    }
+    ringRef.current = [];
+    pausedRef.current = false;
+    setCount(0);
+    setLatest(null);
+    setBufferStats({ bySubsystem: {} });
     setPreviewMode(true);
     setError(null);
     setDevice({ ip: 'preview', model: 'EVO5', serial: '00740', vehicle: 'UConn-EV (preview)' });
@@ -139,6 +195,7 @@ export function LiveView({ onBack }: Props) {
         ts: baseTs + frameNo * 250,
         subsystem,
         raw: '',
+        channels: generatePreviewChannels(frameNo),
       };
       ringRef.current.push(snap);
       if (ringRef.current.length > RING_BUFFER_SIZE) {
@@ -305,7 +362,7 @@ export function LiveView({ onBack }: Props) {
         )}
 
         {isLive && (
-          <div className="max-w-3xl mx-auto p-4 space-y-3">
+          <div className="max-w-4xl mx-auto p-4 space-y-3">
             <div className="grid grid-cols-3 gap-2">
               <Stat label="Frames received" value={count.toString()} />
               <Stat
@@ -314,6 +371,37 @@ export function LiveView({ onBack }: Props) {
               />
               <Stat label="Latest subsystem" value={latest?.subsystem || '—'} mono />
             </div>
+
+            {/* Live channel grid — populated in preview mode; real frames will
+                drive this once the offset→name decoder lands. */}
+            {latest?.channels && (
+              <div className="rounded-lg bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 p-3">
+                <h3 className="text-xs font-medium text-foreground mb-3 flex items-center justify-between">
+                  <span>Live channels</span>
+                  {previewMode && (
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400 font-normal">synthetic preview values</span>
+                  )}
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+                  {PREVIEW_CHANNELS.map((ch) => {
+                    const val = latest.channels?.[ch.name];
+                    const display = val !== undefined ? formatChannelValue(val, ch.precision) : '—';
+                    return (
+                      <div
+                        key={ch.name}
+                        className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2.5 py-2"
+                      >
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{ch.name}</p>
+                        <p className="text-base font-semibold tabular mt-0.5 text-foreground">
+                          {display}
+                          <span className="text-[10px] text-muted-foreground font-normal ml-1">{ch.unit}</span>
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="rounded-lg bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 p-3">
               <h3 className="text-xs font-medium text-foreground mb-2.5">
@@ -336,12 +424,14 @@ export function LiveView({ onBack }: Props) {
               </div>
             </div>
 
-            <div className="rounded-lg border border-border/50 bg-card/50 p-3 text-[11px] text-muted-foreground leading-relaxed">
-              Field-level decoding of channel values is in progress — the byte-level
-              channel map is being extracted from the device's channel-config frame.
-              Once that lands, values render on the existing chart engine here.
-              For now this view confirms the live stream is healthy.
-            </div>
+            {!previewMode && (
+              <div className="rounded-lg border border-border/50 bg-card/50 p-3 text-[11px] text-muted-foreground leading-relaxed">
+                Field-level decoding of real-device channel values is in progress —
+                the offset→name decoder is being wired in. Once it lands, the Live
+                channels grid above will populate from the actual 547-byte snapshots.
+                For now this view confirms the live stream is healthy.
+              </div>
+            )}
           </div>
         )}
 
