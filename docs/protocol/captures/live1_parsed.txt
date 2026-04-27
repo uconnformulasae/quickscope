@@ -1,0 +1,49 @@
+# live1_tcp_stream0.txt
+client→device bytes: 43184
+device→client bytes: 207364
+client frames parsed: 796
+server frames parsed: 1191
+
+--- CLIENT-SIDE COMMAND FREQUENCY ---
+Command frequency:
+  b'STCP': 399
+  b'STNC': 397
+
+--- SERVER-SIDE COMMAND FREQUENCY ---
+Command frequency:
+  b'STCP': 1191
+
+--- FIRST 2 PAYLOADS PER COMMAND (CLIENT) ---
+[C] b'STCP' flag=0x00 len=    8 trailer=0x000e
+    hex  : 0000000006080000
+    ascii: ........
+[C] b'STNC' flag=0x00 len=   64 trailer=0x0092
+    hex  : 00000000000000001000010000000000400000000000000041000000000000000000000000000000000000000000000000000000000000000000000000000000
+    ascii: ................@.......A.......................................
+[C] b'STCP' flag=0x00 len=   68 trailer=0x0289
+    hex  : 000000000000000000000000ea0700000400000018000000030000002b000000000000000000000000000000ea0700000400000017000000170000002b00000000000000
+    ascii: ............................+...............................+.......
+[C] b'STNC' flag=0x00 len=   64 trailer=0x0088
+    hex  : 00000000000000000600010000000000400000000000000041000000000000000000000000000000000000000000000000000000000000000000000000000000
+    ascii: ................@.......A.......................................
+
+--- FIRST 2 PAYLOADS PER COMMAND (SERVER) ---
+[S] b'STCP' flag=0x00 len=    8 trailer=0x001f
+    hex  : 0000000006190000
+    ascii: ........
+[S] b'STCP' flag=0x00 len=   64 trailer=0x0203
+    hex  : 0000000000000000100001000000000040000000e87f0000410a0000000000000000000000000000000000000000000000000000000000000000000000000000
+    ascii: ................@.......A.......................................
+
+--- INNER COMMAND FREQUENCY (CLIENT) ---
+
+--- INNER COMMAND FREQUENCY (SERVER) ---
+  b'iMST': 3
+  b'iSLV': 3
+  b'iHW ': 3
+  b'iUSR': 3
+  b'iPTH': 3
+  b'iLCK': 3
+  b'iSST': 3
+  b'iLTS': 3
+  b'iPRL': 3
