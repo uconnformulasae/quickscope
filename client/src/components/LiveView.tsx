@@ -18,123 +18,108 @@ interface ChannelMeta {
   unit: string;
   /** rendering hint — how many decimals to show */
   precision: number;
-  /** value generator from the integer frame number */
-  gen: (frameNo: number) => number;
 }
 
 const RING_BUFFER_SIZE = 240; // 60 s at ~4 Hz
 
-// Channel names below match the EXACT names the AiM device publishes in
-// its channel-config frame (verified against
+// Channel metadata. Names match the EXACT names the AiM device publishes
+// in its channel-config frame (verified against
 // docs/protocol/captures/analysis/q6_full_records.py extraction of the
-// 103-channel record list). Generators are tuned to CT-17 EV (UConn FSAE
-// Electric, 2026): 100s4p pack, 5 modules of 20s4p, 4.15 V/cell ESF cap →
-// pack max ~415 V, nominal ~370 V (per CT17_EV_Powertrain_Binder_Context).
+// 103-channel record list). When the real-device decoder lands, channels
+// arrive in `snap.channels` keyed by exactly these names — no translation
+// layer.
+//
+// Constants below are CT-17 EV: 100s4p pack, 5 modules of 20s4p, 4.15 V/
+// cell ESF cap → pack max 415 V, nominal 370 V (per
+// CT17_EV_Powertrain_Binder_Context).
 const PACK_V_MAX = 415;
 const PACK_V_NOMINAL = 370;
-const PACK_V_DERATE_LOW = 320;
 const PACK_TEMP_DERATE = 45;
-const PREVIEW_CHANNELS: ChannelMeta[] = [
-  // ── Vehicle dynamics ─────────────────────────────────────────────────
-  { name: 'RPM',                unit: 'rpm', precision: 0, gen: (n) => Math.max(0, 3500 + Math.sin(n * 0.08) * 2000 + Math.sin(n * 0.31) * 600) },
-  { name: 'LFspeed',            unit: 'kph', precision: 1, gen: (n) => Math.max(0, 55 + Math.sin(n * 0.05) * 38 + Math.sin(n * 0.21) * 8) },
-  { name: 'Throttle_Pos',       unit: '%',   precision: 0, gen: (n) => Math.max(0, Math.min(100, 50 + Math.sin(n * 0.07) * 50)) },
-  { name: 'BSE_Voltage',        unit: 'V',   precision: 2, gen: (n) => 0.5 + Math.max(0, -Math.sin(n * 0.07) * 3.5) },
-  { name: 'Direction',          unit: '',    precision: 0, gen: () => 1 },
-  { name: 'BrakeBias',          unit: '%',   precision: 1, gen: () => 58 },
-  // ── IMU ─────────────────────────────────────────────────────────────
-  { name: 'LateralAcc',         unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.13) * 1.4 },
-  { name: 'InlineAcc',          unit: 'g',   precision: 2, gen: (n) => Math.sin(n * 0.07) * 1.1 - 0.1 },
-  { name: 'VerticalAcc',        unit: 'g',   precision: 2, gen: (n) => 1.0 + Math.sin(n * 0.21) * 0.15 },
-  { name: 'YawRate',            unit: '°/s', precision: 1, gen: (n) => Math.sin(n * 0.11) * 35 },
-  { name: 'RollRate',           unit: '°/s', precision: 1, gen: (n) => Math.sin(n * 0.10) * 8 },
-  { name: 'PitchRate',          unit: '°/s', precision: 1, gen: (n) => Math.sin(n * 0.09) * 5 },
-  // ── Brake pressure ───────────────────────────────────────────────────
-  { name: 'FrBrakePressure',    unit: 'psi', precision: 0, gen: (n) => Math.max(0, -Math.sin(n * 0.07) * 800) },
-  { name: 'RBrkPressure',       unit: 'psi', precision: 0, gen: (n) => Math.max(0, -Math.sin(n * 0.07) * 600) },
-  // ── Pack (Orion BMS aggregates — only what the live stream carries) ──
-  { name: 'Pack_Voltage',       unit: 'V',   precision: 1, gen: (n) => {
-      const throttle = Math.max(0, Math.min(100, 50 + Math.sin(n * 0.07) * 50));
-      const sag = (throttle / 100) * 30;
-      const soc = Math.max(0.3, 0.85 - n * 0.00005);
-      const restingV = PACK_V_DERATE_LOW + (PACK_V_MAX - PACK_V_DERATE_LOW) * soc;
-      return Math.min(PACK_V_MAX, restingV - sag);
-  } },
-  { name: 'Pack_Current',       unit: 'A',   precision: 1, gen: (n) => {
-      const throttle = Math.max(0, Math.min(100, 50 + Math.sin(n * 0.07) * 50));
-      return throttle * 0.85;  // CT-16 measured peak ~70 A; ~85 A headroom for CT-17
-  } },
-  { name: 'State_of_Charge',    unit: '%',   precision: 1, gen: (n) => Math.max(0, 85 - n * 0.005) },
-  { name: 'Pack_Temp',          unit: '°C',  precision: 1, gen: (n) => 28 + n * 0.001 + Math.sin(n * 0.02) * 1.5 },
-  { name: 'Min_Cell_Voltage',   unit: 'V',   precision: 3, gen: (n) => 3.65 + Math.sin(n * 0.06) * 0.05 },
-  { name: 'BMS_Disch_Lim',      unit: 'A',   precision: 0, gen: () => 120 },
-  { name: 'BMS_Disch_Enable',   unit: '',    precision: 0, gen: () => 1 },
-  { name: 'BMS_LV_input',       unit: 'V',   precision: 2, gen: (n) => 12.4 + Math.sin(n * 0.04) * 0.2 },
-  // ── Motor + Inverter (Cascadia CM200DX → Emrax 228 LC) ───────────────
-  { name: 'Motor_Temp',         unit: '°C',  precision: 1, gen: (n) => 55 + Math.abs(Math.sin(n * 0.08)) * 25 },
-  { name: 'Torque_Command',     unit: 'Nm',  precision: 0, gen: (n) => Math.max(0, Math.sin(n * 0.07) * 130) },
-  { name: 'Torque_Feedback',    unit: 'Nm',  precision: 0, gen: (n) => Math.max(0, Math.sin(n * 0.07) * 125) },
-  { name: 'MCU_Torque_Limit',   unit: 'Nm',  precision: 0, gen: () => 240 },
-  { name: 'MCU_DC_Current',     unit: 'A',   precision: 1, gen: (n) => Math.max(0, Math.sin(n * 0.07) * 80) },
-  { name: 'Phase_A_Current',    unit: 'A',   precision: 0, gen: (n) => Math.sin(n * 0.07) * 200 },
-  { name: 'Phase_B_Current',    unit: 'A',   precision: 0, gen: (n) => Math.sin(n * 0.07 + 2.094) * 200 },
-  { name: 'Phase_C_Current',    unit: 'A',   precision: 0, gen: (n) => Math.sin(n * 0.07 + 4.189) * 200 },
-  { name: 'Id_Feeback',         unit: 'A',   precision: 0, gen: (n) => -Math.sin(n * 0.07) * 30 },
-  { name: 'Iq_Feedback',        unit: 'A',   precision: 0, gen: (n) => Math.max(0, Math.sin(n * 0.07) * 180) },
-  { name: 'InverterEnable',     unit: '',    precision: 0, gen: () => 1 },
-  // ── External voltages / logger ───────────────────────────────────────
-  { name: 'External Voltage',   unit: 'V',   precision: 2, gen: (n) => 12.4 + Math.sin(n * 0.04) * 0.2 },
-  { name: 'Logger Temperature', unit: '°C',  precision: 1, gen: (n) => 30 + Math.sin(n * 0.03) * 1.5 },
-  // ── GPS (channel #13 in the channel-def, 56-byte struct at offset 168
-  //    of the live frame). Real-device decode of the sub-struct field
-  //    layout needs a moving capture; our captures were stationary.
-  { name: 'GPS_Lat',            unit: '°',   precision: 6, gen: (n) => 41.80800 + Math.sin(n * 0.04) * 0.00080 + Math.sin(n * 0.10) * 0.00020 },
-  { name: 'GPS_Lon',            unit: '°',   precision: 6, gen: (n) => -72.25100 + Math.cos(n * 0.04) * 0.00120 + Math.cos(n * 0.07) * 0.00030 },
-  { name: 'GPS_Speed',          unit: 'kph', precision: 1, gen: (n) => Math.max(0, 55 + Math.sin(n * 0.05) * 38 + Math.sin(n * 0.21) * 8) },
-  { name: 'GPS_Heading',        unit: '°',   precision: 1, gen: (n) => ((n * 0.04 * 180 / Math.PI) % 360 + 360) % 360 },
-  { name: 'GPS_Altitude',       unit: 'm',   precision: 1, gen: () => 47.5 },
-  { name: 'GPS_Sats',           unit: '',    precision: 0, gen: () => 12 },
+
+const CHANNEL_META: ChannelMeta[] = [
+  // Vehicle dynamics
+  { name: 'RPM',                unit: 'rpm', precision: 0 },
+  { name: 'LFspeed',            unit: 'kph', precision: 1 },
+  { name: 'Throttle_Pos',       unit: '%',   precision: 0 },
+  { name: 'BSE_Voltage',        unit: 'V',   precision: 2 },
+  { name: 'Direction',          unit: '',    precision: 0 },
+  { name: 'BrakeBias',          unit: '%',   precision: 1 },
+  // IMU
+  { name: 'LateralAcc',         unit: 'g',   precision: 2 },
+  { name: 'InlineAcc',          unit: 'g',   precision: 2 },
+  { name: 'VerticalAcc',        unit: 'g',   precision: 2 },
+  { name: 'YawRate',            unit: '°/s', precision: 1 },
+  { name: 'RollRate',           unit: '°/s', precision: 1 },
+  { name: 'PitchRate',          unit: '°/s', precision: 1 },
+  // Brake pressure
+  { name: 'FrBrakePressure',    unit: 'psi', precision: 0 },
+  { name: 'RBrkPressure',       unit: 'psi', precision: 0 },
+  // Pack (Orion BMS aggregates — only what the live stream carries)
+  { name: 'Pack_Voltage',       unit: 'V',   precision: 1 },
+  { name: 'Pack_Current',       unit: 'A',   precision: 1 },
+  { name: 'State_of_Charge',    unit: '%',   precision: 1 },
+  { name: 'Pack_Temp',          unit: '°C',  precision: 1 },
+  { name: 'Min_Cell_Voltage',   unit: 'V',   precision: 3 },
+  { name: 'BMS_Disch_Lim',      unit: 'A',   precision: 0 },
+  { name: 'BMS_Disch_Enable',   unit: '',    precision: 0 },
+  { name: 'BMS_LV_input',       unit: 'V',   precision: 2 },
+  // Motor + Inverter (Cascadia CM200DX → Emrax 228 LC)
+  { name: 'Motor_Temp',         unit: '°C',  precision: 1 },
+  { name: 'Torque_Command',     unit: 'Nm',  precision: 0 },
+  { name: 'Torque_Feedback',    unit: 'Nm',  precision: 0 },
+  { name: 'MCU_Torque_Limit',   unit: 'Nm',  precision: 0 },
+  { name: 'MCU_DC_Current',     unit: 'A',   precision: 1 },
+  { name: 'Phase_A_Current',    unit: 'A',   precision: 0 },
+  { name: 'Phase_B_Current',    unit: 'A',   precision: 0 },
+  { name: 'Phase_C_Current',    unit: 'A',   precision: 0 },
+  { name: 'Id_Feeback',         unit: 'A',   precision: 0 },
+  { name: 'Iq_Feedback',        unit: 'A',   precision: 0 },
+  { name: 'InverterEnable',     unit: '',    precision: 0 },
+  // External voltages / logger
+  { name: 'External Voltage',   unit: 'V',   precision: 2 },
+  { name: 'Logger Temperature', unit: '°C',  precision: 1 },
+  // GPS (channel #13, 56-byte struct at offset 168 of the live frame)
+  { name: 'GPS_Lat',            unit: '°',   precision: 6 },
+  { name: 'GPS_Lon',            unit: '°',   precision: 6 },
+  { name: 'GPS_Speed',          unit: 'kph', precision: 1 },
+  { name: 'GPS_Heading',        unit: '°',   precision: 1 },
+  { name: 'GPS_Altitude',       unit: 'm',   precision: 1 },
+  { name: 'GPS_Sats',           unit: '',    precision: 0 },
 ];
 
 // Boolean / state channels from the AiM channel-config. Each carries 0/1
-// (or a small enum) on the wire — meaningless as a number, very meaningful
-// as a label. These come from q6_full_records.py rows 25-52, 75-77, 82, 91-95.
-//
-// `on` field describes what the value means for the LIVE state of the car;
-// for fault-style channels, "1" usually means "fault active" (red). For
-// enable-style channels "1" means "enabled" (green). Polarity is tracked
-// per-channel.
+// on the wire — meaningless as a number, very meaningful as a label.
+// Polarity differs by channel: for "state" 1 = enabled (green); for
+// "fault" 1 = active fault (red).
 type BoolKind = 'state' | 'fault';
 interface BoolChannelMeta {
   name: string;
   label: string;
   kind: BoolKind;
-  /** Generator returns 0 or 1 in preview mode. */
-  gen: (n: number) => number;
 }
 const BOOL_CHANNELS: BoolChannelMeta[] = [
-  // ── Enable / state (1 = active / good) ──────────────────────────────
-  { name: 'BMS_Disch_Enable',   label: 'BMS Discharge',  kind: 'state', gen: () => 1 },
-  { name: 'InverterEnable',     label: 'Inverter',       kind: 'state', gen: () => 1 },
-  { name: 'lc_enabled',         label: 'Launch Control', kind: 'state', gen: () => 0 },
-  { name: 'lc_sensor_health',   label: 'LC Sensors OK',  kind: 'state', gen: () => 1 },
-  { name: 'cut_rate_active',    label: 'Cut-rate Active',kind: 'state', gen: () => 0 },
-  { name: 'StartRec',           label: 'Logging',        kind: 'state', gen: () => 1 },
-  // ── Faults (1 = fault active / BAD) ─────────────────────────────────
-  { name: 'RTD_Fault',           label: 'RTD',                 kind: 'fault', gen: () => 0 },
-  { name: 'BSE_Fault',           label: 'BSE Plausibility',    kind: 'fault', gen: () => 0 },
-  { name: 'TPS1_OOR_Fault',      label: 'TPS1 Out of Range',   kind: 'fault', gen: () => 0 },
-  { name: 'TPS2_OOR_Fault',      label: 'TPS2 Out of Range',   kind: 'fault', gen: () => 0 },
-  { name: 'APPS_Dist_Fault',     label: 'APPS Plausibility',   kind: 'fault', gen: () => 0 },
-  { name: 'DC_Undervoltage',     label: 'DC Undervoltage',     kind: 'fault', gen: () => 0 },
-  { name: 'InverterTempHi',      label: 'Inverter Temp Hi',    kind: 'fault', gen: () => 0 },
-  { name: 'InverterTempLo',      label: 'Inverter Temp Lo',    kind: 'fault', gen: () => 0 },
-  { name: 'MCU_LV_Out_of_Range', label: 'MCU LV OOR',          kind: 'fault', gen: () => 0 },
-  { name: 'MotorOverTemp',       label: 'Motor Over Temp',     kind: 'fault', gen: () => 0 },
-  { name: 'MotorOverSpeed',      label: 'Motor Over Speed',    kind: 'fault', gen: () => 0 },
-  { name: 'InvOverVolt',         label: 'Inverter OverVolt',   kind: 'fault', gen: () => 0 },
-  { name: 'HWOverCurrent',       label: 'HW Over Current',     kind: 'fault', gen: () => 0 },
-  { name: 'CANCommandLost',      label: 'CAN Cmd Lost',        kind: 'fault', gen: () => 0 },
+  // Enable / state (1 = active / good)
+  { name: 'BMS_Disch_Enable',   label: 'BMS Discharge',  kind: 'state' },
+  { name: 'InverterEnable',     label: 'Inverter',       kind: 'state' },
+  { name: 'lc_enabled',         label: 'Launch Control', kind: 'state' },
+  { name: 'lc_sensor_health',   label: 'LC Sensors OK',  kind: 'state' },
+  { name: 'cut_rate_active',    label: 'Cut-rate Active',kind: 'state' },
+  { name: 'StartRec',           label: 'Logging',        kind: 'state' },
+  // Faults (1 = fault active / BAD)
+  { name: 'RTD_Fault',           label: 'RTD',                 kind: 'fault' },
+  { name: 'BSE_Fault',           label: 'BSE Plausibility',    kind: 'fault' },
+  { name: 'TPS1_OOR_Fault',      label: 'TPS1 Out of Range',   kind: 'fault' },
+  { name: 'TPS2_OOR_Fault',      label: 'TPS2 Out of Range',   kind: 'fault' },
+  { name: 'APPS_Dist_Fault',     label: 'APPS Plausibility',   kind: 'fault' },
+  { name: 'DC_Undervoltage',     label: 'DC Undervoltage',     kind: 'fault' },
+  { name: 'InverterTempHi',      label: 'Inverter Temp Hi',    kind: 'fault' },
+  { name: 'InverterTempLo',      label: 'Inverter Temp Lo',    kind: 'fault' },
+  { name: 'MCU_LV_Out_of_Range', label: 'MCU LV OOR',          kind: 'fault' },
+  { name: 'MotorOverTemp',       label: 'Motor Over Temp',     kind: 'fault' },
+  { name: 'MotorOverSpeed',      label: 'Motor Over Speed',    kind: 'fault' },
+  { name: 'InvOverVolt',         label: 'Inverter OverVolt',   kind: 'fault' },
+  { name: 'HWOverCurrent',       label: 'HW Over Current',     kind: 'fault' },
+  { name: 'CANCommandLost',      label: 'CAN Cmd Lost',        kind: 'fault' },
 ];
 
 // CT-17 has 5 modules of 20s4p (80 cells/module). Per-module data is NOT
@@ -168,41 +153,7 @@ const PANEL_OWNED_CHANNELS = new Set<string>([
   ...BOOL_CHANNELS.map((b) => b.name),
 ]);
 
-function generatePreviewChannels(frameNo: number): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const ch of PREVIEW_CHANNELS) {
-    out[ch.name] = ch.gen(frameNo);
-  }
-  for (const b of BOOL_CHANNELS) {
-    out[b.name] = b.gen(frameNo);
-  }
-  // Throw a transient fault every minute (~240 frames at 4 Hz) so the
-  // status panel doesn't look static. Cycles through a few fault channels.
-  if (frameNo > 60 && frameNo % 240 < 12) {
-    const cycle = ['InverterTempHi', 'BSE_Fault', 'TPS1_OOR_Fault', 'CANCommandLost'];
-    out[cycle[Math.floor(frameNo / 240) % cycle.length]] = 1;
-  }
-  // Demo channels for the "Other" panel — exemplars of what real-device
-  // mode will surface (lap timing, launch control, faults/alarms). Names
-  // match the actual AiM channel-config frame.
-  out['Lap Time']        = 45 + Math.sin(frameNo * 0.005) * 3;
-  out['Best Time']       = 43.359;
-  out['Predictive Time'] = 0.5 + Math.sin(frameNo * 0.05) * 2;
-  out['Total Odometer']  = 1234.5 + frameNo * 0.001;
-  out['lc_slip_ratio']   = Math.abs(Math.sin(frameNo * 0.09)) * 0.08;
-  out['lc_enabled']      = 1;
-  out['lvcu_motor_speed'] = out['RPM'] ?? 0;
-  return out;
-}
-
-function formatChannelValue(value: number, precision: number): string {
-  if (!Number.isFinite(value)) return '—';
-  return value.toFixed(precision);
-}
-
 type Status = 'idle' | 'probing' | 'connecting' | 'streaming' | 'paused' | 'error';
-
-const SUBSYSTEMS_PREVIEW = ['kkk', 'Syst', 'Fuel'] as const;
 
 export function LiveView({ onBack }: Props) {
   const [status, setStatus] = useState<Status>('idle');
@@ -211,23 +162,21 @@ export function LiveView({ onBack }: Props) {
   const [latest, setLatest] = useState<Snapshot | null>(null);
   const [count, setCount] = useState(0);
   const [bufferStats, setBufferStats] = useState({ bySubsystem: {} as Record<string, number> });
-  const [previewMode, setPreviewMode] = useState(false);
   const [gpsTrail, setGpsTrail] = useState<{ lat: number; lon: number; speed: number }[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const previewTimerRef = useRef<number | null>(null);
   const ringRef = useRef<Snapshot[]>([]);
   const gpsTrailRef = useRef<{ lat: number; lon: number; speed: number }[]>([]);
   const pausedRef = useRef(false);
-  // Once the user has taken any explicit action (Connect, Preview), the
-  // mount-time UDP probe's late-arriving response must not clobber state.
-  const userActionTakenRef = useRef(false);
+  // Once the user has clicked Connect, the mount-time UDP probe's late-
+  // arriving response must not clobber state.
+  const connectInitiatedRef = useRef(false);
 
   useEffect(() => {
     setStatus('probing');
     fetchLiveStatus()
       .then(s => {
-        if (userActionTakenRef.current) return;
+        if (connectInitiatedRef.current) return;
         if (s.reachable && s.device) {
           setDevice(s.device);
           setStatus('idle');
@@ -237,7 +186,7 @@ export function LiveView({ onBack }: Props) {
         }
       })
       .catch(err => {
-        if (userActionTakenRef.current) return;
+        if (connectInitiatedRef.current) return;
         setStatus('error');
         setError(err instanceof Error ? err.message : String(err));
       });
@@ -245,16 +194,12 @@ export function LiveView({ onBack }: Props) {
     return () => {
       wsRef.current?.close();
       wsRef.current = null;
-      if (previewTimerRef.current !== null) {
-        window.clearInterval(previewTimerRef.current);
-        previewTimerRef.current = null;
-      }
     };
   }, []);
 
   const connect = () => {
     if (wsRef.current) return;
-    userActionTakenRef.current = true;
+    connectInitiatedRef.current = true;
     setStatus('connecting');
     setError(null);
     const ws = new WebSocket(liveWebSocketUrl());
@@ -274,9 +219,9 @@ export function LiveView({ onBack }: Props) {
             ringRef.current.shift();
           }
           // GPS trail — once channel decoding lands, snap.channels.GPS_Lat
-          // / GPS_Lon arrive here and we append. Until then, real-device
-          // mode just won't have GPS points; preview mode generates them
-          // synthetically in startPreview's pump.
+          // / GPS_Lon arrive here and we append. Until then there are no
+          // GPS points and the Track panel shows the "waiting for fix"
+          // empty state.
           const lat = snap.channels?.['GPS_Lat'];
           const lon = snap.channels?.['GPS_Lon'];
           if (lat !== undefined && lon !== undefined && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1) {
@@ -338,7 +283,7 @@ export function LiveView({ onBack }: Props) {
 <gpx version="1.1" creator="QuickScope" xmlns="http://www.topografix.com/GPX/1/1">
   <metadata><time>${now}</time></metadata>
   <trk>
-    <name>QuickScope Live${previewMode ? ' (preview)' : ''}</name>
+    <name>QuickScope Live</name>
     <trkseg>
 ${points}
     </trkseg>
@@ -359,86 +304,6 @@ ${points}
   const togglePause = () => {
     pausedRef.current = !pausedRef.current;
     setStatus(pausedRef.current ? 'paused' : 'streaming');
-  };
-
-  const startPreview = () => {
-    if (previewTimerRef.current !== null) return;
-    userActionTakenRef.current = true;
-    // Tear down any in-flight WebSocket *and* its callbacks before starting
-    // preview. Otherwise a pending ws.onclose (e.g. from a failed Connect a
-    // moment ago) will fire after we set status='streaming' and clobber it
-    // back to 'idle'.
-    if (wsRef.current) {
-      wsRef.current.onmessage = null;
-      wsRef.current.onerror = null;
-      wsRef.current.onclose = null;
-      try { wsRef.current.close(); } catch { /* ignore */ }
-      wsRef.current = null;
-    }
-    ringRef.current = [];
-    gpsTrailRef.current = [];
-    pausedRef.current = false;
-    setCount(0);
-    setLatest(null);
-    setBufferStats({ bySubsystem: {} });
-    setGpsTrail([]);
-    setPreviewMode(true);
-    setError(null);
-    setDevice({ ip: 'preview', model: 'EVO5', serial: '00740', vehicle: 'UConn-EV (preview)' });
-    setStatus('streaming');
-    let frameNo = 0;
-    const baseTs = Math.floor(Date.now() % 1e7);
-    previewTimerRef.current = window.setInterval(() => {
-      if (pausedRef.current) return;
-      const subsystem = SUBSYSTEMS_PREVIEW[frameNo % SUBSYSTEMS_PREVIEW.length];
-      const snap: Snapshot = {
-        ts: baseTs + frameNo * 250,
-        subsystem,
-        raw: '',
-        channels: generatePreviewChannels(frameNo),
-      };
-      ringRef.current.push(snap);
-      if (ringRef.current.length > RING_BUFFER_SIZE) {
-        ringRef.current.shift();
-      }
-      // GPS trail — keep up to 2000 points (~8 minutes at 4 Hz). Real-device
-      // mode appends here too once GPS_Lat/GPS_Lon decode is wired up.
-      const lat = snap.channels?.['GPS_Lat'];
-      const lon = snap.channels?.['GPS_Lon'];
-      if (lat !== undefined && lon !== undefined && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1) {
-        gpsTrailRef.current.push({ lat, lon, speed: snap.channels?.['GPS_Speed'] ?? 0 });
-        if (gpsTrailRef.current.length > 2000) {
-          gpsTrailRef.current.shift();
-        }
-      }
-      setLatest(snap);
-      setCount(ringRef.current.length);
-      if (frameNo % 8 === 0) {
-        const bySubsystem: Record<string, number> = {};
-        for (const s of ringRef.current) {
-          bySubsystem[s.subsystem] = (bySubsystem[s.subsystem] || 0) + 1;
-        }
-        setBufferStats({ bySubsystem });
-        // Trail re-renders on the same cadence to keep React updates manageable.
-        setGpsTrail([...gpsTrailRef.current]);
-      }
-      frameNo += 1;
-    }, 250);
-  };
-
-  const stopPreview = () => {
-    if (previewTimerRef.current !== null) {
-      window.clearInterval(previewTimerRef.current);
-      previewTimerRef.current = null;
-    }
-    setPreviewMode(false);
-    ringRef.current = [];
-    setCount(0);
-    setLatest(null);
-    setBufferStats({ bySubsystem: {} });
-    setStatus('idle');
-    setDevice(null);
-    pausedRef.current = false;
   };
 
   const isLive = status === 'streaming' || status === 'paused';
@@ -502,24 +367,14 @@ ${points}
       {/* Action bar — mirrors SessionBrowser */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border/50 bg-card/50">
         {!isLive ? (
-          <>
-            <button
-              onClick={connect}
-              disabled={status === 'connecting' || status === 'probing'}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
-            >
-              <Wifi className="w-3.5 h-3.5" />
-              Connect
-            </button>
-            <button
-              onClick={startPreview}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
-              title="Run the dashboard with synthetic data so you can see what it looks like without a connected AiM device"
-            >
-              <Activity className="w-3.5 h-3.5" />
-              Preview UI (mock data)
-            </button>
-          </>
+          <button
+            onClick={connect}
+            disabled={status === 'connecting' || status === 'probing'}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+          >
+            <Wifi className="w-3.5 h-3.5" />
+            Connect
+          </button>
         ) : (
           <>
             <button
@@ -529,22 +384,16 @@ ${points}
               {status === 'paused' ? <><Play className="w-3.5 h-3.5" /> Resume</> : <><Pause className="w-3.5 h-3.5" /> Pause</>}
             </button>
             <button
-              onClick={previewMode ? stopPreview : disconnect}
+              onClick={disconnect}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-red-500/10 text-red-500 dark:text-red-400 hover:bg-red-500/20 transition-colors"
             >
               <WifiOff className="w-3.5 h-3.5" />
-              {previewMode ? 'Exit preview' : 'Disconnect'}
+              Disconnect
             </button>
           </>
         )}
 
         <div className="flex-1" />
-
-        {previewMode && (
-          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 font-medium">
-            Preview mode — mock data
-          </span>
-        )}
 
         {isLive && (
           <span className="text-xs text-muted-foreground tabular">
@@ -561,13 +410,6 @@ ${points}
               <div className="text-xs flex-1">
                 <p className="font-medium text-red-500 dark:text-red-400">Connection error</p>
                 <p className="text-muted-foreground mt-1">{error}</p>
-                <button
-                  onClick={startPreview}
-                  className="mt-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
-                >
-                  <Activity className="w-3 h-3" />
-                  Preview UI with mock data
-                </button>
               </div>
             </div>
           </div>
@@ -579,7 +421,6 @@ ${points}
               latest={latest}
               count={count}
               bufferStats={bufferStats}
-              previewMode={previewMode}
               gpsTrail={gpsTrail}
               onExportGpx={exportGpx}
             />
@@ -618,14 +459,12 @@ function Dashboard({
   latest,
   count,
   bufferStats,
-  previewMode,
   gpsTrail,
   onExportGpx,
 }: {
   latest: Snapshot | null;
   count: number;
   bufferStats: { bySubsystem: Record<string, number> };
-  previewMode: boolean;
   gpsTrail: { lat: number; lon: number; speed: number }[];
   onExportGpx: () => void;
 }) {
@@ -845,14 +684,9 @@ function Dashboard({
         title="Other channels"
         className="lg:col-span-9"
         rightSlot={
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-muted-foreground">
-              channels not yet wired into a panel
-            </span>
-            {previewMode && (
-              <span className="text-[10px] text-amber-600 dark:text-amber-400">synthetic preview values</span>
-            )}
-          </div>
+          <span className="text-[10px] text-muted-foreground">
+            channels not yet wired into a panel
+          </span>
         }
       >
         {(() => {
@@ -873,7 +707,7 @@ function Dashboard({
             <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1.5">
               {otherEntries.map(([name, val]) => {
                 // Try to find an explicit precision; fall back to a sensible default.
-                const meta = PREVIEW_CHANNELS.find((m) => m.name === name);
+                const meta = CHANNEL_META.find((m) => m.name === name);
                 const precision = meta?.precision ?? (Math.abs(val) >= 100 ? 0 : 2);
                 const unit = meta?.unit ?? '';
                 return (
