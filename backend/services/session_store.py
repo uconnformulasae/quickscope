@@ -129,6 +129,34 @@ def update_session(session_id: str, **fields) -> Optional[dict]:
     return None
 
 
+def reset_stale_sync_states() -> int:
+    """Reset transient sync states (uploading/downloading) on startup.
+
+    A crash mid-sync leaves sessions stuck in those states forever, which
+    presents to the user as "the upload from my phone never showed up" — the
+    file actually made it to local storage but the local index thinks it's
+    still in transit. Called once at backend startup.
+
+    Sessions with a local_path return to 'local_only'; without one they
+    return to 'remote_only'. Returns the number of sessions reset.
+    """
+    reset = 0
+    with _lock:
+        sessions = _load()
+        changed = False
+        for s in sessions:
+            status = s.get("sync_status")
+            if status not in ("uploading", "downloading"):
+                continue
+            s["sync_status"] = "local_only" if s.get("local_path") else "remote_only"
+            s["updated_at"] = datetime.now(timezone.utc).isoformat()
+            reset += 1
+            changed = True
+        if changed:
+            _save(sessions)
+    return reset
+
+
 def delete_session(session_id: str) -> bool:
     with _lock:
         sessions = _load()

@@ -202,21 +202,102 @@ export async function updateSettings(settings: Partial<Settings>): Promise<Setti
 
 // ─── Analysis (existing — operate on loaded session) ────────────────────────
 
-export async function uploadFile(file: File): Promise<SessionInfo> {
-  const formData = new FormData();
-  formData.append('file', file);
+export interface UploadProgress {
+  loaded: number;
+  total: number;
+  /** Bytes per second over the last sample window. */
+  ratePerSec: number;
+  /** Estimated seconds remaining at the current rate. -1 if unknown. */
+  etaSec: number;
+}
 
-  const res = await fetch(`${API_BASE}/api/upload`, {
-    method: 'POST',
-    body: formData,
+/**
+ * Upload an .xrk/.xrz file with progress reporting.
+ *
+ * Uses XMLHttpRequest because the standard `fetch` API has no upload-progress
+ * event in browsers. This is critical for diagnosing the "phone uploads were
+ * slow and never showed up" report — we now show byte progress + rate +
+ * ETA in the UI, and a stalled connection becomes obvious instead of
+ * looking like a hung tab.
+ */
+export async function uploadFile(
+  file: File,
+  onProgress?: (p: UploadProgress) => void,
+): Promise<SessionInfo> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/api/upload`, true);
+
+    let lastSampleTime = performance.now();
+    let lastSampleBytes = 0;
+    let smoothedRate = 0;
+
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress) return;
+      const now = performance.now();
+      const dtSec = (now - lastSampleTime) / 1000;
+      if (dtSec > 0.25) {
+        const dB = event.loaded - lastSampleBytes;
+        const instant = dB / dtSec;
+        // EMA smoothing so the displayed rate doesn't jitter wildly.
+        smoothedRate = smoothedRate === 0 ? instant : smoothedRate * 0.7 + instant * 0.3;
+        lastSampleTime = now;
+        lastSampleBytes = event.loaded;
+      }
+      const remaining = (event.total || 0) - event.loaded;
+      const etaSec = smoothedRate > 0 && event.total ? remaining / smoothedRate : -1;
+      onProgress({
+        loaded: event.loaded,
+        total: event.total || file.size,
+        ratePerSec: smoothedRate,
+        etaSec,
+      });
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (e) {
+          reject(new Error('Server returned invalid JSON'));
+        }
+      } else {
+        let detail = xhr.statusText;
+        try {
+          detail = JSON.parse(xhr.responseText).detail || detail;
+        } catch {
+          // ignore
+        }
+        reject(new Error(detail || `Upload failed: ${xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out'));
+    xhr.onabort = () => reject(new Error('Upload aborted'));
+
+    const formData = new FormData();
+    formData.append('file', file);
+    xhr.send(formData);
   });
+}
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Upload failed: ${res.status}`);
-  }
+export interface UploadLogEntry {
+  ts: string;             // ISO8601
+  filename: string;
+  size: number;
+  duration_s: number;
+  client_ip: string;
+  user_agent: string;
+  status: 'ok' | 'parse_failed' | 'upload_failed';
+  error?: string;
+}
 
-  return res.json();
+export async function fetchUploadLog(): Promise<UploadLogEntry[]> {
+  const res = await fetch(`${API_BASE}/api/uploads/log`);
+  if (!res.ok) throw new Error(`Failed to fetch upload log: ${res.status}`);
+  const data = await res.json();
+  return data.entries;
 }
 
 export async function fetchChannelData(

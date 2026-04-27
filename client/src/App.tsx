@@ -168,15 +168,28 @@ export default function App() {
   /** Called when user uploads a file from the analysis view header */
   const handleFileSelected = useCallback(async (file: File) => {
     setLoading(true);
-    setProgress({ stage: 'Uploading to backend...', percent: 10 });
-    await new Promise(resolve => setTimeout(resolve, 50));
+    setProgress({ stage: 'Uploading to backend...', percent: 1 });
+
+    const formatRate = (bytesPerSec: number): string => {
+      if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
+      if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+      return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
+    };
 
     try {
-      const info = await uploadFile(file);
+      const info = await uploadFile(file, (p) => {
+        // Map upload bytes to 1..40% of overall progress; the rest is parsing.
+        const uploadPct = p.total > 0 ? (p.loaded / p.total) * 40 : 0;
+        const eta = p.etaSec >= 0 && p.etaSec < 600 ? `, ${p.etaSec.toFixed(0)}s left` : '';
+        setProgress({
+          stage: `Uploading ${(p.loaded / 1e6).toFixed(1)}/${(p.total / 1e6).toFixed(1)} MB at ${formatRate(p.ratePerSec)}${eta}`,
+          percent: Math.max(1, Math.min(40, uploadPct)),
+        });
+      });
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
       await buildAndSetSession(info, file.name);
     } catch (err) {
-      setError(`Failed to parse XRK file: ${err instanceof Error ? err.message : String(err)}`);
+      setError(`Failed to upload XRK file: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [setLoading, setProgress, buildAndSetSession, setError]);
 

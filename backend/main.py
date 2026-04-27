@@ -10,11 +10,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routes import sessions, analysis, settings, live
+from services import session_store
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="QuickScope Backend")
 
@@ -29,6 +31,17 @@ app.include_router(sessions.router)
 app.include_router(analysis.router)
 app.include_router(settings.router)
 app.include_router(live.router)
+
+
+@app.on_event("startup")
+async def _recover_stale_sync_state() -> None:
+    """If the previous run crashed mid-sync, sessions can be stuck in
+    'uploading' or 'downloading' forever. Reset them on boot so they re-enter
+    the normal sync flow and the user sees them, instead of the silent
+    "phone upload never showed up" experience."""
+    reset = session_store.reset_stale_sync_states()
+    if reset:
+        logger.warning("Reset %d session(s) from stale uploading/downloading state", reset)
 
 
 if __name__ == "__main__":
