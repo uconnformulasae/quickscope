@@ -1,0 +1,93 @@
+name: Smoke Build
+
+# Validates the Electron+PyInstaller build pipeline on every PR and push to
+# main, WITHOUT signing or notarization. Catches "the builder broke" bugs
+# fast (< 15 min on each runner) instead of discovering them mid-release-tag.
+#
+# This deliberately mirrors the build steps in release.yml. If you change one,
+# change the other.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel in-progress smoke runs on the same ref when a new commit lands —
+# only the latest commit's status matters.
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: arm64
+            label: mac-arm64
+          - os: windows-latest
+            arch: x64
+            label: win-x64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Python build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt pyinstaller
+
+      - name: Freeze Python backend
+        working-directory: backend
+        run: pyinstaller quickscope-backend.spec --noconfirm
+
+      - name: Install Node deps
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Build frontend (Vite)
+        run: npm run build
+
+      - name: Build macOS installer (unsigned)
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        run: npx electron-builder --mac --${{ matrix.arch }} --publish never --config.mac.notarize=false
+
+      - name: Build Windows installer (unsigned)
+        if: runner.os == 'Windows'
+        timeout-minutes: 15
+        run: npx electron-builder --win --x64 --publish never
+
+      - name: Upload smoke artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: quickscope-smoke-${{ matrix.label }}-${{ github.run_id }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+          if-no-files-found: warn
+          retention-days: 7

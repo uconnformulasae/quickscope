@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
-from services import session_store, sync_service, aim_connector, railway_client
+from services import session_store, sync_service, aim_connector, railway_client, gps_preview
 from state import (
     state, logger, background_sync,
     parse_file, extract_session_info, parse_recorded_at, sanitize_filename,
@@ -116,6 +116,24 @@ async def rename_session(session_id: str, body: RenameRequest):
         local_path=new_path or old_path,
     )
     return updated
+
+
+@router.get("/sessions/{session_id}/gps-preview")
+async def get_gps_preview(session_id: str):
+    """Returns a downsampled GPS thumbnail for the SessionBrowser UI.
+
+    Returns 200 with `{"preview": null}` if the session has no usable GPS
+    track (so the frontend can cache the absence and skip the icon). Only
+    returns 404 when the session itself doesn't exist.
+    """
+    entry = session_store.get_session(session_id)
+    if not entry:
+        raise HTTPException(404, "Session not found")
+    local_path = entry.get("local_path")
+    if not local_path:
+        return {"preview": None}
+    preview = await asyncio.to_thread(gps_preview.compute_preview, local_path)
+    return {"preview": preview}
 
 
 @router.delete("/sessions/{session_id}")

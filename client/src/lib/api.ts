@@ -202,21 +202,102 @@ export async function updateSettings(settings: Partial<Settings>): Promise<Setti
 
 // ─── Analysis (existing — operate on loaded session) ────────────────────────
 
-export async function uploadFile(file: File): Promise<SessionInfo> {
-  const formData = new FormData();
-  formData.append('file', file);
+export interface UploadProgress {
+  loaded: number;
+  total: number;
+  /** Bytes per second over the last sample window. */
+  ratePerSec: number;
+  /** Estimated seconds remaining at the current rate. -1 if unknown. */
+  etaSec: number;
+}
 
-  const res = await fetch(`${API_BASE}/api/upload`, {
-    method: 'POST',
-    body: formData,
+/**
+ * Upload an .xrk/.xrz file with progress reporting.
+ *
+ * Uses XMLHttpRequest because the standard `fetch` API has no upload-progress
+ * event in browsers. This is critical for diagnosing the "phone uploads were
+ * slow and never showed up" report — we now show byte progress + rate +
+ * ETA in the UI, and a stalled connection becomes obvious instead of
+ * looking like a hung tab.
+ */
+export async function uploadFile(
+  file: File,
+  onProgress?: (p: UploadProgress) => void,
+): Promise<SessionInfo> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/api/upload`, true);
+
+    let lastSampleTime = performance.now();
+    let lastSampleBytes = 0;
+    let smoothedRate = 0;
+
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress) return;
+      const now = performance.now();
+      const dtSec = (now - lastSampleTime) / 1000;
+      if (dtSec > 0.25) {
+        const dB = event.loaded - lastSampleBytes;
+        const instant = dB / dtSec;
+        // EMA smoothing so the displayed rate doesn't jitter wildly.
+        smoothedRate = smoothedRate === 0 ? instant : smoothedRate * 0.7 + instant * 0.3;
+        lastSampleTime = now;
+        lastSampleBytes = event.loaded;
+      }
+      const remaining = (event.total || 0) - event.loaded;
+      const etaSec = smoothedRate > 0 && event.total ? remaining / smoothedRate : -1;
+      onProgress({
+        loaded: event.loaded,
+        total: event.total || file.size,
+        ratePerSec: smoothedRate,
+        etaSec,
+      });
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (e) {
+          reject(new Error('Server returned invalid JSON'));
+        }
+      } else {
+        let detail = xhr.statusText;
+        try {
+          detail = JSON.parse(xhr.responseText).detail || detail;
+        } catch {
+          // ignore
+        }
+        reject(new Error(detail || `Upload failed: ${xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out'));
+    xhr.onabort = () => reject(new Error('Upload aborted'));
+
+    const formData = new FormData();
+    formData.append('file', file);
+    xhr.send(formData);
   });
+}
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Upload failed: ${res.status}`);
-  }
+export interface UploadLogEntry {
+  ts: string;             // ISO8601
+  filename: string;
+  size: number;
+  duration_s: number;
+  client_ip: string;
+  user_agent: string;
+  status: 'ok' | 'parse_failed' | 'upload_failed';
+  error?: string;
+}
 
-  return res.json();
+export async function fetchUploadLog(): Promise<UploadLogEntry[]> {
+  const res = await fetch(`${API_BASE}/api/uploads/log`);
+  if (!res.ok) throw new Error(`Failed to fetch upload log: ${res.status}`);
+  const data = await res.json();
+  return data.entries;
 }
 
 export async function fetchChannelData(
@@ -247,6 +328,79 @@ export async function fetchGPS(): Promise<GPSData | null> {
   }
   const data = await res.json();
   return data.gps || null;
+}
+
+export type LapSource = 'device' | 'gps_auto' | 'beacon_auto' | 'none';
+
+export interface LapsResponse {
+  laps: {
+    lapNumber: number;
+    startTime: number;
+    endTime: number;
+    source: LapSource;
+  }[];
+  source: LapSource;
+}
+
+export async function fetchLaps(): Promise<LapsResponse> {
+  const res = await fetch(`${API_BASE}/api/laps`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch laps: ${res.status}`);
+  }
+  return res.json();
+}
+
+export interface GPSPreview {
+  points: [number, number][];
+  bounds: {
+    minLat: number;
+    maxLat: number;
+    minLon: number;
+    maxLon: number;
+  };
+  pointCount: number;
+}
+
+export async function fetchGPSPreview(sessionId: string): Promise<GPSPreview | null> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/gps-preview`);
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    throw new Error(`Failed to fetch GPS preview: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.preview;
+}
+
+// ─── Live streaming ─────────────────────────────────────────────────────────
+
+export interface LiveDeviceInfo {
+  ip: string;
+  model: string;
+  serial: string;
+  vehicle: string;
+}
+
+export interface LiveStatus {
+  reachable: boolean;
+  host: string;
+  device?: LiveDeviceInfo;
+}
+
+export async function fetchLiveStatus(): Promise<LiveStatus> {
+  const res = await fetch(`${API_BASE}/api/live/status`);
+  if (!res.ok) throw new Error(`Live status failed: ${res.status}`);
+  return res.json();
+}
+
+export type LiveWSMessage =
+  | { type: 'connected'; device: LiveDeviceInfo }
+  | { type: 'snapshot'; ts: number; subsystem: string; raw: string }
+  | { type: 'error'; message: string };
+
+export function liveWebSocketUrl(): string {
+  // Replace http(s) with ws(s) for the live endpoint.
+  const wsBase = API_BASE.replace(/^http/, 'ws');
+  return `${wsBase}/api/live/ws`;
 }
 
 export async function exportCSV(channels: string[]): Promise<Blob> {

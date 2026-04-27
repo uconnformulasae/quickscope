@@ -4,8 +4,16 @@ name: Release
 # attaches them to a GitHub Release.
 #
 # Triggers:
-#   - Push a git tag matching v*.*.*  (e.g. v1.0.0)  → publishes a Release
+#   - Push a git tag matching v*.*.*  (e.g. v1.0.1)  → publishes a Release
 #   - Manual run from the Actions tab                → builds artifacts only
+#
+# macOS notarization is opt-in: it only runs when ALL of these secrets are
+# present — APPLE_API_KEY_CONTENT, APPLE_API_KEY_ID, APPLE_API_KEY_ISSUER,
+# APPLE_TEAM_ID, MAC_CERT_P12_BASE64, MAC_CERT_PASSWORD. If any is missing,
+# the macOS build still produces an unsigned .dmg/.zip; users will see a
+# Gatekeeper warning but the binaries are usable. This avoids the 5-hour
+# hang we hit on v1.0.0 when notarytool waited indefinitely for missing
+# credentials.
 
 on:
   push:
@@ -64,29 +72,61 @@ jobs:
       - name: Build frontend (Vite)
         run: npm run build
 
-      # ─── macOS: write API key .p8 from secret, then build + sign/notarize ─
-      - name: Prepare Apple API key file
-        if: runner.os == 'macOS' && env.APPLE_API_KEY_CONTENT != ''
+      # ─── macOS: detect whether we can notarize ────────────────────────────
+      #
+      # All six secrets must be present. We export NOTARIZE=1 so the build
+      # step can pass --config.mac.notarize=true to electron-builder. If any
+      # secret is missing the value stays unset and we build unsigned.
+      - name: Probe macOS signing/notarize secrets
+        if: runner.os == 'macOS'
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
         run: |
-          mkdir -p ~/.private_keys
-          echo "$APPLE_API_KEY_CONTENT" > ~/.private_keys/AuthKey.p8
-          echo "APPLE_API_KEY=$HOME/.private_keys/AuthKey.p8" >> $GITHUB_ENV
+          if [ -n "$APPLE_API_KEY_CONTENT" ] \
+             && [ -n "$APPLE_API_KEY_ID" ] \
+             && [ -n "$APPLE_API_ISSUER" ] \
+             && [ -n "$APPLE_TEAM_ID" ] \
+             && [ -n "$MAC_CERT_P12_BASE64" ] \
+             && [ -n "$MAC_CERT_PASSWORD" ]; then
+            echo "All Apple signing/notarize secrets present → will sign + notarize"
+            mkdir -p ~/.private_keys
+            echo "$APPLE_API_KEY_CONTENT" > ~/.private_keys/AuthKey.p8
+            echo "APPLE_API_KEY=$HOME/.private_keys/AuthKey.p8" >> $GITHUB_ENV
+            echo "QS_NOTARIZE=1" >> $GITHUB_ENV
+          else
+            echo "One or more Apple secrets missing → producing UNSIGNED build (no notarize)"
+            echo "QS_NOTARIZE=0" >> $GITHUB_ENV
+          fi
 
       - name: Build macOS installer
         if: runner.os == 'macOS'
         timeout-minutes: 25
         env:
-          # Signing + notarization env vars are read by electron-builder when
-          # present. Leave secrets unset to produce an unsigned build.
+          # Signing is automatic when CSC_LINK + CSC_KEY_PASSWORD are present.
+          # Notarization is opt-in via QS_NOTARIZE (set above) which becomes
+          # the --config.mac.notarize=... arg below. We also cap notarytool's
+          # own wait (it can poll Apple for tens of minutes); 1200s = 20min
+          # is plenty for a normal submission.
           CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --mac --${{ matrix.arch }} --publish never
+          NOTARYTOOL_TIMEOUT: '1200'
+        run: |
+          if [ "${QS_NOTARIZE:-0}" = "1" ]; then
+            npx electron-builder --mac --${{ matrix.arch }} --publish never \
+              --config.mac.notarize=true
+          else
+            npx electron-builder --mac --${{ matrix.arch }} --publish never \
+              --config.mac.notarize=false
+          fi
 
       # ─── Windows: build unsigned ──────────────────────────────────────────
       - name: Build Windows installer

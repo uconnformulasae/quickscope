@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { uploadFile, fetchChannelData, type SessionInfo } from './lib/api';
+import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
@@ -15,9 +15,10 @@ import { ExportDialog } from './components/ExportDialog';
 import { SessionInfoModal } from './components/SessionInfoModal';
 import { SessionBrowser } from './components/SessionBrowser';
 import { SettingsDialog } from './components/SettingsDialog';
+import { LiveView } from './components/LiveView';
 import { Upload } from 'lucide-react';
 
-type View = 'browser' | 'analysis';
+type View = 'browser' | 'analysis' | 'live';
 
 export default function App() {
   const {
@@ -109,6 +110,27 @@ export default function App() {
       });
     }
 
+    setProgress({ stage: 'Detecting laps...', percent: 85 });
+    let lapMarkers: { timestamp: number; lapNumber: number }[] = [];
+    let lapSource: 'device' | 'gps_auto' | 'beacon_auto' | 'none' = 'none';
+    try {
+      const lapsResp = await fetchLaps();
+      lapSource = lapsResp.source;
+      // The device returns startTime/endTime per lap in milliseconds; the
+      // chart's lapMarkers convention is one marker per lap boundary.
+      // Use startTime of each lap; the last lap's endTime closes the set.
+      if (lapsResp.laps.length > 0) {
+        lapMarkers = lapsResp.laps.map(l => ({
+          timestamp: l.startTime,
+          lapNumber: l.lapNumber,
+        }));
+        const last = lapsResp.laps[lapsResp.laps.length - 1];
+        lapMarkers.push({ timestamp: last.endTime, lapNumber: last.lapNumber + 1 });
+      }
+    } catch {
+      // Non-fatal: leave laps empty. The Lap tab will show "no markers".
+    }
+
     const session: XRKSession = {
       metadata: {
         vehicle: info.metadata.vehicle || 'Unknown',
@@ -121,7 +143,8 @@ export default function App() {
       },
       channels,
       samples,
-      lapMarkers: [],
+      lapMarkers,
+      lapSource,
       durationMs: info.durationMs,
       totalSamples: info.totalSamples,
     };
@@ -145,15 +168,28 @@ export default function App() {
   /** Called when user uploads a file from the analysis view header */
   const handleFileSelected = useCallback(async (file: File) => {
     setLoading(true);
-    setProgress({ stage: 'Uploading to backend...', percent: 10 });
-    await new Promise(resolve => setTimeout(resolve, 50));
+    setProgress({ stage: 'Uploading to backend...', percent: 1 });
+
+    const formatRate = (bytesPerSec: number): string => {
+      if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
+      if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+      return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
+    };
 
     try {
-      const info = await uploadFile(file);
+      const info = await uploadFile(file, (p) => {
+        // Map upload bytes to 1..40% of overall progress; the rest is parsing.
+        const uploadPct = p.total > 0 ? (p.loaded / p.total) * 40 : 0;
+        const eta = p.etaSec >= 0 && p.etaSec < 600 ? `, ${p.etaSec.toFixed(0)}s left` : '';
+        setProgress({
+          stage: `Uploading ${(p.loaded / 1e6).toFixed(1)}/${(p.total / 1e6).toFixed(1)} MB at ${formatRate(p.ratePerSec)}${eta}`,
+          percent: Math.max(1, Math.min(40, uploadPct)),
+        });
+      });
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
       await buildAndSetSession(info, file.name);
     } catch (err) {
-      setError(`Failed to parse XRK file: ${err instanceof Error ? err.message : String(err)}`);
+      setError(`Failed to upload XRK file: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [setLoading, setProgress, buildAndSetSession, setError]);
 
@@ -288,10 +324,20 @@ export default function App() {
         <SessionBrowser
           onSessionLoaded={handleSessionLoaded}
           onOpenSettings={() => setSettingsOpen(true)}
+          onOpenLive={() => setView('live')}
           theme={theme}
           onToggleTheme={toggleTheme}
         />
         {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      </div>
+    );
+  }
+
+  // ─── Live View ─────────────────────────────────────────────────────────────
+  if (view === 'live') {
+    return (
+      <div className="flex flex-col h-full bg-background overflow-hidden">
+        <LiveView onBack={() => setView('browser')} />
       </div>
     );
   }

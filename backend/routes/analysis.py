@@ -4,12 +4,13 @@ import io
 import csv
 import math
 import re
+import time
 
-from fastapi import APIRouter, UploadFile, File, Query, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Query, HTTPException, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from services import session_store
+from services import session_store, lap_detection, upload_log
 from state import (
     state, logger, background_sync, CHART_COLORS,
     parse_file, extract_session_info, parse_recorded_at,
@@ -22,12 +23,27 @@ router = APIRouter(prefix="/api")
 # ─── Upload ──────────────────────────────────────────────────────────────────
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
-    if not file.filename or not file.filename.lower().endswith((".xrk", ".xrz")):
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None,
+):
+    started = time.monotonic()
+    client_ip = request.client.host if request.client else "?"
+    user_agent = request.headers.get("user-agent", "")[:200]
+    raw_filename = file.filename or ""
+
+    if not raw_filename or not raw_filename.lower().endswith((".xrk", ".xrz")):
+        upload_log.record(
+            filename=raw_filename, size=0, duration_s=time.monotonic() - started,
+            client_ip=client_ip, user_agent=user_agent,
+            status="upload_failed", error="invalid extension",
+        )
         raise HTTPException(400, "Only .xrk/.xrz files are supported")
 
-    filename = sanitize_filename(file.filename)
+    filename = sanitize_filename(raw_filename)
     content = await file.read()
+    size = len(content)
 
     dest = session_store.session_file_path(filename)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -37,10 +53,15 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
         log = parse_file(dest)
         state.log = log
         state.filename = filename
-    except Exception:
+    except Exception as exc:
         dest.unlink(missing_ok=True)
         state.clear()
         logger.exception("Failed to parse uploaded file")
+        upload_log.record(
+            filename=filename, size=size, duration_s=time.monotonic() - started,
+            client_ip=client_ip, user_agent=user_agent,
+            status="parse_failed", error=str(exc)[:200],
+        )
         raise HTTPException(500, "Failed to parse file")
 
     info = extract_session_info(log, filename)
@@ -52,6 +73,10 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
         state.session_id = existing["id"]
         if background_tasks:
             background_tasks.add_task(background_sync)
+        upload_log.record(
+            filename=filename, size=size, duration_s=time.monotonic() - started,
+            client_ip=client_ip, user_agent=user_agent, status="ok",
+        )
         return info
 
     entry = session_store.add_session(
@@ -71,7 +96,21 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
     if background_tasks:
         background_tasks.add_task(background_sync)
 
+    upload_log.record(
+        filename=filename, size=size, duration_s=time.monotonic() - started,
+        client_ip=client_ip, user_agent=user_agent, status="ok",
+    )
+    logger.info(
+        "upload ok: %s (%d bytes in %.2fs from %s)",
+        filename, size, time.monotonic() - started, client_ip,
+    )
     return info
+
+
+@router.get("/uploads/log")
+async def get_upload_log():
+    """Recent uploads, newest first. In-memory only — clears on restart."""
+    return {"entries": upload_log.list_recent()}
 
 
 # ─── Channel Data ────────────────────────────────────────────────────────────
@@ -113,15 +152,13 @@ async def get_laps():
     if not state.loaded:
         raise HTTPException(400, "No file loaded")
 
-    laps = []
-    if state.log.laps is not None and state.log.laps.num_rows > 0:
-        for i in range(state.log.laps.num_rows):
-            laps.append({
-                "lapNumber": state.log.laps.column("num")[i].as_py(),
-                "startTime": state.log.laps.column("start_time")[i].as_py(),
-                "endTime": state.log.laps.column("end_time")[i].as_py(),
-            })
-    return {"laps": laps}
+    def _channel_data(name: str):
+        if name in state.log.channels:
+            return channel_data(name, state.log.channels[name])
+        return None
+
+    laps, source = lap_detection.detect_laps(state.log, _channel_data)
+    return {"laps": laps, "source": source}
 
 
 @router.get("/gps")
