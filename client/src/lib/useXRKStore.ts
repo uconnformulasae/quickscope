@@ -4,7 +4,8 @@
  */
 import { useState, useCallback } from 'react';
 import type { XRKSession, ChannelDef, ChannelSample, ParseProgress } from './xrk-parser';
-import { evaluateFormula } from './formula-engine';
+import { evaluateFormula, extractChannelNames } from './formula-engine';
+import { fetchChannelData } from './api';
 
 export interface ActiveChannel {
   channelId: number;
@@ -85,6 +86,7 @@ function buildChannelDataMap(
   existingDerived: DerivedChannel[],
   existingDerivedSamples: Map<number, ChannelSample[]>,
   excludeId?: number,
+  extraSamples?: Map<number, ChannelSample[]>,
 ): Record<string, { timestamps: number[]; values: number[] }> {
   const channelData: Record<string, { timestamps: number[]; values: number[] }> = {};
 
@@ -100,7 +102,8 @@ function buildChannelDataMap(
   }
 
   for (const [id, chanDef] of session.channels) {
-    const samps = session.samples.get(id);
+    // extraSamples wins so just-fetched data is visible before React state catches up
+    const samps = extraSamples?.get(id) ?? session.samples.get(id);
     if (!samps || samps.length === 0) continue; // skip empty channels entirely
     channelData[chanDef.shortName] = samplesTo(samps);
   }
@@ -111,6 +114,36 @@ function buildChannelDataMap(
     channelData[dc.name] = samplesTo(samps);
   }
   return channelData;
+}
+
+/** Fetch any of `needed` channel names that exist in the session but haven't
+ *  been pulled to the client yet. Returns the fetched samples keyed by channel id. */
+async function fetchMissingChannels(
+  session: XRKSession,
+  needed: string[],
+): Promise<Map<number, ChannelSample[]>> {
+  const out = new Map<number, ChannelSample[]>();
+  if (needed.length === 0) return out;
+
+  const missing: { id: number; name: string }[] = [];
+  for (const name of needed) {
+    const def = Array.from(session.channels.values()).find(c => c.shortName === name);
+    if (!def) continue; // unknown name — let the evaluator throw its own error
+    const existing = session.samples.get(def.index);
+    if (existing && existing.length > 0) continue;
+    if ((def.fileSampleCount ?? 0) === 0) continue; // device recorded no data for this channel
+    missing.push({ id: def.index, name });
+  }
+  if (missing.length === 0) return out;
+
+  const dataMap = await fetchChannelData(missing.map(m => m.name));
+  for (const { id, name } of missing) {
+    const data = dataMap.get(name);
+    if (!data) continue;
+    const samps: ChannelSample[] = data.timestamps.map((t, i) => ({ timestamp: t, value: data.values[i] }));
+    out.set(id, samps);
+  }
+  return out;
 }
 
 /** Evaluate a formula expression synchronously */
@@ -155,8 +188,9 @@ async function computeDerivedSamples(
   session: XRKSession,
   existingDerived: DerivedChannel[],
   existingDerivedSamples: Map<number, ChannelSample[]>,
+  extraSamples?: Map<number, ChannelSample[]>,
 ): Promise<ChannelSample[] | string> {
-  const channelData = buildChannelDataMap(session, existingDerived, existingDerivedSamples, def.id);
+  const channelData = buildChannelDataMap(session, existingDerived, existingDerivedSamples, def.id, extraSamples);
   if (def.mode === 'formula') {
     return computeFormulaSamples(def.expression, channelData);
   }
@@ -307,6 +341,30 @@ export function useAppState() {
 
   // ─── Derived channel actions ──────────────────────────────────────────────
 
+  /** For formula mode, lazy-fetch any channels the expression references that
+   *  aren't yet loaded into session.samples. Returns the freshly-fetched
+   *  samples (passed to compute), and persists them to session state so
+   *  subsequent operations don't refetch. Python mode is a no-op — we can't
+   *  statically determine which channels a script will touch. */
+  const ensureExpressionChannelsLoaded = useCallback(async (
+    session: XRKSession,
+    def: Omit<DerivedChannel, 'id' | 'color'>,
+  ): Promise<Map<number, ChannelSample[]>> => {
+    if (def.mode !== 'formula') return new Map();
+    const referenced = extractChannelNames(def.expression);
+    if (referenced.length === 0) return new Map();
+    const fetched = await fetchMissingChannels(session, referenced);
+    if (fetched.size > 0) {
+      setState(prev => {
+        if (!prev.session) return prev;
+        const newSamples = new Map(prev.session.samples);
+        for (const [id, samps] of fetched) newSamples.set(id, samps);
+        return { ...prev, session: { ...prev.session, samples: newSamples } };
+      });
+    }
+    return fetched;
+  }, []);
+
   const addDerivedChannel = useCallback(async (
     def: Omit<DerivedChannel, 'id' | 'color'>
   ): Promise<{ error: string } | { id: number }> => {
@@ -317,7 +375,8 @@ export function useAppState() {
     const color = DERIVED_CHART_COLORS[id % DERIVED_CHART_COLORS.length];
     const newDef: DerivedChannel = { ...def, id, color };
 
-    const result = await computeDerivedSamples(newDef, session, state.derivedChannels, derivedSamplesMap);
+    const extraSamples = await ensureExpressionChannelsLoaded(session, def);
+    const result = await computeDerivedSamples(newDef, session, state.derivedChannels, derivedSamplesMap, extraSamples);
     if (typeof result === 'string') return { error: result };
 
     setState(prev => ({
@@ -333,7 +392,7 @@ export function useAppState() {
     });
 
     return { id };
-  }, [state.session, state.derivedChannels, derivedSamplesMap]);
+  }, [state.session, state.derivedChannels, derivedSamplesMap, ensureExpressionChannelsLoaded]);
 
   const removeDerivedChannel = useCallback((id: number) => {
     setState(prev => ({
@@ -359,7 +418,8 @@ export function useAppState() {
     if (!existing) return { error: 'Channel not found' };
 
     const updated: DerivedChannel = { ...existing, ...def };
-    const result = await computeDerivedSamples(updated, session, state.derivedChannels, derivedSamplesMap);
+    const extraSamples = await ensureExpressionChannelsLoaded(session, def);
+    const result = await computeDerivedSamples(updated, session, state.derivedChannels, derivedSamplesMap, extraSamples);
     if (typeof result === 'string') return { error: result };
 
     setState(prev => ({
@@ -374,7 +434,7 @@ export function useAppState() {
     });
 
     return { id };
-  }, [state.session, state.derivedChannels, derivedSamplesMap]);
+  }, [state.session, state.derivedChannels, derivedSamplesMap, ensureExpressionChannelsLoaded]);
 
   /**
    * Preview derived channel (evaluate but don't commit to state)
@@ -387,14 +447,15 @@ export function useAppState() {
     if (!session) return 'No session loaded';
 
     const tempDef: DerivedChannel = { ...def, id: existingId ?? -1, color: '#ffffff' };
-    const result = await computeDerivedSamples(tempDef, session, state.derivedChannels, derivedSamplesMap);
+    const extraSamples = await ensureExpressionChannelsLoaded(session, def);
+    const result = await computeDerivedSamples(tempDef, session, state.derivedChannels, derivedSamplesMap, extraSamples);
     if (typeof result === 'string') return result;
 
     return {
       timestamps: result.map(s => s.timestamp),
       values: result.map(s => s.value),
     };
-  }, [state.session, state.derivedChannels, derivedSamplesMap]);
+  }, [state.session, state.derivedChannels, derivedSamplesMap, ensureExpressionChannelsLoaded]);
 
   return {
     state,

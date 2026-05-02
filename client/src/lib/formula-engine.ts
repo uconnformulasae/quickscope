@@ -5,7 +5,7 @@
  * Formula mode supports:
  *   - Standard operators: +, -, *, /, ^, ()
  *   - Math functions: abs, sqrt, min, max, sin, cos, log, exp, pow
- *   - Signal functions: diff(ch), smooth(ch, window), delay(ch, samples)
+ *   - Signal functions: diff(ch), smooth(ch, window), mavg(ch, window_ms), delay(ch, samples)
  *   - Channel names (resolved to sample arrays)
  *   - Scalar constants
  *
@@ -79,6 +79,32 @@ function applySmooth(ch: ChannelData, window: number): ChannelData {
     // Shrink window left
     if (i - half - 1 >= 0) sum -= ch.values[i - half - 1];
     values[i] = sum / (hi - lo + 1);
+  }
+  return { timestamps: ch.timestamps, values };
+}
+
+function applyMavg(ch: ChannelData, windowMs: number): ChannelData {
+  const n = ch.timestamps.length;
+  if (n === 0 || windowMs <= 0) return ch;
+
+  // Expected sample count for a fully-populated window — used as the
+  // constant divisor so under-filled windows are zero-padded (FSAE EV.3.4.1.a:
+  // before the session starts, power = 0, so MAVG should ramp from 0).
+  const totalDuration = ch.timestamps[n - 1] - ch.timestamps[0];
+  const meanDt = totalDuration > 0 ? totalDuration / (n - 1) : windowMs;
+  const expectedCount = Math.max(1, Math.round(windowMs / meanDt));
+
+  const values = new Array<number>(n);
+  let sum = 0;
+  let lo = 0;
+  for (let i = 0; i < n; i++) {
+    const t = ch.timestamps[i];
+    sum += ch.values[i];
+    while (lo < i && ch.timestamps[lo] < t - windowMs) {
+      sum -= ch.values[lo];
+      lo++;
+    }
+    values[i] = sum / expectedCount;
   }
   return { timestamps: ch.timestamps, values };
 }
@@ -379,6 +405,15 @@ function evalNode(node: ASTNode, channels: ChannelMap): EvalResult {
         return applySmooth(ch, Math.round(win));
       }
 
+      if (name === 'mavg') {
+        if (node.args.length !== 2) throw new Error('mavg() takes 2 arguments: expression, window_ms');
+        const arg = evalNode(node.args[0], channels);
+        const win = evalNode(node.args[1], channels);
+        if (typeof win !== 'number') throw new Error('mavg() window must be a number (milliseconds)');
+        const ch = ensureChannel(arg);
+        return applyMavg(ch, win);
+      }
+
       if (name === 'delay') {
         if (node.args.length !== 2) throw new Error('delay() takes 2 arguments');
         const arg = evalNode(node.args[0], channels);
@@ -428,6 +463,37 @@ function evalNode(node: ASTNode, channels: ChannelMap): EvalResult {
 
       throw new Error(`Unknown function: '${node.name}'`);
     }
+  }
+}
+
+// ─── AST helpers ──────────────────────────────────────────────────────────────
+
+function walkChannelNames(node: ASTNode, out: Set<string>): void {
+  switch (node.kind) {
+    case 'channel': out.add(node.name); return;
+    case 'unary': walkChannelNames(node.arg, out); return;
+    case 'binop':
+      walkChannelNames(node.left, out);
+      walkChannelNames(node.right, out);
+      return;
+    case 'call':
+      for (const a of node.args) walkChannelNames(a, out);
+      return;
+  }
+}
+
+/** Extract identifiers the parser treats as channel references.
+ *  Returns [] if the expression doesn't parse — caller can ignore and let
+ *  the real evaluator surface the syntax error later. */
+export function extractChannelNames(expression: string): string[] {
+  try {
+    const tokens = tokenize(expression.trim());
+    const ast = new Parser(tokens).parse();
+    const names = new Set<string>();
+    walkChannelNames(ast, names);
+    return Array.from(names);
+  } catch {
+    return [];
   }
 }
 

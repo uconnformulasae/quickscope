@@ -3,7 +3,7 @@
  * Supports formula mode (math expression) and JavaScript mode (function body).
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, FlaskConical, Code2, ChevronDown, ChevronUp, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { X, FlaskConical, Code2, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Search } from 'lucide-react';
 import type { DerivedChannel } from '../lib/useXRKStore';
 import type { XRKSession } from '../lib/xrk-parser';
 
@@ -21,6 +21,7 @@ const FORMULA_EXAMPLES = [
   { label: 'Brake diff', expr: 'RBRK - RBrP' },
   { label: 'Acceleration', expr: 'diff(Spd1) / 3.6' },
   { label: 'Smooth lat G', expr: 'smooth(LatA, 20)' },
+  { label: 'Lat G 500ms MAVG', expr: 'MAVG(LatA, 500)' },
 ];
 
 const PYTHON_TEMPLATE = `# Example: Power = Voltage * Current
@@ -119,6 +120,7 @@ export function DerivedChannelDialog({
   const [previewResult, setPreviewResult] = useState<{ timestamps: number[]; values: number[] } | string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showChannelList, setShowChannelList] = useState(false);
+  const [channelSearch, setChannelSearch] = useState('');
 
   const [isEvaluating, setIsEvaluating] = useState(false);
 
@@ -131,8 +133,11 @@ export function DerivedChannelDialog({
     setPreviewResult(null);
   };
 
+  // Show every channel the device recorded data for, even if its samples
+  // haven't been pulled to the client yet — useXRKStore lazy-fetches on
+  // preview/submit when a formula references an unloaded channel.
   const channelNames = Array.from(session.channels.values())
-    .filter(ch => (session.samples.get(ch.index) || []).length > 0)
+    .filter(ch => (ch.fileSampleCount ?? 0) > 0)
     .map(ch => ch.shortName)
     .sort();
 
@@ -291,7 +296,7 @@ export function DerivedChannelDialog({
             />
             {mode === 'formula' && (
               <p className="mt-1 text-xs text-muted-foreground/60">
-                Use channel names as variables. Operators: +, −, ×, ÷, ^ (power). Functions: abs, sqrt, sin, cos, log, exp, diff, smooth, delay.
+                Use channel names as variables. Operators: +, −, ×, ÷, ^ (power). Functions: abs, sqrt, sin, cos, log, exp, diff, smooth, mavg, delay.
               </p>
             )}
             {mode === 'python' && (
@@ -328,24 +333,47 @@ export function DerivedChannelDialog({
               className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               {showChannelList ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              Available channels ({channelNames.length})
+              Available channels {(() => {
+                const q = channelSearch.trim().toLowerCase();
+                const filtered = q ? channelNames.filter(n => n.toLowerCase().includes(q)) : channelNames;
+                return q ? `(${filtered.length}/${channelNames.length})` : `(${channelNames.length})`;
+              })()}
             </button>
-            {showChannelList && (
-              <div className="mt-2 flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-2 bg-muted/20 rounded border border-border/40">
-                {channelNames.map(n => (
-                  <button
-                    key={n}
-                    onClick={() => {
-                      // Insert at cursor or append
-                      setExpression(prev => prev ? prev + ' ' + n : n);
-                    }}
-                    className="px-1.5 py-0.5 rounded bg-muted/60 text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            )}
+            {showChannelList && (() => {
+              const q = channelSearch.trim().toLowerCase();
+              const filtered = q ? channelNames.filter(n => n.toLowerCase().includes(q)) : channelNames;
+              return (
+                <div className="mt-2 space-y-2">
+                  <div className="relative">
+                    <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground/60 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={channelSearch}
+                      onChange={e => setChannelSearch(e.target.value)}
+                      placeholder="Search channels..."
+                      className="w-full pl-7 pr-2 py-1 bg-muted/40 border border-border rounded text-xs text-foreground placeholder-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                      data-testid="input-channel-search"
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-2 bg-muted/20 rounded border border-border/40">
+                    {filtered.length === 0 ? (
+                      <span className="text-xs text-muted-foreground/60 italic">No channels match "{channelSearch}"</span>
+                    ) : filtered.map(n => (
+                      <button
+                        key={n}
+                        onClick={() => {
+                          // Insert at cursor or append
+                          setExpression(prev => prev ? prev + ' ' + n : n);
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-muted/60 text-xs font-mono text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Preview button + result */}
