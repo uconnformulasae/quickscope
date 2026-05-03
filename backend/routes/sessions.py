@@ -154,8 +154,11 @@ class SetpointsRequest(BaseModel):
 
 
 _MAX_SETPOINTS = 16
-_RADIUS_MIN_M = 5.0
-_RADIUS_MAX_M = 50.0
+# Radius is fixed at 2 m by the UI; the bounds here just reject typo'd
+# requests. Older sessions persisted radius_m=15 — those keep working,
+# but new pins must land in [1, 10].
+_RADIUS_MIN_M = 1.0
+_RADIUS_MAX_M = 10.0
 
 
 @router.get("/sessions/{session_id}/setpoints")

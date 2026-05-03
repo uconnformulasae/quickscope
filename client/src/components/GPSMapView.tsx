@@ -12,9 +12,7 @@ interface GPSMapViewProps {
   onSetpointsChanged?: () => void;
 }
 
-const DEFAULT_RADIUS_M = 15;
-const RADIUS_MIN_M = 5;
-const RADIUS_MAX_M = 50;
+const DEFAULT_RADIUS_M = 2;
 
 const SECTOR_COLORS = ['#4361ee', '#8b5cf6', '#06b6d4', '#84cc16', '#fb923c', '#f43f5e', '#a855f7', '#22d3ee'];
 
@@ -339,11 +337,6 @@ export function GPSMapView({ cursorTime, sessionId, onSetpointsChanged }: GPSMap
     setSetpoints(prev => prev.filter((_, i) => i !== idx));
   }, []);
 
-  const handleRadiusChange = useCallback((idx: number, radius_m: number) => {
-    const clamped = Math.max(RADIUS_MIN_M, Math.min(RADIUS_MAX_M, radius_m));
-    setSetpoints(prev => prev.map((p, i) => i === idx ? { ...p, radius_m: clamped } : p));
-  }, []);
-
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 p-6">
@@ -462,18 +455,6 @@ export function GPSMapView({ cursorTime, sessionId, onSetpointsChanged }: GPSMap
                   <p className="text-[10px] text-muted-foreground tabular leading-tight">
                     {sp.lat.toFixed(5)}, {sp.lon.toFixed(5)}
                   </p>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <input
-                      type="range"
-                      min={RADIUS_MIN_M}
-                      max={RADIUS_MAX_M}
-                      step={1}
-                      value={sp.radius_m}
-                      onChange={e => handleRadiusChange(idx, parseFloat(e.target.value))}
-                      className="flex-1 h-1 accent-primary"
-                    />
-                    <span className="text-[10px] tabular text-foreground w-9 text-right">{sp.radius_m.toFixed(0)} m</span>
-                  </div>
                 </li>
               );
             })}

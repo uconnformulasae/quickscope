@@ -9,7 +9,7 @@ Let the user define custom lap-detection points by dropping pins on the GPS map 
 - **Persistence:** Per-session field on the local session record. **Not** synced to Railway in v1 (follow-up task once Data-Development backend gains the field).
 - **Placement UX:** Click-on-map with snap-to-nearest-track-point. Pins draggable when edit mode is on. "Edit setpoints" toggle button in the GPS map's top-right; map clicks only drop pins when edit mode is on. Existing pins remain visible when edit mode is off.
 - **Recompute trigger:** On exit-edit-mode (save-on-exit). No live recompute during drag.
-- **Per-pin radius:** Single slider 5–50 m, default 15 m. `RETURN_RADIUS_M = radius`, `DEPARTURE_RADIUS_M = 2 × radius` derived per pin. No "advanced" knob for departure-radius in v1.
+- **Per-pin radius:** Fixed at 2 m. No UI control — the per-pin radius slider was removed after integration testing showed the default 15 m was too loose. `RETURN_RADIUS_M = 2`, `DEPARTURE_RADIUS_M = 4`. Backend bounds new pins to `[1, 10]` m to reject typo'd payloads; older sessions persisted with 15 m keep working since the cleaning happens on PUT only.
 - **Lap definition under sectors:** Lenient. A lap closes whenever the car returns to the first pin's radius (after `MIN_LAP_S = 10`-second debounce). Sector splits are recorded for whichever sectors were crossed within that lap; missed sectors render as `—` in the UI.
 - **`MIN_LAP_S` debounce:** Applies only to start/finish. Sector boundaries are not debounced.
 - **LiveView impact:** None for v1. Setpoints are post-session analysis only.
@@ -67,7 +67,7 @@ Extended to surface sector splits. Backwards-compatible — pre-existing fields 
 | `GET` | `/api/sessions/{session_id}/setpoints` | — | Returns `{ "setpoints": [...] }`. Convenience for the dialog before the session is loaded into `state.log`. (Optional — could just read from `listSessions()` cache; keeping it for clarity.) |
 
 Validation in PUT handler:
-- Each setpoint: `-90 ≤ lat ≤ 90`, `-180 ≤ lon ≤ 180`, `5 ≤ radius_m ≤ 50`, all finite.
+- Each setpoint: `-90 ≤ lat ≤ 90`, `-180 ≤ lon ≤ 180`, `1 ≤ radius_m ≤ 10`, all finite.
 - `len(setpoints) ≤ 16` (sanity cap; FSAE never has more than ~5 sectors).
 - 400 on validation failure.
 
@@ -129,7 +129,7 @@ New UI overlays on the map:
 - **Click handler on the Leaflet map:** in `editMode`, drop a new pin at the snapped GPS-track position (see "Snap-to-track").
 - **Per-pin radius circle:** `L.circle({lat, lon}, radius_m)` — drawn semi-transparent. Visible always (so the user understands the active geometry).
 - **Right-side edit panel** (only when `editMode`): vertical list of pins.
-  - Row: `Pin N • [type]` + lat/lon (read-only display) + radius slider (5–50 m, step 1) + delete icon.
+  - Row: `Pin N • [type]` + lat/lon (read-only display) + delete icon. Radius is fixed at 2 m, so no per-pin control is shown.
   - Bottom: `Clear all setpoints` button.
 - **Empty-state hint:** when `editMode && setpoints.length === 0`, the map shows a small floating tooltip "Click on the track to place start/finish".
 
@@ -162,20 +162,19 @@ When the user clicks the map at `(clickLat, clickLon)`:
 ## Edit Flow (UX walkthrough)
 1. User opens GPS tab in AnalysisPanel.
 2. Clicks "Edit setpoints" → toggle on. Edit panel slides in on the right of the map. Pin tooltip appears if no pins yet.
-3. Clicks the racing line near start/finish → snapped first pin (checkered) drops with default 15 m radius circle.
+3. Clicks the racing line near start/finish → snapped first pin (checkered) drops with a 2 m radius circle.
 4. Clicks at a corner → snapped second pin drops, numbered "S1" (sector 1).
-5. Adjusts the second pin's radius slider to 8 m (a tight chicane).
-6. Drags the start/finish pin slightly along the line.
-7. Clicks "Done" → PUT `/api/sessions/{id}/setpoints`, then `fetchLaps()` re-runs, LapAnalysisTab updates with sector splits, chart lap markers update.
-8. Source pill in LapAnalysisTab now reads `Manual setpoint` (blue).
-9. To revert: edit mode → "Clear all setpoints" → Done. PUT empty list. `lap_source` returns to auto (whichever auto tier wins).
+5. Drags the start/finish pin slightly along the line.
+6. Clicks "Done" → PUT `/api/sessions/{id}/setpoints`, then `fetchLaps()` re-runs, LapAnalysisTab updates with sector splits, chart lap markers update.
+7. Source pill in LapAnalysisTab now reads `Manual setpoint` (blue).
+8. To revert: edit mode → "Clear all setpoints" → Done. PUT empty list. `lap_source` returns to auto (whichever auto tier wins).
 
 ## Edge Cases
 - **No GPS in session:** Edit toggle is hidden. Existing GPSMapView "No GPS Data" empty state is unchanged.
 - **GPS but no track polyline (< 2 valid points):** Edit toggle hidden; same logic.
 - **User places only sectors, no start/finish:** Cannot happen — the first pin placed is always the start/finish (`setpoints[0]`). Deleting the start/finish pin promotes `setpoints[1]` to start/finish (if it exists), otherwise clears all.
 - **Setpoint placed off-track (snap miss when racing line was off-screen on click):** Snap always finds *some* nearest point because the polyline is fully cached. No "miss" case.
-- **Radius slider range underflow:** Clamped client-side to `[5, 50]`, rejected server-side outside `[5, 50]`.
+- **Radius bounds:** Frontend always sends `radius_m = 2`. Backend rejects new pins with `radius_m` outside `[1, 10]`. Sessions persisted with the older 15 m value continue to work — they're only re-validated on a fresh PUT, at which point the new client value (2 m) replaces them.
 - **Concurrent edits on multiple QuickScope installs:** Last write wins. Acceptable — single-user app, sync conflicts not a real concern.
 - **Session reload mid-edit:** Discards local unsaved changes. Edit panel loses state on tab switch. Acceptable for v1; we can add a "you have unsaved changes" guard later.
 - **Legacy laps tab shows the old `Auto-detected (GPS)` pill:** Only when `lap_setpoints` is empty/missing. Unchanged behaviour.
