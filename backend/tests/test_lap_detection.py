@@ -72,11 +72,11 @@ class FromSetpointsBasicTests(unittest.TestCase):
         self.assertEqual(from_setpoints(ts, la, lo, []), [])
 
     def test_no_gps_data_returns_empty(self):
-        sp = [{"lat": _BASE_LAT, "lon": _BASE_LON, "radius_m": 15.0}]
+        sp = [{"lat": _BASE_LAT, "lon": _BASE_LON, "radius_m": 2.0}]
         self.assertEqual(from_setpoints([], [], [], sp), [])
 
     def test_too_few_valid_samples_returns_empty(self):
-        sp = [{"lat": _BASE_LAT, "lon": _BASE_LON, "radius_m": 15.0}]
+        sp = [{"lat": _BASE_LAT, "lon": _BASE_LON, "radius_m": 2.0}]
         # nine samples — below the 10-sample threshold mirrored from from_gps
         ts = [float(i) for i in range(9)]
         la = [_BASE_LAT for _ in range(9)]
@@ -91,7 +91,7 @@ class FromSetpointsBasicTests(unittest.TestCase):
         lo.insert(50, 0.0)
         # Place start/finish on the loop where the car actually goes (angle 0)
         sf_lat, sf_lon = _point_at_angle(0.0)
-        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 15.0}]
+        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 2.0}]
         laps = from_setpoints(ts, la, lo, sp)
         # 2 loops past start/finish → 1 closed lap
         self.assertEqual(len(laps), 1)
@@ -103,7 +103,7 @@ class FromSetpointsLapCountingTests(unittest.TestCase):
         # The first crossing opens lap 1; the third crossing closes lap 2.
         ts, la, lo = _make_loop(3, samples_per_lap=400, period_s=30.0)
         sf_lat, sf_lon = _point_at_angle(0.0)
-        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 15.0}]
+        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 2.0}]
         laps = from_setpoints(ts, la, lo, sp)
         self.assertEqual(len(laps), 2)
         for i, lap in enumerate(laps, start=1):
@@ -122,7 +122,7 @@ class FromSetpointsLapCountingTests(unittest.TestCase):
         # therefore spans roughly 2× the loop period (10 s).
         ts, la, lo = _make_loop(6, samples_per_lap=400, period_s=5.0)
         sf_lat, sf_lon = _point_at_angle(0.0)
-        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 15.0}]
+        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 2.0}]
         laps = from_setpoints(ts, la, lo, sp)
         # No "lap" should be shorter than the debounce.
         for lap in laps:
@@ -135,7 +135,7 @@ class FromSetpointsLapCountingTests(unittest.TestCase):
         # to "rescue" the first).
         ts, la, lo = _make_loop(2, samples_per_lap=400, period_s=5.0)
         sf_lat, sf_lon = _point_at_angle(0.0)
-        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 15.0}]
+        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 2.0}]
         laps = from_setpoints(ts, la, lo, sp)
         # 1 closed lap is allowed only if it's ≥ 10 s. Because two 5-s loops
         # finish at t=10s exactly, at the boundary, the result is sensitive
@@ -149,7 +149,7 @@ class FromSetpointsLapCountingTests(unittest.TestCase):
         # Exactly 1.0 loops → first crossing opens lap, never closes → 0 laps.
         ts, la, lo = _make_loop(1, samples_per_lap=400, period_s=30.0)
         sf_lat, sf_lon = _point_at_angle(0.0)
-        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 15.0}]
+        sp = [{"lat": sf_lat, "lon": sf_lon, "radius_m": 2.0}]
         laps = from_setpoints(ts, la, lo, sp)
         self.assertEqual(laps, [])
 
@@ -162,9 +162,9 @@ class FromSetpointsSectorTests(unittest.TestCase):
         s1_lat, s1_lon = _point_at_angle(120.0)
         s2_lat, s2_lon = _point_at_angle(240.0)
         sp = [
-            {"lat": sf_lat, "lon": sf_lon, "radius_m": 15.0},
-            {"lat": s1_lat, "lon": s1_lon, "radius_m": 15.0},
-            {"lat": s2_lat, "lon": s2_lon, "radius_m": 15.0},
+            {"lat": sf_lat, "lon": sf_lon, "radius_m": 2.0},
+            {"lat": s1_lat, "lon": s1_lon, "radius_m": 2.0},
+            {"lat": s2_lat, "lon": s2_lon, "radius_m": 2.0},
         ]
         laps = from_setpoints(ts, la, lo, sp)
         self.assertEqual(len(laps), 1)
@@ -191,8 +191,8 @@ class FromSetpointsSectorTests(unittest.TestCase):
         far_lat = _BASE_LAT + _lat_offset_m_to_deg(1000.0)
         far_lon = _BASE_LON + _lon_offset_m_to_deg(1000.0, _BASE_LAT)
         sp = [
-            {"lat": sf_lat, "lon": sf_lon, "radius_m": 15.0},
-            {"lat": far_lat, "lon": far_lon, "radius_m": 15.0},
+            {"lat": sf_lat, "lon": sf_lon, "radius_m": 2.0},
+            {"lat": far_lat, "lon": far_lon, "radius_m": 2.0},
         ]
         laps = from_setpoints(ts, la, lo, sp)
         self.assertEqual(len(laps), 1)
@@ -204,8 +204,8 @@ class FromSetpointsSectorTests(unittest.TestCase):
         sf_lat, sf_lon = _point_at_angle(0.0)
         s1_lat, s1_lon = _point_at_angle(180.0)
         sp = [
-            {"lat": sf_lat, "lon": sf_lon, "radius_m": 15.0},
-            {"lat": s1_lat, "lon": s1_lon, "radius_m": 15.0},
+            {"lat": sf_lat, "lon": sf_lon, "radius_m": 2.0},
+            {"lat": s1_lat, "lon": s1_lon, "radius_m": 2.0},
         ]
         laps = from_setpoints(ts, la, lo, sp)
         self.assertEqual(len(laps), 2)
