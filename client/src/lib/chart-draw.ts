@@ -8,6 +8,7 @@ import {
   MONO_FONT, AXIS_WIDTH,
   BOTTOM_AXIS_HEIGHT,
   niceAxisTicks, formatValue, formatTimeSec, clamp, brightenColor, minMaxTrace,
+  dashForOverlayIndex,
 } from './chart-utils';
 
 const LERP_RATE = 0.18;
@@ -27,6 +28,16 @@ export function computeOverlayYRanges(dc: DrawContext): void {
     for (const s of visible) {
       if (s.value < mn) mn = s.value;
       if (s.value > mx) mx = s.value;
+    }
+    // Fold overlays into the unit's range so dashed traces aren't clipped
+    for (const ov of dc.overlays) {
+      const ovSamples = ov.samplesByPrimaryId.get(strip.channelId);
+      if (!ovSamples || ovSamples.length === 0) continue;
+      const ovVis = dc.getVisibleSamples(strip.channelId, ovSamples, dc.xRange, dc.plotW);
+      for (const s of ovVis) {
+        if (s.value < mn) mn = s.value;
+        if (s.value > mx) mx = s.value;
+      }
     }
     if (!isFinite(mn)) { mn = 0; mx = 1; }
     const existing = unitMinMax.get(units);
@@ -111,7 +122,21 @@ export function drawStrips(
       ? dc.getVisibleSamples(strip.channelId, allSamples, xRange, plotW)
       : [];
 
-    const [yMin, yMax] = computeStripYRange(dc, strip, visible, def.units || '');
+    // Fold overlay samples into the data array used for Y-range so dashed
+    // traces don't get clipped above/below the visible region.
+    let visibleForRange: ChannelSample[] = visible;
+    if (dc.overlays.length > 0) {
+      const merged: ChannelSample[] = visible.slice();
+      for (const ov of dc.overlays) {
+        const ovSamples = ov.samplesByPrimaryId.get(strip.channelId);
+        if (!ovSamples || ovSamples.length === 0) continue;
+        const ovVis = dc.getVisibleSamples(strip.channelId, ovSamples, xRange, plotW);
+        for (const s of ovVis) merged.push(s);
+      }
+      visibleForRange = merged;
+    }
+
+    const [yMin, yMax] = computeStripYRange(dc, strip, visibleForRange, def.units || '');
     // Min-max per-pixel optimization for rendering (pixel-identical output)
     const ds = minMaxTrace(visible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
     const ySpan = yMax - yMin || 1;
@@ -188,6 +213,36 @@ export function drawStrips(
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
+    }
+
+    // Overlay traces — same channel id (matched), each with its own
+    // dash pattern + time offset, drawn on the same Y-axis as the primary.
+    if (dc.overlays.length > 0) {
+      for (const ov of dc.overlays) {
+        const ovSamples = ov.samplesByPrimaryId.get(strip.channelId);
+        if (!ovSamples || ovSamples.length === 0) continue;
+        const ovVisible = dc.getVisibleSamples(strip.channelId, ovSamples, xRange, plotW);
+        if (ovVisible.length < 2) continue;
+        const ovDs = minMaxTrace(ovVisible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
+
+        ctx.save();
+        ctx.strokeStyle = ov.index >= 4 ? brightenColor(strip.color, 0.35) : strip.color;
+        ctx.lineWidth = 1.6;
+        ctx.lineJoin = 'round';
+        ctx.setLineDash(dashForOverlayIndex(ov.index));
+        ctx.globalAlpha = ov.index >= 4 ? 0.7 : 1.0;
+        ctx.beginPath();
+        let started = false;
+        for (const s of ovDs) {
+          const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
+          const y = valToY(s.value);
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
     }
 
     // Data point markers — visible when zoomed in tight (>8px between points)

@@ -65,31 +65,28 @@ function stripValToY(strip: StripLayout, yRange: [number, number], v: number): n
   return strip.top + strip.height - 4 - ((v - yRange[0]) / ySpan) * (strip.height - 8);
 }
 
-/** Draw cursor value readout pills for a given cursor time */
-function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
+/** Draw cursor value readout pills for a given cursor time.
+ *  Each visible primary channel gets a pill; if overlays are present, a
+ *  smaller #N pill is stacked under each channel's pill. */
+function drawCursorPills(dc: DrawContext, cursorT: number, _axisY: number) {
   const { ctx, w, rm, xRange, plotW, strips, channelDataMap, chartMode } = dc;
   let pillIndex = 0;
   for (const strip of strips) {
     const data = channelDataMap.get(strip.channelId);
     if (!data || data.allSamples.length === 0) continue;
 
-    // Snap to nearest real sample for the displayed value
     const snap = nearestSample(data.allSamples, cursorT * 1000);
     if (!snap) continue;
-
-    // Interpolate for dot position so it sits on the drawn line
     const lineVal = interpolateValue(data.allSamples, cursorT * 1000) ?? snap.value;
     const yRange = getStripYRange(dc, strip, data.def);
     const dotX = dc.timeToX(cursorT, xRange, plotW);
     const dotY = stripValToY(strip, yRange, lineVal);
 
-    // Dot on trace
     ctx.fillStyle = strip.color;
     ctx.beginPath();
     ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
     ctx.fill();
 
-    // Value pill — shows nearest real measured value
     const valText = formatValue(snap.value);
     const nameText = data.def.shortName;
     ctx.font = `bold 10px ${MONO_FONT}`;
@@ -103,7 +100,7 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
     const pillX = w - rm - pillW - 4;
     const pillY = chartMode === 'overlay'
       ? strip.top + 4 + pillIndex * (pillH + 3)
-      : strip.top + 4; // fixed at top of strip in separate mode
+      : strip.top + 4;
 
     ctx.fillStyle = dc.colors.cursorPill;
     ctx.beginPath();
@@ -119,6 +116,42 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
     ctx.fillStyle = dc.colors.cursorPillText;
     ctx.fillText(valText, pillX + pillPadX + nameW + pillGap, pillY + 14);
     pillIndex++;
+
+    // Overlay pills for this channel
+    for (const ov of dc.overlays) {
+      const ovSamples = ov.samplesByPrimaryId.get(strip.channelId);
+      if (!ovSamples || ovSamples.length === 0) continue;
+      const ovSnap = nearestSample(ovSamples, cursorT * 1000);
+      if (!ovSnap) continue;
+
+      const ovValText = formatValue(ovSnap.value);
+      ctx.font = `10px ${MONO_FONT}`;
+      const ovValW = ctx.measureText(ovValText).width;
+      const ovTagText = `#${ov.index}`;
+      ctx.font = `bold 9px ${MONO_FONT}`;
+      const ovTagW = ctx.measureText(ovTagText).width;
+      const ovPillW = ovTagW + pillGap + ovValW + pillPadX * 2;
+      const ovPillH = 16;
+      const ovPillX = w - rm - ovPillW - 4;
+      const ovPillY = chartMode === 'overlay'
+        ? strip.top + 4 + pillIndex * (ovPillH + 2)
+        : pillY + pillH + 2 + (ov.index - 1) * (ovPillH + 2);
+
+      ctx.fillStyle = dc.colors.cursorPill;
+      ctx.beginPath();
+      ctx.roundRect(ovPillX, ovPillY, ovPillW, ovPillH, 3);
+      ctx.fill();
+
+      ctx.font = `bold 9px ${MONO_FONT}`;
+      ctx.fillStyle = strip.color;
+      ctx.fillText(ovTagText, ovPillX + pillPadX, ovPillY + 11);
+
+      ctx.font = `10px ${MONO_FONT}`;
+      ctx.fillStyle = dc.colors.cursorPillText;
+      ctx.fillText(ovValText, ovPillX + pillPadX + ovTagW + pillGap, ovPillY + 11);
+
+      if (chartMode === 'overlay') pillIndex++;
+    }
   }
 }
 
@@ -176,12 +209,22 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
   }
 }
 
-/** Draw the delta comparison panel */
+/** Draw the delta comparison panel — within-session A/B always, plus
+ *  per-overlay {A, B, Δ@A, Δ@B} columns when overlays are present. */
 function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
-  const { ctx, w, rm, strips, channelDataMap } = dc;
+  const { ctx, w, rm, strips, channelDataMap, overlays } = dc;
 
   const deltaT = Math.abs(cursorB - cursorA);
-  const panelLines: { label: string; valA: string; valB: string; delta: string; color: string }[] = [];
+  type OvCell = { tag: string; valA: string; valB: string; deltaA: string; deltaB: string };
+  type Row = {
+    label: string;
+    valA: string;
+    valB: string;
+    delta: string;
+    color: string;
+    overlayCells: OvCell[];
+  };
+  const rows: Row[] = [];
 
   for (const strip of strips) {
     const data = channelDataMap.get(strip.channelId);
@@ -189,31 +232,57 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
     const snapA = nearestSample(data.allSamples, cursorA * 1000);
     const snapB = nearestSample(data.allSamples, cursorB * 1000);
     if (!snapA || !snapB) continue;
-    panelLines.push({
+
+    const overlayCells: OvCell[] = [];
+    for (const ov of overlays) {
+      const ovSamples = ov.samplesByPrimaryId.get(strip.channelId);
+      if (!ovSamples || ovSamples.length === 0) continue;
+      const ovSnapA = nearestSample(ovSamples, cursorA * 1000);
+      const ovSnapB = nearestSample(ovSamples, cursorB * 1000);
+      if (!ovSnapA || !ovSnapB) continue;
+      overlayCells.push({
+        tag: `#${ov.index}`,
+        valA: formatValue(ovSnapA.value),
+        valB: formatValue(ovSnapB.value),
+        deltaA: formatValue(ovSnapA.value - snapA.value),
+        deltaB: formatValue(ovSnapB.value - snapB.value),
+      });
+    }
+
+    rows.push({
       label: data.def.shortName,
       valA: formatValue(snapA.value),
       valB: formatValue(snapB.value),
       delta: formatValue(snapB.value - snapA.value),
       color: strip.color,
+      overlayCells,
     });
   }
 
-  // Measure widths for dynamic layout
   ctx.font = `bold 10px ${MONO_FONT}`;
   let maxNameW = ctx.measureText('Channel').width;
-  for (const row of panelLines) {
+  for (const row of rows) {
     const tw = ctx.measureText(row.label).width;
     if (tw > maxNameW) maxNameW = tw;
   }
   const nameColW = maxNameW + 14;
-  const valColW = 70;
+  const valColW = 64;
+  const ovValColW = 56;
+  const numOverlayCols = overlays.length;
 
   const panelPad = 10;
   const headerH = 22;
   const colHeaderH = 18;
-  const lineH = 20;
-  const panelH = headerH + colHeaderH + panelLines.length * lineH + panelPad * 2;
-  const panelW = nameColW + valColW * 3 + panelPad * 2;
+  const baseLineH = 20;
+  const ovLineH = 16;
+  let totalLines = 0;
+  for (const r of rows) {
+    totalLines += baseLineH + r.overlayCells.length * ovLineH;
+  }
+  const panelH = headerH + colHeaderH + totalLines + panelPad * 2;
+  // Columns: name | A | B | Δ(A→B) | per-overlay {A, B, Δ-vs-prim@A, Δ-vs-prim@B}
+  const ovColW = numOverlayCols * (ovValColW * 4);
+  const panelW = nameColW + valColW * 3 + ovColW + panelPad * 2;
   const panelX = w - rm - panelW - 10;
   const panelY = 8;
 
@@ -221,7 +290,6 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
   ctx.beginPath();
   ctx.roundRect(panelX, panelY, panelW, panelH, 6);
   ctx.fill();
-
   ctx.strokeStyle = dc.colors.deltaLine;
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -247,6 +315,13 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
   ctx.fillText('A', col2, colY);
   ctx.fillText('B', col3, colY);
   ctx.fillText('Δ', col4, colY);
+  for (let i = 0; i < overlays.length; i++) {
+    const baseX = col4 + (i * 4 + 1) * ovValColW;
+    ctx.fillText(`#${overlays[i].index}A`, baseX, colY);
+    ctx.fillText(`#${overlays[i].index}B`, baseX + ovValColW, colY);
+    ctx.fillText(`Δ@A`, baseX + ovValColW * 2, colY);
+    ctx.fillText(`Δ@B`, baseX + ovValColW * 3, colY);
+  }
 
   const sepY = colY + 5;
   ctx.strokeStyle = dc.colors.separator;
@@ -255,11 +330,8 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
   ctx.lineTo(panelX + panelW - panelPad, sepY);
   ctx.stroke();
 
-  const rowStartY = sepY + 4;
-  for (let i = 0; i < panelLines.length; i++) {
-    const row = panelLines[i];
-    const ry = rowStartY + i * lineH + 12;
-
+  let ry = sepY + 4 + 12;
+  for (const row of rows) {
     ctx.font = `bold 10px ${MONO_FONT}`;
     ctx.fillStyle = row.color;
     ctx.textAlign = 'left';
@@ -274,6 +346,28 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
     ctx.font = `bold 10px ${MONO_FONT}`;
     ctx.fillStyle = dc.colors.deltaAccent;
     ctx.fillText(row.delta, col4, ry);
+
+    let ovRy = ry + ovLineH;
+    for (const ovCell of row.overlayCells) {
+      const ovIdx = overlays.findIndex(o => `#${o.index}` === ovCell.tag);
+      if (ovIdx < 0) { ovRy += ovLineH; continue; }
+      const baseX = col4 + (ovIdx * 4 + 1) * ovValColW;
+
+      ctx.font = `9px ${MONO_FONT}`;
+      ctx.fillStyle = dc.colors.text;
+      ctx.textAlign = 'left';
+      ctx.fillText(ovCell.tag, col1 + 12, ovRy);
+
+      ctx.textAlign = 'right';
+      ctx.fillText(ovCell.valA, baseX, ovRy);
+      ctx.fillText(ovCell.valB, baseX + ovValColW, ovRy);
+      ctx.fillStyle = dc.colors.deltaAccent;
+      ctx.fillText(ovCell.deltaA, baseX + ovValColW * 2, ovRy);
+      ctx.fillText(ovCell.deltaB, baseX + ovValColW * 3, ovRy);
+
+      ovRy += ovLineH;
+    }
+    ry = ovRy + 4;
   }
 }
 

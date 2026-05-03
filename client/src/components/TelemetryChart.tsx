@@ -3,13 +3,16 @@ import { formatTime } from '../lib/xrk-parser';
 import type { ChannelSample } from '../lib/xrk-parser';
 import { RotateCcw } from 'lucide-react';
 import {
-  type TelemetryChartProps, type StripLayout, type DrawContext,
+  type TelemetryChartProps, type StripLayout, type DrawContext, type OverlayDrawData,
   LEFT_MARGIN, RIGHT_MARGIN, BOTTOM_AXIS_HEIGHT, MIN_STRIP_HEIGHT, AXIS_WIDTH,
   DEBOUNCE_MS,
   clamp, niceAxisTicks, getChartColors,
 } from '../lib/chart-utils';
 import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawXAxis } from '../lib/chart-draw';
 import { drawCursors } from '../lib/chart-cursors';
+import { computeAlignmentOffsetMs, applyOffset } from '../lib/overlay-alignment';
+import { findOverlayChannelId } from '../lib/overlay-types';
+import { OverlayPopover } from './OverlayPopover';
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -23,11 +26,16 @@ export function TelemetryChart({
   cursorTime,
   onCursorTimeChange,
   chartMode = 'separate',
+  overlays = [],
+  onOverlayRemove,
+  onOverlayToggleVisible,
+  onOverlayUpdateAlignment,
 }: TelemetryChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
   const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
+  const [overlayPopoverOpen, setOverlayPopoverOpen] = useState(false);
 
   // ─── Refs for transient state (no React re-renders) ─────────────────────
   const cursorEmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,6 +91,35 @@ export function TelemetryChart({
     }
     return map;
   }, [visibleChannels, session, derivedChannels, derivedSamplesMap]);
+
+  // Build per-overlay draw data: time-shifted samples keyed by primary channel id
+  const overlayDrawData = useMemo<OverlayDrawData[]>(() => {
+    const out: OverlayDrawData[] = [];
+    overlays.forEach((ov, i) => {
+      if (!ov.visible) return;
+      const offsetMs = computeAlignmentOffsetMs(session, ov.session, ov.alignment);
+      const samplesByPrimaryId = new Map<number, ChannelSample[]>();
+      for (const ac of visibleChannels) {
+        // First try base channel matched by shortName
+        const ovChId = findOverlayChannelId(session, ov.session, ac.channelId);
+        if (ovChId !== -1) {
+          const raw = ov.samples.get(ovChId);
+          if (raw && raw.length > 0) {
+            samplesByPrimaryId.set(ac.channelId, applyOffset(raw, offsetMs));
+            continue;
+          }
+        }
+        // Otherwise, derived channel — overlay's derivedSamples is keyed by
+        // primary derived id, no shortName match needed.
+        const derivedSamps = ov.derivedSamples.get(ac.channelId);
+        if (derivedSamps && derivedSamps.length > 0) {
+          samplesByPrimaryId.set(ac.channelId, applyOffset(derivedSamps, offsetMs));
+        }
+      }
+      out.push({ id: ov.id, index: i + 1, offsetMs, samplesByPrimaryId });
+    });
+    return out;
+  }, [overlays, visibleChannels, session]);
 
   // ─── Dynamic margins for overlay Y-axes ────────────────────────────────
   // Build unique unit groups for overlay axis layout
@@ -287,6 +324,7 @@ export function TelemetryChart({
       smoothedYRanges: smoothedYRanges.current,
       needsDrawRef,
       colors,
+      overlays: overlayDrawData,
     };
 
     ctx.save();
@@ -304,7 +342,7 @@ export function TelemetryChart({
     }, axisY);
 
     ctx.restore();
-  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout]);
+  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout, overlayDrawData]);
 
 
   // ─── Animation loop ────────────────────────────────────────────────────
@@ -366,6 +404,11 @@ export function TelemetryChart({
   useEffect(() => {
     needsDrawRef.current = true;
   }, [channelDataMap, visibleChannels, viewRange, chartMode]);
+
+  // Redraw on overlay change (add/remove/visibility/alignment/sample fetch)
+  useEffect(() => {
+    needsDrawRef.current = true;
+  }, [overlayDrawData]);
 
   // Clear smoothed Y-ranges when chart mode changes to avoid stale lerp state
   useEffect(() => {
@@ -702,7 +745,7 @@ export function TelemetryChart({
   }
 
   return (
-    <div className="flex flex-col h-full" data-testid="chart-container">
+    <div className="flex flex-col h-full relative" data-testid="chart-container">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2">
@@ -726,6 +769,20 @@ export function TelemetryChart({
           >
             Δ Delta
           </button>
+          {overlays.length > 0 && (
+            <button
+              onClick={() => setOverlayPopoverOpen(o => !o)}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
+                overlayPopoverOpen
+                  ? 'bg-primary/15 text-primary border border-primary/30'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+              }`}
+              title="Manage overlays"
+              data-testid="overlay-toggle"
+            >
+              Overlays: {overlays.length}{overlays.length > 3 ? ' ⚠' : ''} ▾
+            </button>
+          )}
           {viewRange && (
             <button
               onClick={resetZoom}
@@ -761,6 +818,18 @@ export function TelemetryChart({
           data-testid="telemetry-canvas"
         />
       </div>
+
+      {/* Overlay management popover */}
+      {overlayPopoverOpen && overlays.length > 0 && onOverlayRemove && onOverlayToggleVisible && onOverlayUpdateAlignment && (
+        <OverlayPopover
+          primary={session}
+          overlays={overlays}
+          onRemove={onOverlayRemove}
+          onToggleVisible={onOverlayToggleVisible}
+          onUpdateAlignment={onOverlayUpdateAlignment}
+          onClose={() => setOverlayPopoverOpen(false)}
+        />
+      )}
     </div>
   );
 }
