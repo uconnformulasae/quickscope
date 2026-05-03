@@ -179,6 +179,11 @@ export function ChannelSidebar({
               <span className="text-xs font-medium text-muted-foreground/70">Derived</span>
               <span className="text-xs text-muted-foreground/40">{filteredDerived.length}</span>
             </div>
+            {filteredDerived.some(d => d.mode === 'python') && (
+              <p className="px-3 pb-1 text-[10px] text-muted-foreground/70 italic">
+                Python-mode derived channels are primary-only (overlays use formula-mode only).
+              </p>
+            )}
             {filteredDerived.map(dc => {
               const isActive = activeSet.has(dc.id);
               const sampleCount = (derivedSamplesMap.get(dc.id) || []).length;
