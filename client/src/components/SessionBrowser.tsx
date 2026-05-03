@@ -8,6 +8,7 @@ import {
   RefreshCw, Cloud, Wifi, WifiOff, Upload, Trash2,
   Download, CheckCircle, Loader2, HardDrive, Radio,
   ChevronRight, Search, Settings, Pencil, Activity, FileClock, X,
+  ArrowUp, ArrowDown,
 } from 'lucide-react';
 import { AimSessionPicker } from './AimSessionPicker';
 import { QuickScopeLogo } from './QuickScopeLogo';
@@ -71,6 +72,100 @@ function pathStem(filename: string): string {
   return dot > 0 ? filename.slice(0, dot) : filename;
 }
 
+type SortKey = 'date' | 'track' | 'duration';
+type SortDir = 'asc' | 'desc';
+interface SortState { key: SortKey | null; dir: SortDir }
+
+const SORT_STORAGE_KEY = 'quickscope.sessionSort';
+const DEFAULT_SORT: SortState = { key: null, dir: 'desc' };
+// Direction a column starts in when first activated.
+const NATURAL_DIR: Record<SortKey, SortDir> = { date: 'desc', track: 'asc', duration: 'desc' };
+
+function loadSortState(): SortState {
+  try {
+    const raw = localStorage.getItem(SORT_STORAGE_KEY);
+    if (!raw) return DEFAULT_SORT;
+    const parsed = JSON.parse(raw);
+    if (
+      (parsed.key === null || parsed.key === 'date' || parsed.key === 'track' || parsed.key === 'duration') &&
+      (parsed.dir === 'asc' || parsed.dir === 'desc')
+    ) return parsed as SortState;
+  } catch { /* ignore */ }
+  return DEFAULT_SORT;
+}
+
+function saveSortState(s: SortState) {
+  try { localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(s)); } catch { /* ignore */ }
+}
+
+// Tri-state header click: clicking the active column flips dir, then clears
+// to default on the third click. Clicking another column starts that column
+// at its natural direction.
+function nextSortState(current: SortState, clicked: SortKey): SortState {
+  if (current.key !== clicked) return { key: clicked, dir: NATURAL_DIR[clicked] };
+  if (current.dir === NATURAL_DIR[clicked]) return { key: clicked, dir: NATURAL_DIR[clicked] === 'desc' ? 'asc' : 'desc' };
+  return DEFAULT_SORT;
+}
+
+function dateValue(s: LocalSession): number | null {
+  const iso = s.recorded_at;
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+function trackValue(s: LocalSession): string | null {
+  const v = s.track_name?.trim();
+  return v ? v.toLowerCase() : null;
+}
+
+function durationValue(s: LocalSession): number | null {
+  return s.duration_s > 0 ? s.duration_s : null;
+}
+
+// Comparator: missing values always sort to the bottom regardless of direction.
+function compareSessions(a: LocalSession, b: LocalSession, state: SortState): number {
+  // Default state mirrors today's behavior: newest first by recorded_at, falling
+  // back to created_at so freshly uploaded sessions without recorded_at don't
+  // sink to the bottom of an unsorted list.
+  if (state.key === null) {
+    const da = a.recorded_at || a.created_at;
+    const db = b.recorded_at || b.created_at;
+    return db.localeCompare(da);
+  }
+
+  const sign = state.dir === 'asc' ? 1 : -1;
+  const cmpNum = (x: number | null, y: number | null) => {
+    if (x === null && y === null) return 0;
+    if (x === null) return 1;
+    if (y === null) return -1;
+    return (x - y) * sign;
+  };
+  const cmpStr = (x: string | null, y: string | null) => {
+    if (x === null && y === null) return 0;
+    if (x === null) return 1;
+    if (y === null) return -1;
+    return x.localeCompare(y) * sign;
+  };
+
+  let primary = 0;
+  if (state.key === 'date') primary = cmpNum(dateValue(a), dateValue(b));
+  else if (state.key === 'track') primary = cmpStr(trackValue(a), trackValue(b));
+  else if (state.key === 'duration') primary = cmpNum(durationValue(a), durationValue(b));
+  if (primary !== 0) return primary;
+
+  // Secondary keys (per design): date→aim_session_id asc; track/duration→date desc.
+  if (state.key === 'date') {
+    return (a.aim_session_id || a.filename).localeCompare(b.aim_session_id || b.filename);
+  }
+  const da = dateValue(a);
+  const db = dateValue(b);
+  if (da === null && db === null) return 0;
+  if (da === null) return 1;
+  if (db === null) return -1;
+  return db - da;
+}
+
 const SYNC_STATUS_CONFIG = {
   synced: { icon: CheckCircle, label: 'Synced', color: 'text-emerald-500 dark:text-emerald-400' },
   local_only: { icon: HardDrive, label: 'Local only', color: 'text-amber-500 dark:text-amber-400' },
@@ -84,6 +179,34 @@ const SOURCE_CONFIG = {
   aim_device: { icon: Radio, label: 'AiM' },
   railway: { icon: Cloud, label: 'Railway' },
 } as const;
+
+function SortHeader({
+  label, sortKey, state, onClick,
+}: {
+  label: string;
+  sortKey: SortKey;
+  state: SortState;
+  onClick: (key: SortKey) => void;
+}) {
+  const active = state.key === sortKey;
+  const Arrow = state.dir === 'asc' ? ArrowUp : ArrowDown;
+  return (
+    <button
+      type="button"
+      role="columnheader"
+      aria-sort={active ? (state.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      onClick={() => onClick(sortKey)}
+      className={`flex items-center gap-1 px-2 py-0.5 rounded transition-colors ${
+        active
+          ? 'text-primary bg-primary/10 hover:bg-primary/15'
+          : 'hover:text-foreground hover:bg-muted/50'
+      }`}
+    >
+      <span>{label}</span>
+      {active && <Arrow className="w-3 h-3" />}
+    </button>
+  );
+}
 
 export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, theme, onToggleTheme }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<LocalSession[]>([]);
@@ -102,8 +225,22 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
   } | null>(null);
   const [uploadLog, setUploadLog] = useState<UploadLogEntry[]>([]);
   const [showUploadLog, setShowUploadLog] = useState(false);
+  const [sortState, setSortState] = useState<SortState>(() => loadSortState());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSortClick = useCallback((key: SortKey) => {
+    setSortState(prev => {
+      const next = nextSortState(prev, key);
+      saveSortState(next);
+      return next;
+    });
+  }, []);
+
+  const clearSort = useCallback(() => {
+    setSortState(DEFAULT_SORT);
+    saveSortState(DEFAULT_SORT);
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -254,12 +391,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         s.vehicle_name?.toLowerCase().includes(q)
       );
     });
-    return filtered.sort((a, b) => {
-      const da = a.recorded_at || a.created_at;
-      const db = b.recorded_at || b.created_at;
-      return db.localeCompare(da);
-    });
-  }, [sessions, search]);
+    return filtered.sort((a, b) => compareSessions(a, b, sortState));
+  }, [sessions, search, sortState]);
 
   return (
     <div
@@ -488,6 +621,29 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
               </table>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Sort column headers (hidden when there are no sessions at all) */}
+      {sessions.length > 0 && (
+        <div
+          role="row"
+          className="flex items-center gap-2 px-4 py-1.5 border-b border-border/40 bg-card/30 text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex-shrink-0"
+        >
+          <span className="hidden sm:inline mr-1 normal-case tracking-normal text-muted-foreground/60">Sort by</span>
+          <SortHeader label="Date" sortKey="date" state={sortState} onClick={handleSortClick} />
+          <SortHeader label="Track" sortKey="track" state={sortState} onClick={handleSortClick} />
+          <SortHeader label="Duration" sortKey="duration" state={sortState} onClick={handleSortClick} />
+          <div className="flex-1" />
+          {sortState.key !== null && (
+            <button
+              onClick={clearSort}
+              className="px-2 py-0.5 rounded text-[10px] normal-case tracking-normal text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              title="Clear sort (default: newest first)"
+            >
+              clear
+            </button>
+          )}
         </div>
       )}
 
