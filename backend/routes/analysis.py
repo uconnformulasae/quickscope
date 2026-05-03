@@ -1,5 +1,6 @@
 """Analysis routes — upload, channel data, laps, GPS, export, derived channels."""
 
+import asyncio
 import io
 import csv
 import math
@@ -143,6 +144,78 @@ async def get_channel_data(channels: str = Query(...)):
         if name in state.log.channels:
             result[name] = channel_data(name, state.log.channels[name])
     return result
+
+
+# ─── Per-session overlay reads (do NOT change active state) ─────────────────
+
+
+def _resolve_log(session_id: str):
+    """Resolve session_id → (log, filename), parsing on cache miss. Does not change active."""
+    from services.session_cache import session_cache
+
+    entry = session_cache.get(session_id)
+    if entry is not None:
+        return entry[0], entry[1]
+
+    record = session_store.get_session(session_id)
+    if not record:
+        raise HTTPException(404, "Session not found")
+    local_path = record.get("local_path")
+    if not local_path:
+        raise HTTPException(400, "Session file not available locally")
+    try:
+        log = parse_file(local_path)
+    except Exception:
+        logger.exception("Failed to parse session %s", session_id)
+        raise HTTPException(500, "Failed to parse session file")
+    session_cache.put(session_id, log, record["filename"])
+    return log, record["filename"]
+
+
+@router.get("/sessions/{session_id}/info")
+async def get_session_info(session_id: str):
+    log, filename = await asyncio.to_thread(_resolve_log, session_id)
+    return extract_session_info(log, filename)
+
+
+@router.get("/sessions/{session_id}/channels")
+async def get_session_channels(session_id: str):
+    log, _ = await asyncio.to_thread(_resolve_log, session_id)
+    channels = []
+    for i, (name, table) in enumerate(sorted(log.channels.items())):
+        cm = channel_meta(name, table)
+        channels.append({
+            "name": name,
+            "units": cm["units"],
+            "sampleCount": table.num_rows,
+            "color": CHART_COLORS[i % len(CHART_COLORS)],
+            "index": i,
+        })
+    return {"channels": channels}
+
+
+@router.get("/sessions/{session_id}/data")
+async def get_session_channel_data(session_id: str, channels: str = Query(...)):
+    log, _ = await asyncio.to_thread(_resolve_log, session_id)
+    names = [n.strip() for n in channels.split(",") if n.strip()]
+    result = {}
+    for name in names:
+        if name in log.channels:
+            result[name] = channel_data(name, log.channels[name])
+    return result
+
+
+@router.get("/sessions/{session_id}/laps")
+async def get_session_laps(session_id: str):
+    log, _ = await asyncio.to_thread(_resolve_log, session_id)
+
+    def _channel_data(name: str):
+        if name in log.channels:
+            return channel_data(name, log.channels[name])
+        return None
+
+    laps, source = lap_detection.detect_laps(log, _channel_data)
+    return {"laps": laps, "source": source}
 
 
 # ─── Laps & GPS ──────────────────────────────────────────────────────────────
