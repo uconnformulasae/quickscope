@@ -111,8 +111,8 @@ export default function App() {
     }
 
     setProgress({ stage: 'Detecting laps...', percent: 85 });
-    let lapMarkers: { timestamp: number; lapNumber: number }[] = [];
-    let lapSource: 'device' | 'gps_auto' | 'beacon_auto' | 'none' = 'none';
+    let lapMarkers: { timestamp: number; lapNumber: number; sectorTimes?: (number | null)[] }[] = [];
+    let lapSource: 'device' | 'gps_auto' | 'beacon_auto' | 'gps_manual' | 'none' = 'none';
     try {
       const lapsResp = await fetchLaps();
       lapSource = lapsResp.source;
@@ -123,6 +123,7 @@ export default function App() {
         lapMarkers = lapsResp.laps.map(l => ({
           timestamp: l.startTime,
           lapNumber: l.lapNumber,
+          sectorTimes: l.sectorTimes,
         }));
         const last = lapsResp.laps[lapsResp.laps.length - 1];
         lapMarkers.push({ timestamp: last.endTime, lapNumber: last.lapNumber + 1 });
@@ -284,6 +285,31 @@ export default function App() {
     if (!state.session) return;
     setSession(state.session, newFileName);
   }, [state.session, setSession]);
+
+  /** Re-fetch laps and update session.lapMarkers + lapSource after the user
+   *  commits new setpoints. Keeps the rest of the session state intact. */
+  const refetchLaps = useCallback(async () => {
+    if (!state.session) return;
+    try {
+      const lapsResp = await fetchLaps();
+      let lapMarkers: { timestamp: number; lapNumber: number; sectorTimes?: (number | null)[] }[] = [];
+      if (lapsResp.laps.length > 0) {
+        lapMarkers = lapsResp.laps.map(l => ({
+          timestamp: l.startTime,
+          lapNumber: l.lapNumber,
+          sectorTimes: l.sectorTimes,
+        }));
+        const last = lapsResp.laps[lapsResp.laps.length - 1];
+        lapMarkers.push({ timestamp: last.endTime, lapNumber: last.lapNumber + 1 });
+      }
+      setSession(
+        { ...state.session, lapMarkers, lapSource: lapsResp.source },
+        state.fileName ?? '',
+      );
+    } catch (err) {
+      console.error('Failed to refetch laps after setpoint update:', err);
+    }
+  }, [state.session, state.fileName, setSession]);
 
   // Drag-and-drop handlers for the chart area
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -488,6 +514,8 @@ export default function App() {
               onNavigateToTime={handleNavigateToTime}
               cursorTime={state.cursorTime}
               theme={theme}
+              sessionId={loadedSessionId}
+              onSetpointsChanged={refetchLaps}
             />
           </div>
         )}

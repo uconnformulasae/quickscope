@@ -157,8 +157,15 @@ async def get_laps():
             return channel_data(name, state.log.channels[name])
         return None
 
-    laps, source = lap_detection.detect_laps(state.log, _channel_data)
-    return {"laps": laps, "source": source}
+    setpoints: list[dict] = []
+    if state.session_id:
+        entry = session_store.get_session(state.session_id)
+        if entry:
+            setpoints = entry.get("lap_setpoints") or []
+
+    laps, source = lap_detection.detect_laps(state.log, _channel_data, setpoints=setpoints)
+    sector_count = max(0, len(setpoints) - 1) if setpoints else 0
+    return {"laps": laps, "source": source, "sectorCount": sector_count}
 
 
 @router.get("/gps")

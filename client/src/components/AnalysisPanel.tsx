@@ -24,6 +24,10 @@ interface AnalysisPanelProps {
   onNavigateToTime?: (timestampMs: number) => void;
   cursorTime?: number | null;
   theme?: 'dark' | 'light';
+  /** ID of the loaded session (needed for setpoint editing on the GPS tab). */
+  sessionId?: string | null;
+  /** Refetch laps after the user commits new setpoints. */
+  onSetpointsChanged?: () => void;
 }
 
 const TABS: { id: AnalysisTab; label: string; icon: any }[] = [
@@ -50,6 +54,8 @@ export function AnalysisPanel({
   onNavigateToTime,
   cursorTime,
   theme,
+  sessionId,
+  onSetpointsChanged,
 }: AnalysisPanelProps) {
   return (
     <div className="flex flex-col h-full bg-card border-l border-border overflow-hidden">
@@ -106,7 +112,11 @@ export function AnalysisPanel({
           />
         )}
         {analysisTab === 'gps' && (
-          <GPSMapView cursorTime={cursorTime} />
+          <GPSMapView
+            cursorTime={cursorTime}
+            sessionId={sessionId ?? null}
+            onSetpointsChanged={onSetpointsChanged}
+          />
         )}
       </div>
     </div>
