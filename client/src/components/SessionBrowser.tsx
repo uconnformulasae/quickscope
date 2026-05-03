@@ -13,6 +13,7 @@ import { AimSessionPicker } from './AimSessionPicker';
 import { QuickScopeLogo } from './QuickScopeLogo';
 import { ThemeToggle } from './ThemeToggle';
 import { GPSThumbnail } from './GPSThumbnail';
+import { Checkbox } from './ui/checkbox';
 
 interface SessionBrowserProps {
   onSessionLoaded: (
@@ -576,15 +577,17 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
               return (
                 <div key={session.id} className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(session.id)}
-                    onChange={() => toggleSelected(session.id)}
+                  <div
                     onClick={(e) => e.stopPropagation()}
-                    className="ml-1 cursor-pointer flex-shrink-0"
-                    data-testid={`select-session-${session.id}`}
+                    className="ml-1 flex-shrink-0"
                     title={selectedIds.has(session.id) ? 'In overlay selection' : 'Add to overlay selection'}
-                  />
+                  >
+                    <Checkbox
+                      checked={selectedIds.has(session.id)}
+                      onCheckedChange={() => toggleSelected(session.id)}
+                      data-testid={`select-session-${session.id}`}
+                    />
+                  </div>
                 <button
                   onClick={() => handleSessionClick(session)}
                   disabled={isLoading || isPulling}
