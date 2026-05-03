@@ -22,6 +22,9 @@ const FORMULA_EXAMPLES = [
   { label: 'Acceleration', expr: 'diff(Spd1) / 3.6' },
   { label: 'Smooth lat G', expr: 'smooth(LatA, 20)' },
   { label: 'Lat G 500ms MAVG', expr: 'MAVG(LatA, 500)' },
+  { label: 'Energy Wh', expr: 'integral(VBAT * IBAT) / 3600' },
+  { label: 'Distance m', expr: 'integral(Spd1) / 3.6' },
+  { label: 'High status flag', expr: '(StatusBits & 0x80000000) >>> 31' },
 ];
 
 const PYTHON_TEMPLATE = `# Example: Power = Voltage * Current
@@ -296,7 +299,7 @@ export function DerivedChannelDialog({
             />
             {mode === 'formula' && (
               <p className="mt-1 text-xs text-muted-foreground/60">
-                Use channel names as variables. Operators: +, −, ×, ÷, ^ (power). Functions: abs, sqrt, sin, cos, log, exp, diff, smooth, mavg, delay.
+                Use channel names as variables. Numbers: decimal or hex (e.g. <code>0xFF</code>). Operators: +, −, ×, ÷, ^ (power), &nbsp;&amp; | &lt;&lt; &gt;&gt; &gt;&gt;&gt; ~ (bitwise). Functions: abs, sqrt, sin, cos, log, exp, diff, derivative, derivative2, integral, smooth, mavg, delay, xor.
               </p>
             )}
             {mode === 'python' && (

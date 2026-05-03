@@ -3,11 +3,20 @@
  * Evaluates math expressions and JS expressions against channel data.
  *
  * Formula mode supports:
- *   - Standard operators: +, -, *, /, ^, ()
- *   - Math functions: abs, sqrt, min, max, sin, cos, log, exp, pow
- *   - Signal functions: diff(ch), smooth(ch, window), mavg(ch, window_ms), delay(ch, samples)
+ *   - Arithmetic operators: +, -, *, /, ^ (power, right-associative), ()
+ *   - Bitwise operators: &, |, <<, >>, >>> (zero-fill), unary ~
+ *                        (32-bit signed; floats truncated via |0; `>>>` returns
+ *                         an unsigned 32-bit value)
+ *   - Math functions: abs, sqrt, min, max, sin, cos, log, exp, pow, xor
+ *   - Signal functions: diff(ch), derivative(ch), derivative2(ch),
+ *                       integral(ch), integral(ch, t_lo_ms, t_hi_ms),
+ *                       smooth(ch, window), mavg(ch, window_ms), delay(ch, samples)
  *   - Channel names (resolved to sample arrays)
- *   - Scalar constants
+ *   - Numeric literals: decimal (`12`, `0.5`) and hex (`0xFF`, `0xff`, `0x1A2B`)
+ *   - Scalar constants (e, pi)
+ *
+ * Precedence (loose → tight):
+ *   |  →  &  →  << >> >>>  →  + -  →  * /  →  ^ (right-assoc)  →  unary - + ~
  *
  * JavaScript mode: user writes a function body that receives `channels`
  * and `interpolate` helpers and returns { timestamps, values }.
@@ -109,6 +118,72 @@ function applyMavg(ch: ChannelData, windowMs: number): ChannelData {
   return { timestamps: ch.timestamps, values };
 }
 
+/**
+ * Running cumulative trapezoidal integral. Output value at sample i is the
+ * area under the curve from t[0] to t[i]. Time is converted ms → seconds so
+ * `integral(Power_W)` yields Joules.
+ */
+function applyIntegral(ch: ChannelData): ChannelData {
+  const n = ch.timestamps.length;
+  if (n < 2) return { timestamps: [], values: [] };
+  const timestamps: number[] = new Array(n);
+  const values: number[] = new Array(n);
+  timestamps[0] = ch.timestamps[0];
+  values[0] = 0;
+  let acc = 0;
+  for (let i = 1; i < n; i++) {
+    const dtSec = (ch.timestamps[i] - ch.timestamps[i - 1]) / 1000;
+    // Trapezoidal: (v_prev + v_curr)/2 * dt
+    acc += 0.5 * (ch.values[i - 1] + ch.values[i]) * dtSec;
+    timestamps[i] = ch.timestamps[i];
+    values[i] = acc;
+  }
+  return { timestamps, values };
+}
+
+/**
+ * Definite trapezoidal integral over [t_lo_ms, t_hi_ms]. Endpoints are
+ * resolved by linear interpolation; output is in (channel units) × seconds.
+ * Returns 0 for a zero-length window. Window is clamped to channel range.
+ */
+function applyDefiniteIntegral(ch: ChannelData, tLoMs: number, tHiMs: number): number {
+  if (ch.timestamps.length < 2 || tHiMs === tLoMs) return 0;
+  const lo = Math.min(tLoMs, tHiMs);
+  const hi = Math.max(tLoMs, tHiMs);
+  const sign = tHiMs >= tLoMs ? 1 : -1;
+
+  const tFirst = ch.timestamps[0];
+  const tLast = ch.timestamps[ch.timestamps.length - 1];
+  const a = Math.max(lo, tFirst);
+  const b = Math.min(hi, tLast);
+  if (b <= a) return 0;
+
+  // Walk samples between a and b, summing trapezoids using interpolated endpoints.
+  const vA = interpolateAt(ch, a);
+  const vB = interpolateAt(ch, b);
+
+  // Find the first index strictly greater than a.
+  let i = 0;
+  while (i < ch.timestamps.length && ch.timestamps[i] <= a) i++;
+  // Now ch.timestamps[i-1] <= a < ch.timestamps[i] (or i out of range).
+
+  let acc = 0;
+  let prevT = a;
+  let prevV = vA;
+  while (i < ch.timestamps.length && ch.timestamps[i] < b) {
+    const t = ch.timestamps[i];
+    const v = ch.values[i];
+    const dtSec = (t - prevT) / 1000;
+    acc += 0.5 * (prevV + v) * dtSec;
+    prevT = t;
+    prevV = v;
+    i++;
+  }
+  // Final trapezoid up to b.
+  acc += 0.5 * (prevV + vB) * ((b - prevT) / 1000);
+  return sign * acc;
+}
+
 function applyDelay(ch: ChannelData, samples: number): ChannelData {
   const s = Math.floor(Math.abs(samples));
   if (s === 0 || s >= ch.timestamps.length) return ch;
@@ -145,7 +220,25 @@ function tokenize(expr: string): Token[] {
     if (ch === '(') { tokens.push({ type: 'lparen', value: '(', pos: i }); i++; continue; }
     if (ch === ')') { tokens.push({ type: 'rparen', value: ')', pos: i }); i++; continue; }
     if (ch === ',') { tokens.push({ type: 'comma', value: ',', pos: i }); i++; continue; }
-    if ('+-*/^'.includes(ch)) { tokens.push({ type: 'op', value: ch, pos: i }); i++; continue; }
+    if (ch === '<' && expr[i + 1] === '<') { tokens.push({ type: 'op', value: '<<', pos: i }); i += 2; continue; }
+    // Order matters: '>>>' must be checked before '>>'.
+    if (ch === '>' && expr[i + 1] === '>' && expr[i + 2] === '>') { tokens.push({ type: 'op', value: '>>>', pos: i }); i += 3; continue; }
+    if (ch === '>' && expr[i + 1] === '>') { tokens.push({ type: 'op', value: '>>', pos: i }); i += 2; continue; }
+    if ('+-*/^&|~'.includes(ch)) { tokens.push({ type: 'op', value: ch, pos: i }); i++; continue; }
+    // Hex literal: 0x[0-9a-fA-F]+ — must be checked before the decimal branch
+    // because hex starts with '0'. At least one hex digit is required.
+    if (ch === '0' && (expr[i + 1] === 'x' || expr[i + 1] === 'X')) {
+      let j = i + 2;
+      const isHexDigit = (c: string) =>
+        (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+      while (j < expr.length && isHexDigit(expr[j])) j++;
+      if (j === i + 2) {
+        throw new Error(`Malformed hex literal at position ${i}: expected hex digit after '0x'`);
+      }
+      tokens.push({ type: 'number', value: expr.slice(i, j), pos: i });
+      i = j;
+      continue;
+    }
     if ((ch >= '0' && ch <= '9') || ch === '.') {
       // number literal
       let j = i;
@@ -208,7 +301,41 @@ class Parser {
     return node;
   }
 
-  private parseExpr(): ASTNode { return this.parseAddSub(); }
+  private parseExpr(): ASTNode { return this.parseBitOr(); }
+
+  private parseBitOr(): ASTNode {
+    let left = this.parseBitAnd();
+    while (this.peek().type === 'op' && this.peek().value === '|') {
+      const op = this.consume().value;
+      const right = this.parseBitAnd();
+      left = { kind: 'binop', op, left, right };
+    }
+    return left;
+  }
+
+  private parseBitAnd(): ASTNode {
+    let left = this.parseShift();
+    while (this.peek().type === 'op' && this.peek().value === '&') {
+      const op = this.consume().value;
+      const right = this.parseShift();
+      left = { kind: 'binop', op, left, right };
+    }
+    return left;
+  }
+
+  private parseShift(): ASTNode {
+    let left = this.parseAddSub();
+    while (this.peek().type === 'op' && (
+      this.peek().value === '<<' ||
+      this.peek().value === '>>' ||
+      this.peek().value === '>>>'
+    )) {
+      const op = this.consume().value;
+      const right = this.parseAddSub();
+      left = { kind: 'binop', op, left, right };
+    }
+    return left;
+  }
 
   private parseAddSub(): ASTNode {
     let left = this.parseMulDiv();
@@ -250,6 +377,10 @@ class Parser {
       this.consume();
       return this.parseUnary();
     }
+    if (this.peek().type === 'op' && this.peek().value === '~') {
+      this.consume();
+      return { kind: 'unary', op: '~', arg: this.parseUnary() };
+    }
     return this.parseAtom();
   }
 
@@ -258,7 +389,8 @@ class Parser {
 
     if (t.type === 'number') {
       this.consume();
-      return { kind: 'number', value: parseFloat(t.value) };
+      // Number() handles both decimal floats ("0.5") and hex ints ("0xFF").
+      return { kind: 'number', value: Number(t.value) };
     }
 
     if (t.type === 'lparen') {
@@ -340,6 +472,14 @@ function applyBinop(op: string, a: EvalResult, b: EvalResult): EvalResult {
       case '*': return a * b;
       case '/': return b !== 0 ? a / b : NaN;
       case '^': return Math.pow(a, b);
+      // Bitwise: JS engine truncates to 32-bit signed via |0; NaN/Inf → 0.
+      // `>>>` is JS's unsigned/zero-fill right shift — output is in
+      // [0, 2^32-1] so high-bit values come back positive.
+      case '&':   return (a | 0) & (b | 0);
+      case '|':   return (a | 0) | (b | 0);
+      case '<<':  return (a | 0) << (b | 0);
+      case '>>':  return (a | 0) >> (b | 0);
+      case '>>>': return (a | 0) >>> (b | 0);
     }
   }
 
@@ -356,6 +496,11 @@ function applyBinop(op: string, a: EvalResult, b: EvalResult): EvalResult {
       case '*': return av * bv;
       case '/': return bv !== 0 ? av / bv : NaN;
       case '^': return Math.pow(av, bv);
+      case '&':   return (av | 0) & (bv | 0);
+      case '|':   return (av | 0) | (bv | 0);
+      case '<<':  return (av | 0) << (bv | 0);
+      case '>>':  return (av | 0) >> (bv | 0);
+      case '>>>': return (av | 0) >>> (bv | 0);
       default: return NaN;
     }
   });
@@ -375,6 +520,11 @@ function evalNode(node: ASTNode, channels: ChannelMap): EvalResult {
 
     case 'unary': {
       const v = evalNode(node.arg, channels);
+      if (node.op === '~') {
+        if (typeof v === 'number') return ~(v | 0);
+        return { timestamps: v.timestamps, values: v.values.map(x => ~(x | 0)) };
+      }
+      // '-' (unary plus is dropped at parse time)
       if (typeof v === 'number') return -v;
       return { timestamps: v.timestamps, values: v.values.map(x => -x) };
     }
@@ -389,11 +539,55 @@ function evalNode(node: ASTNode, channels: ChannelMap): EvalResult {
       const name = node.name.toLowerCase();
 
       // Signal functions with ChannelData arguments
-      if (name === 'diff') {
-        if (node.args.length !== 1) throw new Error('diff() takes 1 argument');
+      if (name === 'diff' || name === 'derivative') {
+        if (node.args.length !== 1) throw new Error(`${name}() takes 1 argument`);
         const arg = evalNode(node.args[0], channels);
         const ch = ensureChannel(arg);
         return applyDiff(ch);
+      }
+
+      if (name === 'derivative2') {
+        if (node.args.length !== 1) throw new Error('derivative2() takes 1 argument');
+        const arg = evalNode(node.args[0], channels);
+        const ch = ensureChannel(arg);
+        return applyDiff(applyDiff(ch));
+      }
+
+      if (name === 'integral') {
+        if (node.args.length === 1) {
+          const arg = evalNode(node.args[0], channels);
+          const ch = ensureChannel(arg);
+          return applyIntegral(ch);
+        }
+        if (node.args.length === 3) {
+          const arg = evalNode(node.args[0], channels);
+          const lo = evalNode(node.args[1], channels);
+          const hi = evalNode(node.args[2], channels);
+          if (typeof lo !== 'number' || typeof hi !== 'number') {
+            throw new Error('integral() window bounds must be numbers (milliseconds)');
+          }
+          const ch = ensureChannel(arg);
+          return applyDefiniteIntegral(ch, lo, hi);
+        }
+        throw new Error('integral() takes 1 argument (running) or 3 arguments (channel, t_lo_ms, t_hi_ms)');
+      }
+
+      if (name === 'xor') {
+        if (node.args.length !== 2) throw new Error('xor() takes 2 arguments');
+        const a = evalNode(node.args[0], channels);
+        const b = evalNode(node.args[1], channels);
+        if (typeof a === 'number' && typeof b === 'number') return (a | 0) ^ (b | 0);
+        const aCh = ensureChannel(a);
+        const bCh = ensureChannel(b);
+        const ts = mergeTimestamps([aCh.timestamps, bCh.timestamps]);
+        return {
+          timestamps: ts,
+          values: ts.map(t => {
+            const av = typeof a === 'number' ? a : interpolateAt(aCh, t);
+            const bv = typeof b === 'number' ? b : interpolateAt(bCh, t);
+            return (av | 0) ^ (bv | 0);
+          }),
+        };
       }
 
       if (name === 'smooth') {
