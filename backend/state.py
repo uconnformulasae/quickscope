@@ -26,17 +26,92 @@ CHART_COLORS = [
 
 
 # ─── In-memory state (active session for analysis) ──────────────────────────
+#
+# History note: prior versions of QuickScope kept exactly one parsed XRK in
+# memory at a time on `state.log`. With the multi-session overlay feature,
+# that became too restrictive; we now hold up to MAX_ENTRIES parsed logs in
+# session_cache, and SessionState is a thin facade over it that tracks which
+# entry is the "active" one for the legacy (no-id) endpoints. New endpoints
+# accept a session_id query param to read non-active entries.
+from services.session_cache import session_cache
+
 
 class SessionState:
+    """Facade exposing the active log on the cache as `state.log`.
+
+    Existing routes (/api/data, /api/channels, /api/laps, /api/gps, /api/export,
+    /api/derived/evaluate) read state.log unchanged. /sessions/{id}/load sets
+    the active id; uploads also set it.
+    """
+
     def __init__(self):
-        self.log = None
-        self.filename: Optional[str] = None
-        self.session_id: Optional[str] = None
+        self._filename: Optional[str] = None
+
+    @property
+    def log(self):
+        sid = session_cache.active_id
+        if sid is None:
+            return None
+        entry = session_cache.get(sid)
+        return entry[0] if entry else None
+
+    @log.setter
+    def log(self, value):
+        # Legacy callers still write to state.log directly (e.g. upload route
+        # before the session_id is known). Park the log under a synthetic id;
+        # the upload handler is responsible for replacing it once it has a
+        # real session_id from session_store.
+        if value is None:
+            session_cache.clear_active()
+            return
+        sid = session_cache.active_id or "__pending__"
+        session_cache.put(sid, value, self._filename or "")
+        session_cache.set_active(sid)
+
+    @property
+    def filename(self):
+        sid = session_cache.active_id
+        if sid is not None:
+            entry = session_cache.get(sid)
+            if entry:
+                return entry[1]
+        return self._filename
+
+    @filename.setter
+    def filename(self, value):
+        self._filename = value
+        # Keep the active cache entry's filename in sync — the upload route
+        # writes state.log BEFORE state.filename, so the entry was stored
+        # with an empty filename; rewrite it now.
+        sid = session_cache.active_id
+        if sid is not None:
+            entry = session_cache.get(sid)
+            if entry is not None and entry[1] != value:
+                session_cache.put(sid, entry[0], value or "")
+
+    @property
+    def session_id(self):
+        return session_cache.active_id
+
+    @session_id.setter
+    def session_id(self, value):
+        if value is None:
+            session_cache.clear_active()
+            return
+        # Promote pending log to the real id if it exists
+        pending = session_cache.get("__pending__")
+        if pending is not None and value != "__pending__":
+            log, fn = pending
+            session_cache.evict("__pending__")
+            session_cache.put(value, log, fn)
+        session_cache.set_active(value)
 
     def clear(self):
-        self.log = None
-        self.filename = None
-        self.session_id = None
+        sid = session_cache.active_id
+        if sid is not None:
+            session_cache.evict(sid)
+        session_cache.evict("__pending__")
+        self._filename = None
 
     @property
     def loaded(self) -> bool:
@@ -44,6 +119,17 @@ class SessionState:
 
 
 state = SessionState()
+
+
+def get_log(session_id: Optional[str]):
+    """Resolve a session_id to its parsed log, or None.
+
+    Used by the new overlay endpoints. Does not change the active session.
+    """
+    if not session_id:
+        return state.log
+    entry = session_cache.get(session_id)
+    return entry[0] if entry else None
 
 # Guard against concurrent sync operations
 _sync_lock = asyncio.Lock()
