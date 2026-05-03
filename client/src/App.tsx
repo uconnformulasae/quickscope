@@ -562,6 +562,8 @@ export default function App() {
               theme={theme}
               sessionId={loadedSessionId}
               onSetpointsChanged={refetchLaps}
+              overlays={state.overlays}
+              fileName={state.fileName}
             />
           </div>
         )}
