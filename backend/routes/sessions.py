@@ -136,6 +136,56 @@ async def get_gps_preview(session_id: str):
     return {"preview": preview}
 
 
+class LapSetpoint(BaseModel):
+    lat: float
+    lon: float
+    radius_m: float
+
+
+class SetpointsRequest(BaseModel):
+    setpoints: list[LapSetpoint]
+
+
+_MAX_SETPOINTS = 16
+_RADIUS_MIN_M = 5.0
+_RADIUS_MAX_M = 50.0
+
+
+@router.get("/sessions/{session_id}/setpoints")
+async def get_setpoints(session_id: str):
+    entry = session_store.get_session(session_id)
+    if not entry:
+        raise HTTPException(404, "Session not found")
+    return {"setpoints": entry.get("lap_setpoints") or []}
+
+
+@router.put("/sessions/{session_id}/setpoints")
+async def put_setpoints(session_id: str, body: SetpointsRequest):
+    entry = session_store.get_session(session_id)
+    if not entry:
+        raise HTTPException(404, "Session not found")
+
+    if len(body.setpoints) > _MAX_SETPOINTS:
+        raise HTTPException(400, f"Too many setpoints (max {_MAX_SETPOINTS})")
+
+    cleaned: list[dict] = []
+    import math as _math
+    for i, sp in enumerate(body.setpoints):
+        if not (_math.isfinite(sp.lat) and -90.0 <= sp.lat <= 90.0):
+            raise HTTPException(400, f"Setpoint {i}: lat must be in [-90, 90]")
+        if not (_math.isfinite(sp.lon) and -180.0 <= sp.lon <= 180.0):
+            raise HTTPException(400, f"Setpoint {i}: lon must be in [-180, 180]")
+        if not (_math.isfinite(sp.radius_m) and _RADIUS_MIN_M <= sp.radius_m <= _RADIUS_MAX_M):
+            raise HTTPException(
+                400,
+                f"Setpoint {i}: radius_m must be in [{_RADIUS_MIN_M}, {_RADIUS_MAX_M}]",
+            )
+        cleaned.append({"lat": sp.lat, "lon": sp.lon, "radius_m": sp.radius_m})
+
+    updated = session_store.update_session(session_id, lap_setpoints=cleaned)
+    return updated
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     entry = session_store.get_session(session_id)

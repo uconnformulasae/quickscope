@@ -23,11 +23,13 @@ export interface ChannelSample {
   value: number;
 }
 
-export type LapSource = 'device' | 'gps_auto' | 'beacon_auto' | 'none';
+export type LapSource = 'device' | 'gps_auto' | 'beacon_auto' | 'gps_manual' | 'none';
 
 export interface LapMarker {
   timestamp: number;
   lapNumber: number;
+  /** Sector split timestamps in ms, length = sectorCount. null = sector not crossed in this lap. */
+  sectorTimes?: (number | null)[];
 }
 
 export interface SessionMetadata {

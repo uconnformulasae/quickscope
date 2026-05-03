@@ -113,6 +113,111 @@ def from_gps(
     return laps
 
 
+def from_setpoints(
+    timestamps_ms: list[float],
+    lats: list[float],
+    lons: list[float],
+    setpoints: list[dict],
+    min_lap_s: float = MIN_LAP_S,
+) -> list[dict]:
+    """Detect laps and sector splits from user-defined GPS setpoints.
+
+    `setpoints[0]` is the start/finish line; `setpoints[1:]` are sector
+    splits in order. Each setpoint is `{"lat": float, "lon": float,
+    "radius_m": float}`.
+
+    Lap counting mirrors `from_gps` but uses the user's pin instead of
+    the first GPS fix: the first crossing of `setpoints[0]` opens lap 1,
+    each subsequent return crossing closes a lap and opens the next.
+    Departure radius is `2 × radius_m`. `min_lap_s` debounces the
+    start/finish pin only.
+
+    Sector splits: for each sector pin (i ≥ 1), record the first sample
+    in the current lap that enters the pin's radius. Missed sectors stay
+    `None`. Returned rows include a `sectorTimes` list of length
+    `len(setpoints) - 1`.
+    """
+    if not setpoints:
+        return []
+
+    valid: list[tuple[float, float, float]] = []
+    for t, la, lo in zip(timestamps_ms, lats, lons):
+        if abs(la) > 0.1 and abs(lo) > 0.1 and math.isfinite(la) and math.isfinite(lo):
+            valid.append((t, la, lo))
+    if len(valid) < 10:
+        return []
+
+    sf = setpoints[0]
+    sf_lat = float(sf["lat"])
+    sf_lon = float(sf["lon"])
+    sf_return = float(sf["radius_m"])
+    sf_depart = sf_return * 2.0
+
+    sector_pins = setpoints[1:]
+    n_sectors = len(sector_pins)
+
+    laps: list[dict] = []
+    lap_open = False
+    lap_start_t: float | None = None
+    lap_num = 1
+    has_departed = False
+    prev_sf_dist: float | None = None
+    cur_sector_times: list[float | None] = [None] * n_sectors
+    prev_sector_dists: list[float | None] = [None] * n_sectors
+
+    for t, la, lo in valid:
+        sf_dist = _haversine_m(sf_lat, sf_lon, la, lo)
+
+        if not lap_open:
+            if prev_sf_dist is not None and prev_sf_dist > sf_return and sf_dist <= sf_return:
+                lap_open = True
+                lap_start_t = t
+                has_departed = False
+                cur_sector_times = [None] * n_sectors
+                prev_sector_dists = [None] * n_sectors
+        else:
+            for i, pin in enumerate(sector_pins):
+                pin_radius = float(pin["radius_m"])
+                d = _haversine_m(float(pin["lat"]), float(pin["lon"]), la, lo)
+                prev_d = prev_sector_dists[i]
+                if (
+                    cur_sector_times[i] is None
+                    and prev_d is not None
+                    and prev_d > pin_radius
+                    and d <= pin_radius
+                ):
+                    cur_sector_times[i] = t
+                prev_sector_dists[i] = d
+
+            if not has_departed:
+                if sf_dist > sf_depart:
+                    has_departed = True
+            else:
+                if (
+                    prev_sf_dist is not None
+                    and prev_sf_dist > sf_return
+                    and sf_dist <= sf_return
+                ):
+                    lap_time_s = (t - lap_start_t) / 1000.0
+                    if lap_time_s >= min_lap_s:
+                        laps.append({
+                            "lapNumber": lap_num,
+                            "startTime": lap_start_t,
+                            "endTime": t,
+                            "source": "gps_manual",
+                            "sectorTimes": list(cur_sector_times),
+                        })
+                        lap_num += 1
+                        lap_start_t = t
+                        has_departed = False
+                        cur_sector_times = [None] * n_sectors
+                        prev_sector_dists = [None] * n_sectors
+
+        prev_sf_dist = sf_dist
+
+    return laps
+
+
 def from_beacon(
     timestamps_ms: list[float],
     values: list[float],
@@ -156,7 +261,11 @@ def from_beacon(
     return laps
 
 
-def detect_laps(log, channel_data_fn) -> tuple[list[dict], str]:
+def detect_laps(
+    log,
+    channel_data_fn,
+    setpoints: Optional[list[dict]] = None,
+) -> tuple[list[dict], str]:
     """Run the full fallback chain.
 
     `channel_data_fn(name)` is a callable that returns
@@ -164,12 +273,39 @@ def detect_laps(log, channel_data_fn) -> tuple[list[dict], str]:
     the channel does not exist). This lets callers pass in the existing
     `channel_data` helper without us depending on libxrk types directly.
 
+    `setpoints` is the user-defined GPS setpoints list. When non-empty it
+    overrides the cascade: lap detection runs `from_setpoints` and the
+    result is returned with source `'gps_manual'` even if no laps are
+    detected (the explicit user choice should not silently revert).
+
     Returns (laps, source) where source is one of:
         'device'        — device-reported markers (preferred)
+        'gps_manual'    — user-defined GPS setpoints (override)
         'gps_auto'      — GPS close-the-loop fallback
         'beacon_auto'   — beacon channel fallback
         'none'          — no laps could be detected
     """
+    if setpoints:
+        ch_names = list(log.channels.keys())
+        lat_name = next((n for n in ch_names if "latitude" in n.lower()), None)
+        lon_name = next((n for n in ch_names if "longitude" in n.lower()), None)
+        manual_laps: list[dict] = []
+        if lat_name and lon_name:
+            try:
+                lat_data = channel_data_fn(lat_name)
+                lon_data = channel_data_fn(lon_name)
+            except Exception:
+                logger.exception("GPS channel read failed during manual lap detection")
+                lat_data = lon_data = None
+            if lat_data and lon_data and lat_data["timestamps"]:
+                # Use session-relative timestamps to match from_gps's
+                # timebase, since the frontend already handles that one.
+                ts = lat_data["timestamps"]
+                ts_offset = min(ts)
+                ts_rel = [t - ts_offset for t in ts]
+                manual_laps = from_setpoints(ts_rel, lat_data["values"], lon_data["values"], setpoints)
+        return manual_laps, "gps_manual"
+
     device = from_device(log)
     if device:
         return device, "device"

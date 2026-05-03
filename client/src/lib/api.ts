@@ -54,6 +54,12 @@ export interface GPSData {
   speed: number[] | null;
 }
 
+export interface LapSetpoint {
+  lat: number;
+  lon: number;
+  radius_m: number;
+}
+
 export interface LocalSession {
   id: string;
   remote_id: number | null;
@@ -70,6 +76,8 @@ export interface LocalSession {
   source: 'manual_upload' | 'aim_device' | 'railway';
   created_at: string;
   updated_at: string;
+  /** Per-session manual lap setpoints. Empty/null = use auto detection. */
+  lap_setpoints?: LapSetpoint[] | null;
 }
 
 export interface AimStatus {
@@ -153,6 +161,26 @@ export async function renameSession(sessionId: string, filename: string): Promis
 export async function deleteSession(sessionId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+}
+
+export async function getSetpoints(sessionId: string): Promise<LapSetpoint[]> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/setpoints`);
+  if (!res.ok) throw new Error(`Failed to get setpoints: ${res.status}`);
+  const data = await res.json();
+  return data.setpoints || [];
+}
+
+export async function updateSetpoints(sessionId: string, setpoints: LapSetpoint[]): Promise<LocalSession> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/setpoints`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setpoints }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Update setpoints failed: ${res.status}`);
+  }
+  return res.json();
 }
 
 // ─── AiM Device ─────────────────────────────────────────────────────────────
@@ -330,7 +358,7 @@ export async function fetchGPS(): Promise<GPSData | null> {
   return data.gps || null;
 }
 
-export type LapSource = 'device' | 'gps_auto' | 'beacon_auto' | 'none';
+export type LapSource = 'device' | 'gps_auto' | 'beacon_auto' | 'gps_manual' | 'none';
 
 export interface LapsResponse {
   laps: {
@@ -338,8 +366,13 @@ export interface LapsResponse {
     startTime: number;
     endTime: number;
     source: LapSource;
+    /** Sector split timestamps in ms (same timebase as startTime/endTime).
+     *  null = sector not crossed in this lap. Absent or empty = no sectors. */
+    sectorTimes?: (number | null)[];
   }[];
   source: LapSource;
+  /** Number of sector splits (= setpoints.length - 1 when manual; 0 otherwise). */
+  sectorCount?: number;
 }
 
 export async function fetchLaps(): Promise<LapsResponse> {
