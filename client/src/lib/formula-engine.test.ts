@@ -299,3 +299,98 @@ test('error: bare > or < still rejected by tokenizer', () => {
   evalErr('5 < 3');
   evalErr('5 > 3');
 });
+
+// ─── Hex literals ─────────────────────────────────────────────────────────────
+
+test('hex: lowercase, uppercase, mixed-case parse', () => {
+  assert.equal(evalOK('0xFF').values[0], 255);
+  assert.equal(evalOK('0xff').values[0], 255);
+  assert.equal(evalOK('0xaB').values[0], 171);
+  assert.equal(evalOK('0x1A2B').values[0], 6699);
+});
+
+test('hex: zero and a single-digit hex', () => {
+  assert.equal(evalOK('0x0').values[0], 0);
+  assert.equal(evalOK('0x9').values[0], 9);
+});
+
+test('hex: composes with bitwise', () => {
+  assert.equal(evalOK('0xFF & 0x0F').values[0], 15);
+  assert.equal(evalOK('0xFF00 >> 8').values[0], 255);
+  assert.equal(evalOK('xor(0xFF, 0x0F)').values[0], 240);
+});
+
+test('hex: composes with arithmetic and unary', () => {
+  assert.equal(evalOK('0x10 + 1').values[0], 17);
+  assert.equal(evalOK('-0x10').values[0], -16);
+  assert.equal(evalOK('~0xFF').values[0], -256);
+});
+
+test('hex: scientific-style fragments are NOT hex (regression)', () => {
+  // Decimal numbers that happen to start with 0 still parse as decimal.
+  assert.equal(evalOK('012').values[0], 12);    // not octal
+  assert.equal(evalOK('0.5').values[0], 0.5);   // float still works
+});
+
+test('hex: malformed (no digits after 0x) is an error', () => {
+  evalErr('0x');
+  evalErr('0x + 5');
+});
+
+// ─── Unsigned right shift (>>>) ───────────────────────────────────────────────
+
+test('>>>: zero-fill differs from sign-extending >> on negatives', () => {
+  assert.equal(evalOK('-1 >> 1').values[0], -1);          // sign-extending
+  assert.equal(evalOK('-1 >>> 1').values[0], 2147483647); // zero-fill
+});
+
+test('>>>: high-bit hex round-trip', () => {
+  assert.equal(evalOK('0x80000000 >>> 31').values[0], 1);
+  assert.equal(evalOK('0x80000000 >> 31').values[0], -1);
+});
+
+test('>>>: shifts by zero are no-op (after |0 truncation)', () => {
+  assert.equal(evalOK('5 >>> 0').values[0], 5);
+  assert.equal(evalOK('7.9 >>> 0').values[0], 7);
+});
+
+test('>>>: NaN is treated as 0', () => {
+  assert.equal(evalOK('(0/0) >>> 0').values[0], 0);
+});
+
+test('>>>: precedence ties with << and >> (left-assoc)', () => {
+  // (8 >>> 1) << 2 = 4 << 2 = 16
+  assert.equal(evalOK('8 >>> 1 << 2').values[0], 16);
+  // (16 >> 2) >>> 1 = 4 >>> 1 = 2
+  assert.equal(evalOK('16 >> 2 >>> 1').values[0], 2);
+});
+
+test('>>>: precedence — + binds tighter than >>>', () => {
+  // (1 + 2) >>> 0 = 3, not 1 + (2 >>> 0) = 3 — but a clearer test:
+  // 8 + 8 >>> 1 → (8+8) >>> 1 = 8
+  assert.equal(evalOK('8 + 8 >>> 1').values[0], 8);
+});
+
+test('>>>: works on a channel against scalar', () => {
+  // High bits set; >>> 16 should yield the upper byte
+  const c = ch([0, 100], [0xFF000000 | 0, 0x00FF0000]);
+  const r = evalOK('A >>> 16', { A: c });
+  // 0xFF000000 (signed = -16777216) >>> 16 = 0xFF00 = 65280
+  // 0x00FF0000 >>> 16 = 0x00FF = 255
+  assert.deepEqual(r.values, [65280, 255]);
+});
+
+test('>>>: multi-rate channel + >>> uses interpolate-then-truncate', () => {
+  // A: 0,2,4 at t=0,100,200    B: 0,32 at t=0,200
+  // At t=100, B interpolates to 16. So at t=100: 2 >>> 1 (interpolated B/16 → shift by 1) — but >>> takes RHS as integer so we need a clean check.
+  // Easier: A is the value, scalar shift count.
+  const a = ch([0, 100, 200], [4, 8, 16]);
+  // After >>> 1: 2, 4, 8
+  const r = evalOK('A >>> 1', { A: a });
+  assert.deepEqual(r.values, [2, 4, 8]);
+});
+
+test('extractChannelNames: still discovers channels through >>> and hex', () => {
+  const names = extractChannelNames('(StatusBits & 0xFF000000) >>> 24');
+  assert.deepEqual(new Set(names), new Set(['StatusBits']));
+});

@@ -4,16 +4,19 @@
  *
  * Formula mode supports:
  *   - Arithmetic operators: +, -, *, /, ^ (power, right-associative), ()
- *   - Bitwise operators: &, |, <<, >>, unary ~ (32-bit signed; floats truncated via |0)
+ *   - Bitwise operators: &, |, <<, >>, >>> (zero-fill), unary ~
+ *                        (32-bit signed; floats truncated via |0; `>>>` returns
+ *                         an unsigned 32-bit value)
  *   - Math functions: abs, sqrt, min, max, sin, cos, log, exp, pow, xor
  *   - Signal functions: diff(ch), derivative(ch), derivative2(ch),
  *                       integral(ch), integral(ch, t_lo_ms, t_hi_ms),
  *                       smooth(ch, window), mavg(ch, window_ms), delay(ch, samples)
  *   - Channel names (resolved to sample arrays)
+ *   - Numeric literals: decimal (`12`, `0.5`) and hex (`0xFF`, `0xff`, `0x1A2B`)
  *   - Scalar constants (e, pi)
  *
  * Precedence (loose → tight):
- *   |  →  &  →  << >>  →  + -  →  * /  →  ^ (right-assoc)  →  unary - + ~
+ *   |  →  &  →  << >> >>>  →  + -  →  * /  →  ^ (right-assoc)  →  unary - + ~
  *
  * JavaScript mode: user writes a function body that receives `channels`
  * and `interpolate` helpers and returns { timestamps, values }.
@@ -218,8 +221,24 @@ function tokenize(expr: string): Token[] {
     if (ch === ')') { tokens.push({ type: 'rparen', value: ')', pos: i }); i++; continue; }
     if (ch === ',') { tokens.push({ type: 'comma', value: ',', pos: i }); i++; continue; }
     if (ch === '<' && expr[i + 1] === '<') { tokens.push({ type: 'op', value: '<<', pos: i }); i += 2; continue; }
+    // Order matters: '>>>' must be checked before '>>'.
+    if (ch === '>' && expr[i + 1] === '>' && expr[i + 2] === '>') { tokens.push({ type: 'op', value: '>>>', pos: i }); i += 3; continue; }
     if (ch === '>' && expr[i + 1] === '>') { tokens.push({ type: 'op', value: '>>', pos: i }); i += 2; continue; }
     if ('+-*/^&|~'.includes(ch)) { tokens.push({ type: 'op', value: ch, pos: i }); i++; continue; }
+    // Hex literal: 0x[0-9a-fA-F]+ — must be checked before the decimal branch
+    // because hex starts with '0'. At least one hex digit is required.
+    if (ch === '0' && (expr[i + 1] === 'x' || expr[i + 1] === 'X')) {
+      let j = i + 2;
+      const isHexDigit = (c: string) =>
+        (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+      while (j < expr.length && isHexDigit(expr[j])) j++;
+      if (j === i + 2) {
+        throw new Error(`Malformed hex literal at position ${i}: expected hex digit after '0x'`);
+      }
+      tokens.push({ type: 'number', value: expr.slice(i, j), pos: i });
+      i = j;
+      continue;
+    }
     if ((ch >= '0' && ch <= '9') || ch === '.') {
       // number literal
       let j = i;
@@ -306,7 +325,11 @@ class Parser {
 
   private parseShift(): ASTNode {
     let left = this.parseAddSub();
-    while (this.peek().type === 'op' && (this.peek().value === '<<' || this.peek().value === '>>')) {
+    while (this.peek().type === 'op' && (
+      this.peek().value === '<<' ||
+      this.peek().value === '>>' ||
+      this.peek().value === '>>>'
+    )) {
       const op = this.consume().value;
       const right = this.parseAddSub();
       left = { kind: 'binop', op, left, right };
@@ -366,7 +389,8 @@ class Parser {
 
     if (t.type === 'number') {
       this.consume();
-      return { kind: 'number', value: parseFloat(t.value) };
+      // Number() handles both decimal floats ("0.5") and hex ints ("0xFF").
+      return { kind: 'number', value: Number(t.value) };
     }
 
     if (t.type === 'lparen') {
@@ -449,10 +473,13 @@ function applyBinop(op: string, a: EvalResult, b: EvalResult): EvalResult {
       case '/': return b !== 0 ? a / b : NaN;
       case '^': return Math.pow(a, b);
       // Bitwise: JS engine truncates to 32-bit signed via |0; NaN/Inf → 0.
-      case '&':  return (a | 0) & (b | 0);
-      case '|':  return (a | 0) | (b | 0);
-      case '<<': return (a | 0) << (b | 0);
-      case '>>': return (a | 0) >> (b | 0);
+      // `>>>` is JS's unsigned/zero-fill right shift — output is in
+      // [0, 2^32-1] so high-bit values come back positive.
+      case '&':   return (a | 0) & (b | 0);
+      case '|':   return (a | 0) | (b | 0);
+      case '<<':  return (a | 0) << (b | 0);
+      case '>>':  return (a | 0) >> (b | 0);
+      case '>>>': return (a | 0) >>> (b | 0);
     }
   }
 
@@ -469,10 +496,11 @@ function applyBinop(op: string, a: EvalResult, b: EvalResult): EvalResult {
       case '*': return av * bv;
       case '/': return bv !== 0 ? av / bv : NaN;
       case '^': return Math.pow(av, bv);
-      case '&':  return (av | 0) & (bv | 0);
-      case '|':  return (av | 0) | (bv | 0);
-      case '<<': return (av | 0) << (bv | 0);
-      case '>>': return (av | 0) >> (bv | 0);
+      case '&':   return (av | 0) & (bv | 0);
+      case '|':   return (av | 0) | (bv | 0);
+      case '<<':  return (av | 0) << (bv | 0);
+      case '>>':  return (av | 0) >> (bv | 0);
+      case '>>>': return (av | 0) >>> (bv | 0);
       default: return NaN;
     }
   });
