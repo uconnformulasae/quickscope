@@ -158,6 +158,7 @@ export default function App() {
 
     setSession(session, fileName);
     setView('analysis');
+    return session;
   }, [setSession, setProgress]);
 
   /** Called when session browser loads a session (with optional overlays) */
@@ -171,10 +172,12 @@ export default function App() {
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
-      await buildAndSetSession(info, fileName);
-      // After primary loads, fetch each overlay (best-effort; primary already up).
+      // Capture the built session so we can pass it to addOverlay even before
+      // React commits the setSession state update — otherwise addOverlay sees
+      // a null primary because the state update is batched.
+      const primary = await buildAndSetSession(info, fileName);
       for (const ovId of overlaySessionIds) {
-        const result = await addOverlay(ovId, ovId);
+        const result = await addOverlay(ovId, ovId, primary);
         if ('error' in result) {
           console.warn(`Failed to add overlay ${ovId}: ${result.error}`);
           continue;

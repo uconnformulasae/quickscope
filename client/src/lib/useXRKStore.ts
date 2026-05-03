@@ -2,7 +2,7 @@
  * QuickScope Global State Store
  * Manages parsed XRK session data and UI state
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { XRKSession, ChannelDef, ChannelSample, ParseProgress } from './xrk-parser';
 import { evaluateFormula, extractChannelNames } from './formula-engine';
 import {
@@ -231,6 +231,14 @@ export function useAppState() {
 
   // Separate map for derived channel samples (not in state to keep it fast)
   const [derivedSamplesMap, setDerivedSamplesMap] = useState<Map<number, ChannelSample[]>>(new Map());
+
+  // Mirror state into a ref so async callbacks (notably the overlay flow,
+  // which fires `addOverlay` immediately after `setSession`) always read the
+  // latest values instead of a stale closure capture from the render that
+  // started the operation. Without this, addOverlay's early `state.session`
+  // read is null right after a fresh load, even though state has been queued.
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
 
   const setSession = useCallback((session: XRKSession, fileName: string) => {
     setState(prev => ({
@@ -508,10 +516,17 @@ export function useAppState() {
   const addOverlay = useCallback(async (
     sessionId: string,
     label: string,
+    primaryOverride?: XRKSession,
   ): Promise<{ error: string } | { id: string }> => {
-    const primary = state.session;
+    // Read via ref — caller may invoke us right after setSession() schedules
+    // a state update but before React commits, so closure-captured `state` is
+    // stale. stateRef.current always reflects the latest committed state.
+    // primaryOverride lets the caller bypass even the ref read for the
+    // race-condition case where setState hasn't committed yet (e.g., immediately
+    // after handleSessionLoaded → buildAndSetSession returns).
+    const primary = primaryOverride ?? stateRef.current.session;
     if (!primary) return { error: 'Load a primary session first' };
-    if (state.overlays.some(o => o.id === sessionId)) return { error: 'Already an overlay' };
+    if (stateRef.current.overlays.some(o => o.id === sessionId)) return { error: 'Already an overlay' };
 
     try {
       const info = await fetchSessionInfo(sessionId);
@@ -543,7 +558,7 @@ export function useAppState() {
     } catch (e) {
       return { error: e instanceof Error ? e.message : 'Failed to add overlay' };
     }
-  }, [state.session, state.overlays, buildOverlaySession]);
+  }, [buildOverlaySession]);
 
   const removeOverlay = useCallback((sessionId: string) => {
     setState(prev => ({ ...prev, overlays: prev.overlays.filter(o => o.id !== sessionId) }));
@@ -569,9 +584,9 @@ export function useAppState() {
     sessionId: string,
     primaryChannelId: number,
   ): Promise<void> => {
-    const primary = state.session;
+    const primary = stateRef.current.session;
     if (!primary) return;
-    const overlay = state.overlays.find(o => o.id === sessionId);
+    const overlay = stateRef.current.overlays.find(o => o.id === sessionId);
     if (!overlay) return;
     const primaryDef = primary.channels.get(primaryChannelId);
     if (!primaryDef) return;
@@ -602,17 +617,17 @@ export function useAppState() {
     } catch (e) {
       console.error('Failed to fetch overlay channel data:', e);
     }
-  }, [state.session, state.overlays]);
+  }, []);
 
   /** Recompute formula-mode derived channels against an overlay. Lazy-fetches
    *  any base channels the formula references that aren't already loaded for
    *  the overlay. Skips Python-mode derived channels (primary-only by design). */
   const recomputeOverlayDerived = useCallback(async (sessionId: string) => {
-    const primary = state.session;
+    const primary = stateRef.current.session;
     if (!primary) return;
-    const overlay = state.overlays.find(o => o.id === sessionId);
+    const overlay = stateRef.current.overlays.find(o => o.id === sessionId);
     if (!overlay) return;
-    const formulaDerived = state.derivedChannels.filter(d => d.mode === 'formula');
+    const formulaDerived = stateRef.current.derivedChannels.filter(d => d.mode === 'formula');
     if (formulaDerived.length === 0) {
       if (overlay.derivedSamples.size > 0) {
         setState(prev => ({
@@ -687,7 +702,7 @@ export function useAppState() {
         ? { ...o, samples: freshSamples, derivedSamples: newDerived }
         : o),
     }));
-  }, [state.session, state.overlays, state.derivedChannels]);
+  }, []);
 
   return {
     state,
