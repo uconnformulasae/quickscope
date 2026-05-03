@@ -225,12 +225,15 @@ export function drawStrips(
         if (ovVisible.length < 2) continue;
         const ovDs = minMaxTrace(ovVisible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
 
+        const ovColor = ov.index >= 4 ? brightenColor(strip.color, 0.35) : strip.color;
+        const ovAlpha = ov.index >= 4 ? 0.7 : 1.0;
+
         ctx.save();
-        ctx.strokeStyle = ov.index >= 4 ? brightenColor(strip.color, 0.35) : strip.color;
+        ctx.strokeStyle = ovColor;
         ctx.lineWidth = 1.6;
         ctx.lineJoin = 'round';
         ctx.setLineDash(dashForOverlayIndex(ov.index));
-        ctx.globalAlpha = ov.index >= 4 ? 0.7 : 1.0;
+        ctx.globalAlpha = ovAlpha;
         ctx.beginPath();
         let started = false;
         for (const s of ovDs) {
@@ -241,6 +244,23 @@ export function drawStrips(
         }
         ctx.stroke();
         ctx.setLineDash([]);
+        ctx.restore();
+
+        // Sample markers — dashed lines abstract away where actual samples
+        // sit, so draw small dots at each (decimated) sample on overlay
+        // traces. Primary stays marker-free (solid line implies density).
+        ctx.save();
+        ctx.fillStyle = ovColor;
+        ctx.globalAlpha = ovAlpha;
+        ctx.beginPath();
+        for (const s of ovDs) {
+          const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
+          if (x < lm || x > w - rm) continue;
+          const y = valToY(s.value);
+          ctx.moveTo(x + 1.5, y);
+          ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+        }
+        ctx.fill();
         ctx.restore();
       }
     }
