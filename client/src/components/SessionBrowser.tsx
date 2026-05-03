@@ -15,7 +15,12 @@ import { ThemeToggle } from './ThemeToggle';
 import { GPSThumbnail } from './GPSThumbnail';
 
 interface SessionBrowserProps {
-  onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
+  onSessionLoaded: (
+    info: SessionInfo,
+    sessionId: string,
+    fileName: string,
+    overlaySessionIds?: string[],
+  ) => void;
   onOpenSettings: () => void;
   onOpenLive: () => void;
   theme: 'dark' | 'light';
@@ -102,8 +107,20 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
   } | null>(null);
   const [uploadLog, setUploadLog] = useState<UploadLogEntry[]>([]);
   const [showUploadLog, setShowUploadLog] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+
+  const toggleSelected = useCallback((sessionId: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -151,30 +168,53 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
   }, [refreshSessions]);
 
   const handleSessionClick = useCallback(async (session: LocalSession) => {
-    if (session.sync_status === 'remote_only') {
-      // Need to pull first
-      setPullingId(session.id);
-      try {
-        await pullSession(session.id);
-        await refreshSessions();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Pull failed');
-        setPullingId(null);
-        return;
-      }
-      setPullingId(null);
+    // If multiple are selected and the click is inside the selection, treat
+    // the clicked one as primary and the rest as overlays. Otherwise single-load.
+    let primaryId = session.id;
+    let overlayIds: string[] = [];
+    if (selectedIds.size > 1 && selectedIds.has(session.id)) {
+      overlayIds = Array.from(selectedIds).filter(id => id !== session.id);
     }
 
-    setLoadingId(session.id);
+    const allIds = [primaryId, ...overlayIds];
+    if (allIds.length > 4) {
+      const ok = window.confirm(
+        `Loading ${allIds.length} sessions (1 primary + ${overlayIds.length} overlays). ` +
+        `Past 3 overlays the chart may slow down. Continue?`,
+      );
+      if (!ok) return;
+    }
+
+    // Resolve any not-yet-pulled sessions
+    for (const id of allIds) {
+      const s = sessions.find(x => x.id === id);
+      if (!s) continue;
+      if (s.sync_status === 'remote_only') {
+        setPullingId(id);
+        try {
+          await pullSession(id);
+          await refreshSessions();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Pull failed');
+          setPullingId(null);
+          return;
+        }
+        setPullingId(null);
+      }
+    }
+
+    setLoadingId(primaryId);
     try {
-      const info = await loadSession(session.id);
-      onSessionLoaded(info, session.id, session.filename);
+      const info = await loadSession(primaryId);
+      const primarySession = sessions.find(s => s.id === primaryId) || session;
+      onSessionLoaded(info, primaryId, primarySession.filename, overlayIds);
+      clearSelection();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Load failed');
     } finally {
       setLoadingId(null);
     }
-  }, [onSessionLoaded, refreshSessions]);
+  }, [onSessionLoaded, refreshSessions, sessions, selectedIds, clearSelection]);
 
   const handleDelete = useCallback(async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
@@ -491,6 +531,21 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         </div>
       )}
 
+      {/* Selection summary bar (overlay multi-load) */}
+      {selectedIds.size > 1 && (
+        <div className="px-4 py-2 bg-primary/10 border-y border-primary/30 flex items-center justify-between flex-shrink-0">
+          <span className="text-xs text-foreground">
+            {selectedIds.size} selected — click any selected row's row body to load it as primary plus the rest as overlays
+          </span>
+          <button
+            onClick={clearSelection}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* Session list */}
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {sortedSessions.length === 0 ? (
@@ -520,11 +575,20 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
               const SourceIcon = sourceCfg.icon;
 
               return (
+                <div key={session.id} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(session.id)}
+                    onChange={() => toggleSelected(session.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="ml-1 cursor-pointer flex-shrink-0"
+                    data-testid={`select-session-${session.id}`}
+                    title={selectedIds.has(session.id) ? 'In overlay selection' : 'Add to overlay selection'}
+                  />
                 <button
-                  key={session.id}
                   onClick={() => handleSessionClick(session)}
                   disabled={isLoading || isPulling}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 hover:bg-[hsl(225,35%,91%)] dark:hover:bg-muted hover:border-[hsl(225,30%,78%)] dark:hover:border-border transition-colors disabled:opacity-60 group"
+                  className="flex-1 min-w-0 flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 hover:bg-[hsl(225,35%,91%)] dark:hover:bg-muted hover:border-[hsl(225,30%,78%)] dark:hover:border-border transition-colors disabled:opacity-60 group"
                 >
                   {/* Status indicator */}
                   <div className="flex-shrink-0">
@@ -612,6 +676,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                     )}
                   </div>
                 </button>
+                </div>
               );
             })}
           </div>
