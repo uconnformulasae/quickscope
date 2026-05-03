@@ -534,6 +534,8 @@ export default function App() {
               onNavigateToTime={handleNavigateToTime}
               cursorTime={state.cursorTime}
               theme={theme}
+              overlays={state.overlays}
+              fileName={state.fileName}
             />
           </div>
         )}

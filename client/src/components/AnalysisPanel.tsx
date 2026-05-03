@@ -1,6 +1,7 @@
 import type { XRKSession } from '../lib/xrk-parser';
 import type { ActiveChannel, AnalysisTab, TimeRange, DerivedChannel } from '../lib/useXRKStore';
 import type { ChannelSample } from '../lib/xrk-parser';
+import type { OverlayState } from '../lib/overlay-types';
 import { BarChart3, Activity, ScatterChart, Timer, MapPin } from 'lucide-react';
 import { GPSMapView } from './GPSMapView';
 import { StatsTab } from './analysis/StatsTab';
@@ -24,6 +25,8 @@ interface AnalysisPanelProps {
   onNavigateToTime?: (timestampMs: number) => void;
   cursorTime?: number | null;
   theme?: 'dark' | 'light';
+  overlays?: OverlayState[];
+  fileName?: string | null;
 }
 
 const TABS: { id: AnalysisTab; label: string; icon: any }[] = [
@@ -50,6 +53,8 @@ export function AnalysisPanel({
   onNavigateToTime,
   cursorTime,
   theme,
+  overlays,
+  fileName,
 }: AnalysisPanelProps) {
   return (
     <div className="flex flex-col h-full bg-card border-l border-border overflow-hidden">
@@ -80,7 +85,12 @@ export function AnalysisPanel({
           <StatsTab session={session} activeChannels={activeChannels} viewRange={viewRange} derivedChannels={derivedChannels} derivedSamplesMap={derivedSamplesMap} onNavigateToTime={onNavigateToTime} />
         )}
         {analysisTab === 'lapanalysis' && (
-          <LapAnalysisTab session={session} activeChannels={activeChannels} />
+          <LapAnalysisTab
+            session={session}
+            activeChannels={activeChannels}
+            overlays={overlays}
+            primaryLabel={fileName}
+          />
         )}
         {analysisTab === 'histogram' && (
           <HistogramTab
