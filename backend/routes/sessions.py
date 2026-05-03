@@ -32,16 +32,23 @@ async def load_session(session_id: str):
     if not local_path or not Path(local_path).exists():
         raise HTTPException(400, "Session file not available locally. Pull it first.")
 
+    # If we already have this session in cache, just promote it to active.
+    from services.session_cache import session_cache
+    cached = session_cache.get(session_id)
+    if cached is not None:
+        session_cache.set_active(session_id)
+        log, _ = cached
+        return extract_session_info(log, entry["filename"])
+
     try:
-        log = parse_file(local_path)
-        state.log = log
-        state.filename = entry["filename"]
-        state.session_id = session_id
+        log = await asyncio.to_thread(parse_file, local_path)
     except Exception:
-        state.clear()
         logger.exception("Failed to parse session file")
         raise HTTPException(500, "Failed to parse session file")
 
+    session_cache.put(session_id, log, entry["filename"])
+    session_cache.set_active(session_id)
+    state.filename = entry["filename"]
     return extract_session_info(log, entry["filename"])
 
 
