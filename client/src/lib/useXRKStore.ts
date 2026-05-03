@@ -5,7 +5,12 @@
 import { useState, useCallback } from 'react';
 import type { XRKSession, ChannelDef, ChannelSample, ParseProgress } from './xrk-parser';
 import { evaluateFormula, extractChannelNames } from './formula-engine';
-import { fetchChannelData } from './api';
+import {
+  fetchChannelData, fetchSessionInfo, fetchSessionChannelData, fetchSessionLaps,
+  type SessionInfo,
+} from './api';
+import type { OverlayState, OverlayAlignment } from './overlay-types';
+import { defaultAlignment } from './overlay-alignment';
 
 export interface ActiveChannel {
   channelId: number;
@@ -46,6 +51,9 @@ export interface AppState {
 
   // Derived channels
   derivedChannels: DerivedChannel[];
+
+  // Multi-session overlays. Empty array when no overlays loaded.
+  overlays: OverlayState[];
 
   // Time viewport (milliseconds)
   viewRange: TimeRange | null;
@@ -206,6 +214,7 @@ export function useAppState() {
     fileName: null,
     activeChannels: [],
     derivedChannels: [],
+    overlays: [],
     viewRange: null,
     analysisTab: 'stats',
     histogramChannelId: null,
@@ -233,6 +242,7 @@ export function useAppState() {
       parseProgress: null,
       activeChannels: [],
       derivedChannels: [],
+      overlays: [],
       viewRange: null,
     }));
     setDerivedSamplesMap(new Map());
@@ -332,6 +342,7 @@ export function useAppState() {
       fileName: null,
       activeChannels: [],
       derivedChannels: [],
+      overlays: [],
       viewRange: null,
       loadError: null,
     }));
@@ -457,6 +468,227 @@ export function useAppState() {
     };
   }, [state.session, state.derivedChannels, derivedSamplesMap, ensureExpressionChannelsLoaded]);
 
+  // ─── Overlay actions ────────────────────────────────────────────────────
+
+  const buildOverlaySession = useCallback(async (info: SessionInfo): Promise<XRKSession> => {
+    const channels = new Map<number, ChannelDef>();
+    for (const ch of info.channels) {
+      channels.set(ch.index, {
+        index: ch.index,
+        shortName: ch.name,
+        longName: ch.name,
+        sampleRateRaw: ch.sampleRateHz > 0 ? Math.round(1e6 / ch.sampleRateHz) : 0,
+        sampleRateHz: ch.sampleRateHz,
+        units: ch.units,
+        color: ch.color,
+        fileSampleCount: ch.sampleCount,
+      });
+    }
+    const samples = new Map<number, ChannelSample[]>();
+    for (const ch of info.channels) samples.set(ch.index, []);
+    return {
+      metadata: {
+        vehicle: info.metadata.vehicle || 'Unknown',
+        driver: info.metadata.driver || 'Unknown',
+        date: info.metadata.date || 'Unknown',
+        time: info.metadata.time || 'Unknown',
+        venue: info.metadata.venue || 'Unknown',
+        championship: info.metadata.championship || 'Unknown',
+        sessionType: info.metadata.sessionType || 'Unknown',
+      },
+      channels,
+      samples,
+      lapMarkers: [],
+      lapSource: 'none',
+      durationMs: info.durationMs,
+      totalSamples: info.totalSamples,
+    };
+  }, []);
+
+  const addOverlay = useCallback(async (
+    sessionId: string,
+    label: string,
+  ): Promise<{ error: string } | { id: string }> => {
+    const primary = state.session;
+    if (!primary) return { error: 'Load a primary session first' };
+    if (state.overlays.some(o => o.id === sessionId)) return { error: 'Already an overlay' };
+
+    try {
+      const info = await fetchSessionInfo(sessionId);
+      const overlaySession = await buildOverlaySession(info);
+      // Pull lap markers (best-effort; alignment fallback handles 'none')
+      try {
+        const laps = await fetchSessionLaps(sessionId);
+        if (laps.laps.length > 0) {
+          overlaySession.lapMarkers = laps.laps.map(l => ({
+            timestamp: l.startTime, lapNumber: l.lapNumber,
+          }));
+          const last = laps.laps[laps.laps.length - 1];
+          overlaySession.lapMarkers.push({ timestamp: last.endTime, lapNumber: last.lapNumber + 1 });
+          overlaySession.lapSource = laps.source;
+        }
+      } catch { /* leave lapMarkers empty */ }
+
+      const overlay: OverlayState = {
+        id: sessionId,
+        label,
+        session: overlaySession,
+        visible: true,
+        alignment: defaultAlignment(primary, overlaySession),
+        samples: new Map(),
+        derivedSamples: new Map(),
+      };
+      setState(prev => ({ ...prev, overlays: [...prev.overlays, overlay] }));
+      return { id: sessionId };
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : 'Failed to add overlay' };
+    }
+  }, [state.session, state.overlays, buildOverlaySession]);
+
+  const removeOverlay = useCallback((sessionId: string) => {
+    setState(prev => ({ ...prev, overlays: prev.overlays.filter(o => o.id !== sessionId) }));
+  }, []);
+
+  const toggleOverlayVisibility = useCallback((sessionId: string) => {
+    setState(prev => ({
+      ...prev,
+      overlays: prev.overlays.map(o => o.id === sessionId ? { ...o, visible: !o.visible } : o),
+    }));
+  }, []);
+
+  const updateOverlayAlignment = useCallback((sessionId: string, alignment: OverlayAlignment) => {
+    setState(prev => ({
+      ...prev,
+      overlays: prev.overlays.map(o => o.id === sessionId ? { ...o, alignment } : o),
+    }));
+  }, []);
+
+  /** Lazy-fetch overlay channel samples by primary channel id. Resolves by
+   *  shortName equality. No-op if already present or no match. */
+  const ensureOverlayChannelLoaded = useCallback(async (
+    sessionId: string,
+    primaryChannelId: number,
+  ): Promise<void> => {
+    const primary = state.session;
+    if (!primary) return;
+    const overlay = state.overlays.find(o => o.id === sessionId);
+    if (!overlay) return;
+    const primaryDef = primary.channels.get(primaryChannelId);
+    if (!primaryDef) return;
+
+    // Find matching overlay channel by shortName
+    let overlayChId = -1;
+    for (const [oid, odef] of overlay.session.channels) {
+      if (odef.shortName === primaryDef.shortName) { overlayChId = oid; break; }
+    }
+    if (overlayChId === -1) return; // no match — silent
+    const existing = overlay.samples.get(overlayChId);
+    if (existing && existing.length > 0) return;
+
+    try {
+      const dataMap = await fetchSessionChannelData(sessionId, [primaryDef.shortName]);
+      const data = dataMap.get(primaryDef.shortName);
+      if (!data) return;
+      const samples: ChannelSample[] = data.timestamps.map((t, i) => ({ timestamp: t, value: data.values[i] }));
+      setState(prev => ({
+        ...prev,
+        overlays: prev.overlays.map(o => {
+          if (o.id !== sessionId) return o;
+          const next = new Map(o.samples);
+          next.set(overlayChId, samples);
+          return { ...o, samples: next };
+        }),
+      }));
+    } catch (e) {
+      console.error('Failed to fetch overlay channel data:', e);
+    }
+  }, [state.session, state.overlays]);
+
+  /** Recompute formula-mode derived channels against an overlay. Lazy-fetches
+   *  any base channels the formula references that aren't already loaded for
+   *  the overlay. Skips Python-mode derived channels (primary-only by design). */
+  const recomputeOverlayDerived = useCallback(async (sessionId: string) => {
+    const primary = state.session;
+    if (!primary) return;
+    const overlay = state.overlays.find(o => o.id === sessionId);
+    if (!overlay) return;
+    const formulaDerived = state.derivedChannels.filter(d => d.mode === 'formula');
+    if (formulaDerived.length === 0) {
+      if (overlay.derivedSamples.size > 0) {
+        setState(prev => ({
+          ...prev,
+          overlays: prev.overlays.map(o => o.id === sessionId
+            ? { ...o, derivedSamples: new Map() }
+            : o),
+        }));
+      }
+      return;
+    }
+
+    // Gather all referenced names across all formula derived channels
+    const allNames = new Set<string>();
+    for (const dc of formulaDerived) {
+      for (const n of extractChannelNames(dc.expression)) allNames.add(n);
+    }
+
+    const namesToFetch: string[] = [];
+    for (const name of allNames) {
+      let overlayChId = -1;
+      for (const [oid, odef] of overlay.session.channels) {
+        if (odef.shortName === name) { overlayChId = oid; break; }
+      }
+      if (overlayChId === -1) continue;
+      const already = overlay.samples.get(overlayChId);
+      if (already && already.length > 0) continue;
+      namesToFetch.push(name);
+    }
+
+    const freshSamples = new Map(overlay.samples);
+    if (namesToFetch.length > 0) {
+      try {
+        const dataMap = await fetchSessionChannelData(sessionId, namesToFetch);
+        for (const [name, data] of dataMap) {
+          let overlayChId = -1;
+          for (const [oid, odef] of overlay.session.channels) {
+            if (odef.shortName === name) { overlayChId = oid; break; }
+          }
+          if (overlayChId === -1) continue;
+          const samps: ChannelSample[] = data.timestamps.map((t, i) => ({ timestamp: t, value: data.values[i] }));
+          freshSamples.set(overlayChId, samps);
+        }
+      } catch (e) {
+        console.error('Overlay derived: failed to fetch channels:', e);
+        return;
+      }
+    }
+
+    // Build channelData keyed by shortName for the formula evaluator
+    const channelData: Record<string, { timestamps: number[]; values: number[] }> = {};
+    for (const [chId, samps] of freshSamples) {
+      if (samps.length === 0) continue;
+      const def = overlay.session.channels.get(chId);
+      if (!def) continue;
+      channelData[def.shortName] = {
+        timestamps: samps.map(s => s.timestamp),
+        values: samps.map(s => s.value),
+      };
+    }
+
+    const newDerived = new Map<number, ChannelSample[]>();
+    for (const dc of formulaDerived) {
+      const result = evaluateFormula(dc.expression, channelData);
+      if (typeof result === 'string') continue; // skip on error
+      newDerived.set(dc.id, result.timestamps.map((t, i) => ({ timestamp: t, value: result.values[i] })));
+    }
+
+    setState(prev => ({
+      ...prev,
+      overlays: prev.overlays.map(o => o.id === sessionId
+        ? { ...o, samples: freshSamples, derivedSamples: newDerived }
+        : o),
+    }));
+  }, [state.session, state.overlays, state.derivedChannels]);
+
   return {
     state,
     derivedSamplesMap,
@@ -482,5 +714,11 @@ export function useAppState() {
     removeDerivedChannel,
     updateDerivedChannel,
     previewDerivedChannel,
+    addOverlay,
+    removeOverlay,
+    toggleOverlayVisibility,
+    updateOverlayAlignment,
+    ensureOverlayChannelLoaded,
+    recomputeOverlayDerived,
   };
 }

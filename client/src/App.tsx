@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
@@ -46,6 +46,12 @@ export default function App() {
     previewDerivedChannel,
     setChartMode,
     setViewMode,
+    addOverlay,
+    removeOverlay,
+    toggleOverlayVisibility,
+    updateOverlayAlignment,
+    ensureOverlayChannelLoaded,
+    recomputeOverlayDerived,
   } = useAppState();
 
   const { theme, toggleTheme } = useTheme();
@@ -154,17 +160,31 @@ export default function App() {
     setView('analysis');
   }, [setSession, setProgress]);
 
-  /** Called when session browser loads a session */
-  const handleSessionLoaded = useCallback(async (info: SessionInfo, sessionId: string, fileName: string) => {
+  /** Called when session browser loads a session (with optional overlays) */
+  const handleSessionLoaded = useCallback(async (
+    info: SessionInfo,
+    sessionId: string,
+    fileName: string,
+    overlaySessionIds: string[] = [],
+  ) => {
     setLoadedSessionId(sessionId);
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
       await buildAndSetSession(info, fileName);
+      // After primary loads, fetch each overlay (best-effort; primary already up).
+      for (const ovId of overlaySessionIds) {
+        const result = await addOverlay(ovId, ovId);
+        if ('error' in result) {
+          console.warn(`Failed to add overlay ${ovId}: ${result.error}`);
+          continue;
+        }
+        void recomputeOverlayDerived(ovId);
+      }
     } catch (err) {
       setError(`Failed to load session: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [buildAndSetSession, setLoading, setProgress, setError]);
+  }, [buildAndSetSession, setLoading, setProgress, setError, addOverlay, recomputeOverlayDerived]);
 
   /** Called when user uploads a file from the analysis view header */
   const handleFileSelected = useCallback(async (file: File) => {
@@ -343,6 +363,25 @@ export default function App() {
     [rawActiveChannels, theme],
   );
 
+  // Lazy-fetch overlay channel samples whenever the user activates a primary
+  // channel — fire-and-forget; the chart redraws when samples land.
+  useEffect(() => {
+    if (state.overlays.length === 0) return;
+    for (const ac of state.activeChannels) {
+      for (const ov of state.overlays) {
+        void ensureOverlayChannelLoaded(ov.id, ac.channelId);
+      }
+    }
+  }, [state.activeChannels, state.overlays, ensureOverlayChannelLoaded]);
+
+  // Recompute overlay derived channels when the primary's derived list changes.
+  useEffect(() => {
+    for (const ov of state.overlays) {
+      void recomputeOverlayDerived(ov.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.derivedChannels]);
+
   // ─── Session Browser View ──────────────────────────────────────────────────
   if (view === 'browser') {
     return (
@@ -446,6 +485,10 @@ export default function App() {
                 cursorTime={state.cursorTime}
                 onCursorTimeChange={setCursorTime}
                 chartMode={state.chartMode}
+                overlays={state.overlays}
+                onOverlayRemove={removeOverlay}
+                onOverlayToggleVisible={toggleOverlayVisibility}
+                onOverlayUpdateAlignment={updateOverlayAlignment}
               />
             )
           ) : (

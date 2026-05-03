@@ -383,6 +383,42 @@ export async function fetchLaps(): Promise<LapsResponse> {
   return res.json();
 }
 
+// ─── Per-session overlay reads (don't change active session) ────────────────
+
+export async function fetchSessionInfo(sessionId: string): Promise<SessionInfo> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/info`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Session info failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchSessionChannelData(
+  sessionId: string,
+  channels: string[],
+): Promise<Map<string, { timestamps: number[]; values: number[] }>> {
+  if (channels.length === 0) return new Map();
+  const res = await fetch(
+    `${API_BASE}/api/sessions/${sessionId}/data?channels=${encodeURIComponent(channels.join(','))}`,
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to fetch session channel data: ${res.status}`);
+  }
+  const data: ChannelDataResponse = await res.json();
+  const map = new Map<string, { timestamps: number[]; values: number[] }>();
+  for (const [name, channelData] of Object.entries(data)) {
+    map.set(name, channelData);
+  }
+  return map;
+}
+
+export async function fetchSessionLaps(sessionId: string): Promise<LapsResponse> {
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/laps`);
+  if (!res.ok) throw new Error(`Failed to fetch session laps: ${res.status}`);
+  return res.json();
+}
+
 export interface GPSPreview {
   points: [number, number][];
   bounds: {

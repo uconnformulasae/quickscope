@@ -4,6 +4,7 @@
 import type { ChannelSample } from './xrk-parser';
 import type { ActiveChannel, TimeRange, DerivedChannel, ChartMode } from './useXRKStore';
 import type { XRKSession } from './xrk-parser';
+import type { OverlayState, OverlayAlignment } from './overlay-types';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -17,6 +18,26 @@ export interface TelemetryChartProps {
   cursorTime?: number | null;
   onCursorTimeChange?: (t: number | null) => void;
   chartMode?: ChartMode;
+  /** Multi-session overlays. Empty array when no overlays loaded. */
+  overlays?: OverlayState[];
+  onOverlayRemove?: (id: string) => void;
+  onOverlayToggleVisible?: (id: string) => void;
+  onOverlayUpdateAlignment?: (id: string, alignment: OverlayAlignment) => void;
+}
+
+/** Per-overlay data prepared for the draw call. */
+export interface OverlayDrawData {
+  id: string;
+  /** 1-indexed: overlay #1 → index 1, overlay #2 → index 2, etc.
+   *  (Primary is implicit index 0.) */
+  index: number;
+  /** Time offset in ms applied to overlay timestamps before pixel mapping. */
+  offsetMs: number;
+  /** Per-primary-channelId, the overlay's matching channel samples (post-shift).
+   *  Only populated for channels currently visible in the primary AND present
+   *  in the overlay (matched by shortName). Derived channels match by primary
+   *  derived id directly. */
+  samplesByPrimaryId: Map<number, ChannelSample[]>;
 }
 
 export interface StripLayout {
@@ -49,6 +70,8 @@ export interface DrawContext {
   smoothedYRanges: Map<string, [number, number]>;
   needsDrawRef: { current: boolean };
   colors: ChartColors;
+  /** Multi-session overlays prepared for this draw. Empty when none loaded. */
+  overlays: OverlayDrawData[];
 }
 
 // ─── Light-mode color overrides ─────────────────────────────────────────────
@@ -84,6 +107,21 @@ export const BOTTOM_AXIS_HEIGHT = 36;
 export const MIN_STRIP_HEIGHT = 140;
 export const AXIS_WIDTH = 50;
 export const MONO_FONT = 'JetBrains Mono, monospace';
+
+/** setLineDash patterns by overlay index. Index 0 = primary (solid).
+ *  Past 3 we run out of patterns and reuse solid+lighter — surfaces a
+ *  perf warning to the user via the OverlayPopover banner. */
+export const OVERLAY_DASH_PATTERNS: number[][] = [
+  [],            // primary: solid
+  [8, 4],        // overlay #1: dashed
+  [2, 4],        // overlay #2: dotted
+  [8, 4, 2, 4],  // overlay #3: dash-dot
+  [],            // overlay #4+: solid (with tint applied at draw)
+];
+
+export function dashForOverlayIndex(idx: number): number[] {
+  return OVERLAY_DASH_PATTERNS[Math.min(idx, OVERLAY_DASH_PATTERNS.length - 1)];
+}
 
 export interface ChartColors {
   grid: string;
