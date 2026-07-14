@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { formatTime } from '../lib/xrk-parser';
+import { formatChartElapsed } from '../lib/time-format';
 import type { ChannelSample } from '../lib/xrk-parser';
 import { RotateCcw } from 'lucide-react';
 import {
@@ -708,8 +708,10 @@ export function TelemetryChart({
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">
             {viewRange
-              ? `${formatTime(viewRange.startMs)} — ${formatTime(viewRange.endMs)}`
-              : `Full session: ${formatTime(session.durationMs)}`
+              ? `${formatChartElapsed(viewRange.startMs, session.logStartMs)} — ${formatChartElapsed(viewRange.endMs, session.logStartMs)}`
+              : session.logStartMs !== null
+                ? `${formatChartElapsed(0, session.logStartMs)} — ${formatChartElapsed(session.durationMs, session.logStartMs)}`
+                : `Full session: ${formatChartElapsed(session.durationMs, session.logStartMs)}`
             }
           </span>
         </div>

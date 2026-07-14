@@ -38,6 +38,7 @@ export interface SessionInfo {
   durationMs: number;
   totalSamples: number;
   lapCount: number;
+  recordedAt?: string | null;
 }
 
 export interface ChannelDataResponse {

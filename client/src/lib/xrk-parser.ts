@@ -48,6 +48,8 @@ export interface XRKSession {
   lapSource: LapSource;
   durationMs: number;
   totalSamples: number;
+  /** Epoch ms at log start, for wall-clock chart labels. Null when unknown. */
+  logStartMs: number | null;
 }
 
 export interface ParseProgress {

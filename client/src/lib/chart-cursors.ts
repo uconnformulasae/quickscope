@@ -6,8 +6,9 @@ import type { ChannelSample } from './xrk-parser';
 import type { DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT,
-  clamp, interpolateValue, nearestSample, formatValue, formatTimeSec,
+  clamp, interpolateValue, nearestSample, formatValue,
 } from './chart-utils';
+import { formatChartCursorTime } from './time-format';
 
 interface CursorState {
   cursorA: number | null;
@@ -30,8 +31,7 @@ function drawCursorLine(
   ctx.stroke();
 
   if (showTimestamp) {
-    const tickStep = dc.xTicks.length >= 2 ? dc.xTicks[1] - dc.xTicks[0] : undefined;
-    const label = formatTimeSec(t, tickStep);
+    const label = formatChartCursorTime(t, dc.session.logStartMs);
     ctx.font = `10px ${MONO_FONT}`;
     const tw = ctx.measureText(label).width;
     const pillW = tw + 8;

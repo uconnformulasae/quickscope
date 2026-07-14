@@ -4,6 +4,7 @@ import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
+import { resolveLogStartMs } from './lib/time-format';
 import { resolveChartColor } from './lib/chart-utils';
 import { ChannelSidebar } from './components/ChannelSidebar';
 import { TelemetryChart } from './components/TelemetryChart';
@@ -147,6 +148,7 @@ export default function App() {
       lapSource,
       durationMs: info.durationMs,
       totalSamples: info.totalSamples,
+      logStartMs: resolveLogStartMs(info.recordedAt, info.metadata.date, info.metadata.time),
     };
 
     setSession(session, fileName);

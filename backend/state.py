@@ -139,6 +139,7 @@ def extract_session_info(log, filename: str) -> dict:
         "durationMs": duration_ms,
         "totalSamples": total_samples,
         "lapCount": lap_count,
+        "recordedAt": parse_recorded_at(metadata["date"], metadata["time"]),
     }
 
 
