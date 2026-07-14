@@ -2,7 +2,7 @@
 
 ## What this is
 
-QuickScope is a racing telemetry analysis tool for AiM XRK log files. It has a Python backend that parses files using `libxrk` and a React frontend that renders channel data on a custom HTML5 Canvas chart engine.
+QuickScope is a racing telemetry analysis tool for AiM XRK log files. It has a Python backend that parses files using the **AiM Race Studio 3 DLL** (primary, Windows) with **libxrk** as fallback, and a React frontend that renders channel data on a custom HTML5 Canvas chart engine.
 
 It is a local-only single-user app. The backend holds one parsed session in memory. There is no database, no auth, no multi-user support.
 
@@ -10,7 +10,8 @@ It is a local-only single-user app. The backend holds one parsed session in memo
 
 ```
 start.sh                    ← Single entry point, starts both servers
-├── backend/main.py         ← FastAPI + libxrk (port 8000)
+├── backend/main.py         ← FastAPI + XRK parsers (port 8000)
+│   └── parsers/            ← aim_dll (primary) + libxrk (fallback)
 └── client/                 ← React + Vite + Tailwind (port 5000)
     └── src/
         ├── App.tsx                     ← Root component, wires everything
@@ -32,7 +33,7 @@ start.sh                    ← Single entry point, starts both servers
 ## Data flow
 
 1. User clicks **Load File** → browser file picker → file uploaded via `POST /api/upload`
-2. Backend parses with `libxrk.aim_xrk()`, stores in memory, returns metadata + channel list
+2. Backend parses via `parsers.parse_xrk()` (AiM DLL on Windows when available, else libxrk), stores in memory, returns metadata + channel list
 3. Frontend builds a skeleton `XRKSession` object (channels defined but no sample data yet)
 4. When a channel is activated (clicked in sidebar), `GET /api/data?channels=Name` fetches its samples
 5. Sample data (`{timestamps: ms[], values: float[]}`) is stored in `session.samples` Map
@@ -52,9 +53,11 @@ All endpoints prefixed with `/api/`. Backend is stateful — one session at a ti
 | `/api/gps` | GET | GPS lat/lon/speed (filtered for valid fixes) |
 | `/api/export?channels=A,B` | GET | CSV download with interpolated timebase |
 
-`libxrk` returns channels as a `dict[str, pyarrow.Table]` where each table has columns `timecodes` (int64 ms) and the channel value column. Metadata is a plain dict. Laps is a PyArrow table with `num`, `start_time`, `end_time`.
+`parse_xrk()` returns a `LogFile` with channels as a `dict[str, pyarrow.Table]` where each table has columns `timecodes` (int64 ms) and the channel value column. Metadata is a plain dict. Laps is a PyArrow table with `num`, `start_time`, `end_time`.
 
-GPS timecodes from libxrk are in a different timebase (raw UTC) than regular channels (session-relative). The GPS endpoint offsets them by subtracting `min(timestamps)`.
+**Parser selection:** On Windows, QuickScope tries the official AiM `MatLabXRK` DLL first (`backend/vendor/MatLabXRK-2017-64-ReleaseU.dll` or `AIM_XRK_DLL`). If the DLL is missing or fails, it falls back to libxrk. Mac/Linux always use libxrk. Override via start-script flags (`./start.ps1 -Libxrk` / `-Dll`, or `./start.sh --libxrk` / `--dll`) or env `QUICKSCOPE_PARSER=libxrk|aim_dll`.
+
+GPS timecodes may differ between parsers; the `/api/gps` endpoint offsets them by subtracting `min(timestamps)`.
 
 ## Frontend key patterns
 
@@ -148,7 +151,8 @@ npm run build
 ## Dependencies
 
 ### Python (backend/requirements.txt)
-- `libxrk` — AiM XRK/XRZ file parser (Cython, requires Python 3.10+)
+- `libxrk` — fallback XRK/XRZ parser (Cython, requires Python 3.10+)
+- AiM `MatLabXRK-2017-64-ReleaseU.dll` — primary parser on Windows (proprietary; see `backend/vendor/README.md`)
 - `fastapi` + `uvicorn` — HTTP server
 - `python-multipart` — file upload handling
 
@@ -165,7 +169,7 @@ npm run build
 ## Known limitations
 
 - Single file at a time — loading a new file replaces the current session
-- GPS data from libxrk uses computed channels (derived from raw ECEF) — quality depends on GPS fix
+- GPS data quality depends on GPS fix; primary DLL path uses AiM's GPS computations, fallback libxrk derives lat/lon from ECEF
 - Derived channels recompute from scratch each time (no incremental updates)
 - Export CSV interpolates all channels to the highest-rate channel's timebase, which can produce very large files
 - The Express server in `server/` is vestigial scaffolding that only serves the Vite dev build — all API logic is in the Python backend

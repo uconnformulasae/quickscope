@@ -12,7 +12,7 @@ from datetime import datetime as _dt
 from pathlib import Path
 from typing import Optional
 
-from libxrk import aim_xrk, ChannelMetadata
+from libxrk import ChannelMetadata
 
 from services import sync_service
 
@@ -85,7 +85,8 @@ def channel_data(name: str, table) -> dict:
 
 
 def parse_file(file_path: str | Path):
-    return aim_xrk(str(file_path))
+    from parsers import parse_xrk
+    return parse_xrk(file_path)
 
 
 def extract_session_info(log, filename: str) -> dict:

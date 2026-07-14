@@ -1,9 +1,45 @@
 #!/bin/bash
 # QuickScope — start script
 # Starts the Python backend and React frontend
+#
+# Usage:
+#   ./start.sh              Auto: AiM DLL on Windows when available, else libxrk
+#   ./start.sh --libxrk     Force libxrk parser
+#   ./start.sh --dll        Force AiM DLL parser (Windows only)
 
 set -e
 cd "$(dirname "$0")"
+
+PARSER_MODE="auto"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --libxrk)
+            PARSER_MODE="libxrk"
+            shift
+            ;;
+        --dll)
+            PARSER_MODE="aim_dll"
+            shift
+            ;;
+        -h|--help)
+            sed -n '2,8p' "$0"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [--libxrk | --dll]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "$PARSER_MODE" == "libxrk" ]]; then
+    export QUICKSCOPE_PARSER=libxrk
+elif [[ "$PARSER_MODE" == "aim_dll" ]]; then
+    export QUICKSCOPE_PARSER=aim_dll
+else
+    unset QUICKSCOPE_PARSER 2>/dev/null || true
+fi
 
 # Pick a Python 3.10+ interpreter
 if command -v python3.12 >/dev/null 2>&1; then
@@ -38,7 +74,7 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Start backend
-echo "Starting QuickScope backend on :8000..."
+echo "Starting QuickScope backend on :8000 (parser: $PARSER_MODE)..."
 (cd backend && "../$VENV_PY" -m uvicorn main:app --host 0.0.0.0 --port 8000) &
 BACKEND_PID=$!
 

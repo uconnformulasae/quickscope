@@ -19,9 +19,9 @@ Built for UConn Formula SAE Electric.
 ## Architecture
 
 - **Frontend**: React 18 + TypeScript + Vite + Tailwind CSS (port 5000)
-- **Backend**: Python FastAPI + libxrk (port 8000)
+- **Backend**: Python FastAPI + AiM DLL (primary on Windows) / libxrk (fallback) (port 8000)
 
-The backend parses `.xrk`/`.xrz` files using [libxrk](https://pypi.org/project/libxrk/) and serves channel data via REST API. The frontend renders everything client-side using a custom Canvas chart engine -- no charting library dependency.
+The backend parses `.xrk`/`.xrz` files using the official AiM MatLabXRK DLL when available (Windows), falling back to [libxrk](https://pypi.org/project/libxrk/) on other platforms or if the DLL is missing. See `backend/vendor/README.md` for Windows dev setup.
 
 Sessions are persisted locally in `./data/sessions.json` with raw files cached in `./data/sessions/`. When configured, sessions sync bidirectionally with the Data-Development Railway backend.
 
@@ -46,6 +46,18 @@ See [docs/PACKAGING.md](docs/PACKAGING.md) for the release/signing workflow.
 ```
 
 This installs dependencies (if needed) and starts both servers. Open `http://localhost:5000`.
+
+**Parser flags** (optional):
+
+```bash
+./start.sh              # auto: DLL on Windows when available, else libxrk
+./start.sh --libxrk     # force libxrk
+./start.sh --dll        # force AiM DLL (Windows)
+```
+
+**Windows:** same flags via PowerShell: `./start.ps1`, `./start.ps1 -Libxrk`, `./start.ps1 -Dll`.
+
+**Windows contributors:** place `MatLabXRK-2017-64-ReleaseU.dll` in `backend/vendor/` for the primary parser (see `backend/vendor/README.md`). Without it, libxrk is used automatically.
 
 ### Manual Start
 

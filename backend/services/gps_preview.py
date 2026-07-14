@@ -17,7 +17,7 @@ import math
 from pathlib import Path
 from typing import Optional, TypedDict
 
-from libxrk import aim_xrk
+from state import parse_file, state
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,15 @@ def compute_preview(local_path: str | Path) -> Optional[GPSPreview]:
         return _cache[key]
 
     try:
-        log = aim_xrk(str(p))
+        if (
+            state.loaded
+            and state.filename == p.name
+            and state.log is not None
+        ):
+            # Reuse in-memory session when load_session already parsed this file.
+            log = state.log
+        else:
+            log = parse_file(p)
     except Exception:
         logger.exception("Failed to parse %s for GPS preview", p)
         _cache[key] = None

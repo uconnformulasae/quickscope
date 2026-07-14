@@ -58,6 +58,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt pyinstaller
 
+      - name: Bundle AiM XRK DLL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/laz-/xrk.git $env:RUNNER_TEMP\laz-xrk
+          New-Item -ItemType Directory -Force -Path backend\vendor | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\laz-xrk\MatLabXRK-2017-64-ReleaseU.dll" backend\vendor\
+
       - name: Freeze Python backend
         working-directory: backend
         run: pyinstaller quickscope-backend.spec --noconfirm

@@ -30,9 +30,11 @@ shortcut don't prompt.
 QuickScope.app / QuickScope.exe
 ├─ Electron shell                    (serves the UI, owns the window)
 │    ↓ spawns on startup
-├─ quickscope-backend                (PyInstaller-frozen FastAPI + libxrk)
+├─ quickscope-backend                (PyInstaller-frozen FastAPI + parsers)
 │    binds to 127.0.0.1:<free-port>
 │    reads/writes to user data dir
+│    Windows: ships MatLabXRK DLL (primary) + libxrk (fallback)
+│    macOS: libxrk only
 │
 └─ User data directory               (persists across reinstalls)
      macOS:    ~/Library/Application Support/QuickScope/data/
@@ -48,6 +50,11 @@ A preload script injects `window.__QUICKSCOPE_BACKEND__` so the renderer's
 ## Local build (test before shipping)
 
 Prerequisites: Python 3.12, Node 20.
+
+**Windows only:** place `MatLabXRK-2017-64-ReleaseU.dll` in `backend/vendor/` before building
+(see [AiM RS3 DLL docs](https://www.aim-sportline.com/docs/racestudio3/manual/html/xrk-dll.html)).
+The DLL is proprietary AiM software and is gitignored; CI release builds fetch it from the
+[laz-/xrk](https://github.com/laz-/xrk) mirror at freeze time.
 
 ```bash
 npm ci
