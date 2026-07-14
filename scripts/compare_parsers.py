@@ -10,15 +10,13 @@ Usage (from repo root):
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "backend"))
 
-from parsers import aim_dll, parse_xrk  # noqa: E402
-from libxrk import aim_xrk  # noqa: E402
+from parsers import aim_dll, _parse_libxrk  # noqa: E402
 
 
 def _channel_summary(log) -> dict[str, dict]:
@@ -38,15 +36,12 @@ def compare_file(path: Path) -> int:
 
     if not aim_dll.dll_available():
         print("  AiM DLL not available on this platform — skipping primary comparison")
-        log = aim_xrk(str(path))
+        log = _parse_libxrk(path)
         print(f"  libxrk only: {len(log.channels)} channels, {log.laps.num_rows} laps")
         return 0
 
-    os.environ["QUICKSCOPE_PARSER"] = "aim_dll"
-    dll_log = parse_xrk(path)
-    os.environ["QUICKSCOPE_PARSER"] = "libxrk"
-    lib_log = parse_xrk(path)
-    del os.environ["QUICKSCOPE_PARSER"]
+    dll_log = aim_dll.parse(path)
+    lib_log = _parse_libxrk(path)
 
     dll_ch = _channel_summary(dll_log)
     lib_ch = _channel_summary(lib_log)

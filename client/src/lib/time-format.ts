@@ -84,9 +84,7 @@ function formatWallClock(
   const ampm = h >= 12 ? 'PM' : 'AM';
   if (options.includeMs) {
     const ms = d.getMilliseconds();
-    if (ms > 0) {
-      return `${hour12}:${minute}:${second}.${ms.toString().padStart(3, '0')} ${ampm}`;
-    }
+    return `${hour12}:${minute}:${second}.${ms.toString().padStart(3, '0')} ${ampm}`;
   }
   return `${hour12}:${minute}:${second} ${ampm}`;
 }
@@ -122,15 +120,16 @@ export function formatChartAxisTime(
   return formatWallClock(d);
 }
 
-/** Format time for cursor / hover readouts — always includes seconds. */
+/** Format time for cursor / hover readouts — always includes seconds and ms. */
 export function formatChartCursorTime(
   elapsedSec: number,
   logStartMs: number | null,
 ): string {
   if (logStartMs === null) {
-    return formatTimeSec(elapsedSec, 0.1);
+    return formatTimeSec(elapsedSec, 0.001);
   }
-  return formatWallClock(new Date(logStartMs + elapsedSec * 1000));
+  const elapsedMs = Math.round(elapsedSec * 1000);
+  return formatWallClock(new Date(logStartMs + elapsedMs), { includeMs: true });
 }
 
 /** Format session-relative milliseconds for toolbar / readouts. */

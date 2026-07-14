@@ -20,7 +20,9 @@ from .libxrk_fixup import normalize_libxrk_timestamps
 
 logger = logging.getLogger("quickscope")
 
-_PARSER_OVERRIDE = os.environ.get("QUICKSCOPE_PARSER", "").strip().lower()
+
+def _parser_override() -> str:
+    return os.environ.get("QUICKSCOPE_PARSER", "").strip().lower()
 
 
 @contextmanager
@@ -55,7 +57,7 @@ def parse_xrk(path: str | Path) -> LogFile:
     """
     p = Path(path)
 
-    if _PARSER_OVERRIDE == "libxrk":
+    if _parser_override() == "libxrk":
         log = _parse_libxrk(p)
         logger.info("parsed %s via libxrk (forced)", p.name)
         return log
@@ -66,7 +68,7 @@ def parse_xrk(path: str | Path) -> LogFile:
             logger.info("parsed %s via aim_dll", p.name)
             return log
         except Exception as exc:
-            if _PARSER_OVERRIDE == "aim_dll":
+            if _parser_override() == "aim_dll":
                 raise
             logger.warning(
                 "aim_dll failed for %s: %s; falling back to libxrk",
