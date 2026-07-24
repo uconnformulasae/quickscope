@@ -59,6 +59,23 @@ This installs dependencies (if needed) and starts both servers. Open `http://loc
 
 **Windows contributors:** place `MatLabXRK-2017-64-ReleaseU.dll` in `backend/vendor/` for the primary parser (see `backend/vendor/README.md`). Without it, libxrk is used automatically.
 
+### Testing
+
+```powershell
+npm run test          # unit regression (no DLL, no libxrk fixtures)
+npm run test:dll      # DLL vs Race Studio CSV (Windows + fixtures)
+npm run test:libxrk   # libxrk fallback parser on XRK fixtures
+npm run check         # TypeScript only
+```
+
+Parser validation against a local XRK + Race Studio export:
+
+```powershell
+.venv\Scripts\python.exe scripts\validate_dll.py tests\fixtures
+```
+
+See [tests/fixtures/README.md](tests/fixtures/README.md) for fixture layout and [docs/CI.md](docs/CI.md) for GitHub Actions / self-hosted runner setup.
+
 ### Manual Start
 
 ```bash

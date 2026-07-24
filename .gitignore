@@ -11,6 +11,7 @@ data/
 .cursorignore
 .cursor/
 *.csv
+!tests/fixtures/golden/**/*.csv
 
 # PyInstaller output
 backend/build/

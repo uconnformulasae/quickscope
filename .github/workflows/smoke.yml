@@ -2,10 +2,9 @@ name: Smoke Build
 
 # Validates the Electron+PyInstaller build pipeline on every PR and push to
 # main, WITHOUT signing or notarization. Catches "the builder broke" bugs
-# fast (< 15 min on each runner) instead of discovering them mid-release-tag.
+# fast instead of discovering them mid-release-tag.
 #
-# This deliberately mirrors the build steps in release.yml. If you change one,
-# change the other.
+# Windows builds use the self-hosted quickscope runner; macOS uses GitHub-hosted.
 
 on:
   push:
@@ -16,8 +15,6 @@ on:
 permissions:
   contents: read
 
-# Cancel in-progress smoke runs on the same ref when a new commit lands —
-# only the latest commit's status matters.
 concurrency:
   group: smoke-${{ github.ref }}
   cancel-in-progress: true
@@ -31,9 +28,11 @@ jobs:
           - os: macos-14
             arch: arm64
             label: mac-arm64
-          - os: windows-latest
+            self_hosted: false
+          - os: [self-hosted, Windows, X64, quickscope]
             arch: x64
             label: win-x64
+            self_hosted: true
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -51,7 +50,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          cache: npm
 
       - name: Install Python build deps
         run: |
@@ -59,12 +58,10 @@ jobs:
           pip install -r backend/requirements.txt pyinstaller
 
       - name: Bundle AiM XRK DLL (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          git clone --depth 1 https://github.com/laz-/xrk.git $env:RUNNER_TEMP\laz-xrk
-          New-Item -ItemType Directory -Force -Path backend\vendor | Out-Null
-          Copy-Item "$env:RUNNER_TEMP\laz-xrk\MatLabXRK-2017-64-ReleaseU.dll" backend\vendor\
+        if: matrix.self_hosted
+        uses: ./.github/actions/setup-parser-assets
+        with:
+          download-fixtures: 'false'
 
       - name: Freeze Python backend
         working-directory: backend
@@ -80,12 +77,12 @@ jobs:
         run: npm run build
 
       - name: Build macOS installer (unsigned)
-        if: runner.os == 'macOS'
+        if: ${{ !matrix.self_hosted }}
         timeout-minutes: 15
         run: npx electron-builder --mac --${{ matrix.arch }} --publish never --config.mac.notarize=false
 
       - name: Build Windows installer (unsigned)
-        if: runner.os == 'Windows'
+        if: matrix.self_hosted
         timeout-minutes: 15
         run: npx electron-builder --win --x64 --publish never
 

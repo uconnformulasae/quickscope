@@ -1,0 +1,49 @@
+name: DLL Regression
+
+# Parser regression against Race Studio CSV — Windows DLL only.
+# Independent of test.yml (no npm, no PyInstaller, no Electron).
+
+on:
+  push:
+    branches: [main, Dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dll-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dll-regression:
+    name: dll-regression
+    runs-on: [self-hosted, Windows, X64, quickscope]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download fixtures and DLL
+        uses: ./.github/actions/setup-parser-assets
+        with:
+          download-fixtures: 'true'
+
+      - name: Install Python test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+
+      - name: Pytest (DLL integration)
+        run: python -m pytest -m dll -q
+
+      - name: Validator log (debug)
+        if: failure()
+        run: python scripts/validate_dll.py tests/fixtures -v
