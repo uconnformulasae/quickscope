@@ -10,6 +10,7 @@ data/
 .claude/
 .cursorignore
 .cursor/
+*.csv
 
 # PyInstaller output
 backend/build/
@@ -18,3 +19,7 @@ backend/vendor/*.dll
 
 # electron-builder output
 release/
+
+# Local parser validation fixtures (large binary logs)
+tests/fixtures/*.xrk
+tests/fixtures/*.xrz
