@@ -1,10 +1,7 @@
 name: Smoke Build
 
 # Validates the Electron+PyInstaller build pipeline on every PR and push to
-# main, WITHOUT signing or notarization. Catches "the builder broke" bugs
-# fast instead of discovering them mid-release-tag.
-#
-# Windows builds use the self-hosted quickscope runner; macOS uses GitHub-hosted.
+# main, WITHOUT signing or notarization.
 
 on:
   push:
@@ -28,11 +25,9 @@ jobs:
           - os: macos-14
             arch: arm64
             label: mac-arm64
-            self_hosted: false
-          - os: [self-hosted, Windows, X64, quickscope]
+          - os: windows-latest
             arch: x64
             label: win-x64
-            self_hosted: true
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -58,7 +53,7 @@ jobs:
           pip install -r backend/requirements.txt pyinstaller
 
       - name: Bundle AiM XRK DLL (Windows)
-        if: matrix.self_hosted
+        if: runner.os == 'Windows'
         uses: ./.github/actions/setup-parser-assets
         with:
           download-fixtures: 'false'
@@ -77,12 +72,12 @@ jobs:
         run: npm run build
 
       - name: Build macOS installer (unsigned)
-        if: ${{ !matrix.self_hosted }}
+        if: runner.os == 'macOS'
         timeout-minutes: 15
         run: npx electron-builder --mac --${{ matrix.arch }} --publish never --config.mac.notarize=false
 
       - name: Build Windows installer (unsigned)
-        if: matrix.self_hosted
+        if: runner.os == 'Windows'
         timeout-minutes: 15
         run: npx electron-builder --win --x64 --publish never
 

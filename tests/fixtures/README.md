@@ -81,9 +81,9 @@ The script auto-finds `*_rs.csv` in the same directory when the names match.
 
 ## CI regression
 
-DLL regression runs in GitHub Actions on a **self-hosted Windows runner** (`dll-regression.yml`). It downloads fixtures from the **`fixtures-v1`** release and the MatLabXRK DLL from [laz-/xrk](https://github.com/laz-/xrk).
+DLL regression runs on **`windows-latest`** (`dll-regression.yml`). libxrk regression runs on **`ubuntu-latest`** (`libxrk-regression.yml`). Both download fixtures from the **`fixtures-v1`** release; DLL jobs also fetch the MatLabXRK DLL from [laz-/xrk](https://github.com/laz-/xrk).
 
-**libxrk fallback** regression is a separate workflow (`libxrk-regression.yml`) — same fixtures, no DLL, no Race Studio CSV. Force locally with `QUICKSCOPE_PARSER=libxrk` or `npm run test:libxrk`.
+Force libxrk locally with `QUICKSCOPE_PARSER=libxrk` or `npm run test:libxrk`.
 
 To publish or refresh CI fixtures (requires `gh auth login`):
 

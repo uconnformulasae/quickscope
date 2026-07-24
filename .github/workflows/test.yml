@@ -19,7 +19,7 @@ concurrency:
 jobs:
   test:
     name: test
-    runs-on: [self-hosted, Windows, X64, quickscope]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:

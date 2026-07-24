@@ -1,5 +1,5 @@
 name: Setup parser CI assets
-description: Cache-aware download of regression fixtures and MatLabXRK DLL on self-hosted Windows runners.
+description: Download regression fixtures and MatLabXRK DLL for GitHub-hosted runners.
 
 inputs:
   download-fixtures:
@@ -7,50 +7,34 @@ inputs:
     required: false
     default: 'false'
   download-dll:
-    description: Whether to fetch MatLabXRK DLL from laz-/xrk
+    description: Whether to fetch MatLabXRK DLL from laz-/xrk (Windows only)
     required: false
     default: 'true'
 
 runs:
   using: composite
   steps:
-    - name: Ensure CI cache dirs
-      shell: pwsh
-      run: |
-        New-Item -ItemType Directory -Force -Path C:\quickscope-ci-cache\fixtures, C:\quickscope-ci-cache\dll | Out-Null
-
-    - name: Download parser fixtures (skip if cached)
+    - name: Download parser fixtures
       if: inputs.download-fixtures == 'true'
+      shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-      shell: pwsh
       run: |
-        $dest = "C:\quickscope-ci-cache\fixtures"
-        if (-not (Get-ChildItem $dest -Filter *.xrk -ErrorAction SilentlyContinue)) {
-          Write-Host "Downloading fixtures from fixtures-v1 release..."
-          gh release download fixtures-v1 --repo ${{ github.repository }} `
-            --pattern "*.xrk" --pattern "*_rs.csv" --dir $dest
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Fixture download failed. Publish fixtures-v1 release (see docs/CI.md)."
-            exit 1
-          }
-        } else {
-          Write-Host "Using cached fixtures in $dest"
-        }
-        New-Item -ItemType Directory -Force -Path tests\fixtures | Out-Null
-        Copy-Item "$dest\*" tests\fixtures\ -Force
+        set -euo pipefail
+        mkdir -p tests/fixtures
+        echo "Downloading fixtures from fixtures-v1 release..."
+        gh release download fixtures-v1 --repo "${{ github.repository }}" \
+          --pattern "*.xrk" --pattern "*_rs.csv" \
+          --dir tests/fixtures
+        if [ "$(find tests/fixtures -maxdepth 1 \( -name '*.xrk' -o -name '*.xrz' \) | wc -l)" -eq 0 ]; then
+          echo "::error::Fixture download failed. Publish fixtures-v1 release (see docs/CI.md)."
+          exit 1
+        fi
 
-    - name: Ensure AiM DLL (skip if cached)
+    - name: Bundle AiM XRK DLL
       if: inputs.download-dll == 'true'
       shell: pwsh
       run: |
-        $dll = "C:\quickscope-ci-cache\dll\MatLabXRK-2017-64-ReleaseU.dll"
-        if (-not (Test-Path $dll)) {
-          Write-Host "Cloning laz-/xrk for MatLabXRK DLL..."
-          git clone --depth 1 https://github.com/laz-/xrk.git $env:RUNNER_TEMP\laz-xrk
-          Copy-Item "$env:RUNNER_TEMP\laz-xrk\MatLabXRK-2017-64-ReleaseU.dll" $dll
-        } else {
-          Write-Host "Using cached DLL at $dll"
-        }
+        git clone --depth 1 https://github.com/laz-/xrk.git $env:RUNNER_TEMP\laz-xrk
         New-Item -ItemType Directory -Force -Path backend\vendor | Out-Null
-        Copy-Item $dll backend\vendor\ -Force
+        Copy-Item "$env:RUNNER_TEMP\laz-xrk\MatLabXRK-2017-64-ReleaseU.dll" backend\vendor\

@@ -74,7 +74,7 @@ Parser validation against a local XRK + Race Studio export:
 .venv\Scripts\python.exe scripts\validate_dll.py tests\fixtures
 ```
 
-See [tests/fixtures/README.md](tests/fixtures/README.md) for fixture layout and [docs/CI.md](docs/CI.md) for GitHub Actions / self-hosted runner setup.
+See [tests/fixtures/README.md](tests/fixtures/README.md) for fixture layout and [docs/CI.md](docs/CI.md) for GitHub Actions setup.
 
 ### Manual Start
 

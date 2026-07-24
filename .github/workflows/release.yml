@@ -2,8 +2,6 @@ name: Release
 
 # Builds QuickScope installers for macOS (arm64 + x64) and Windows (x64) and
 # attaches them to a GitHub Release.
-#
-# Windows builds use the self-hosted quickscope runner; macOS uses GitHub-hosted.
 
 on:
   push:
@@ -23,15 +21,12 @@ jobs:
           - os: macos-14
             arch: arm64
             label: mac-arm64
-            self_hosted: false
           - os: macos-13
             arch: x64
             label: mac-x64
-            self_hosted: false
-          - os: [self-hosted, Windows, X64, quickscope]
+          - os: windows-latest
             arch: x64
             label: win-x64
-            self_hosted: true
 
     runs-on: ${{ matrix.os }}
 
@@ -56,7 +51,7 @@ jobs:
           pip install -r backend/requirements.txt pyinstaller
 
       - name: Bundle AiM XRK DLL (Windows)
-        if: matrix.self_hosted
+        if: runner.os == 'Windows'
         uses: ./.github/actions/setup-parser-assets
         with:
           download-fixtures: 'false'
@@ -72,7 +67,7 @@ jobs:
         run: npm run build
 
       - name: Probe macOS signing/notarize secrets
-        if: ${{ !matrix.self_hosted }}
+        if: runner.os == 'macOS'
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -99,7 +94,7 @@ jobs:
           fi
 
       - name: Build macOS installer
-        if: ${{ !matrix.self_hosted }}
+        if: runner.os == 'macOS'
         timeout-minutes: 25
         env:
           CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
@@ -120,7 +115,7 @@ jobs:
           fi
 
       - name: Build Windows installer
-        if: matrix.self_hosted
+        if: runner.os == 'Windows'
         timeout-minutes: 20
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -19,7 +19,7 @@ concurrency:
 jobs:
   dll-regression:
     name: dll-regression
-    runs-on: [self-hosted, Windows, X64, quickscope]
+    runs-on: windows-latest
     timeout-minutes: 20
 
     steps:
