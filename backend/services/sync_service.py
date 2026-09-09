@@ -13,6 +13,8 @@ from services import session_store, railway_client
 
 logger = logging.getLogger(__name__)
 
+is_railway_configured = railway_client.is_railway_configured
+
 
 async def sync_with_railway() -> dict:
     """Full bidirectional sync with Railway.

@@ -46,6 +46,13 @@ if (-not (Test-Path "node_modules")) {
     npm install
 }
 
+# npm 11+ warns on devdir injected by some tooling (e.g. Cursor); not a valid npm config key.
+foreach ($envName in @("npm_config_devdir", "NPM_CONFIG_DEVDIR")) {
+    if (Test-Path "Env:$envName") {
+        Remove-Item "Env:$envName" -ErrorAction SilentlyContinue
+    }
+}
+
 function Stop-ListenerOnPort([int]$Port) {
     $matches = netstat -ano | Select-String ":$Port\s+.*LISTENING\s+(\d+)"
     foreach ($match in $matches) {

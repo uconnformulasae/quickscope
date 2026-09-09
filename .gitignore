@@ -12,6 +12,7 @@ data/
 .cursor/
 *.csv
 !tests/fixtures/golden/**/*.csv
+*.pcapng
 
 # PyInstaller output
 backend/build/

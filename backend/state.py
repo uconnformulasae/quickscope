@@ -50,6 +50,9 @@ _sync_lock = asyncio.Lock()
 
 
 async def background_sync():
+    if not sync_service.is_railway_configured():
+        logger.debug("Background sync skipped: Railway URL not configured")
+        return
     if _sync_lock.locked():
         return
     async with _sync_lock:
@@ -164,6 +167,52 @@ def parse_recorded_at(date_str: str, time_str: str) -> Optional[str]:
             except ValueError:
                 continue
     return d.isoformat()
+
+
+def resolve_aim_recorded_at(
+    device_date: str,
+    device_hour: str,
+    xrk_date: str,
+    xrk_time: str,
+) -> Optional[str]:
+    """Prefer AiM device session-list date/hour over embedded XRK Log Date."""
+    device_ts = parse_recorded_at(device_date, device_hour)
+    if device_ts:
+        xrk_ts = parse_recorded_at(xrk_date, xrk_time)
+        if xrk_ts and xrk_ts != device_ts:
+            logger.warning(
+                "AiM device date %s %s differs from XRK Log Date %s %s; using device date",
+                device_date,
+                device_hour,
+                xrk_date,
+                xrk_time,
+            )
+        return device_ts
+    return parse_recorded_at(xrk_date, xrk_time)
+
+
+def format_recorded_at_display(recorded_at: str) -> tuple[str, str]:
+    """Split an ISO-8601 recorded_at into AiM-style date and time strings."""
+    try:
+        d = _dt.fromisoformat(recorded_at)
+    except ValueError:
+        return "", ""
+    return d.strftime("%d/%m/%Y"), d.strftime("%H:%M:%S")
+
+
+def apply_stored_recorded_at(info: dict, recorded_at: Optional[str]) -> dict:
+    """Override session info metadata with a stored recorded_at timestamp."""
+    if not recorded_at:
+        return info
+    date_str, time_str = format_recorded_at_display(recorded_at)
+    if not date_str:
+        return info
+    info = dict(info)
+    info["metadata"] = dict(info["metadata"])
+    info["metadata"]["date"] = date_str
+    info["metadata"]["time"] = time_str
+    info["recordedAt"] = recorded_at
+    return info
 
 
 def sanitize_filename(filename: str) -> str:

@@ -170,7 +170,7 @@ export async function listAimSessions(): Promise<{ ok: boolean; sessions: AimSes
   return res.json();
 }
 
-export async function pullFromAim(filenames: string[]): Promise<{ ok: boolean; downloaded: string[]; errors?: string[]; error?: string; message?: string }> {
+export async function pullFromAim(filenames: string[]): Promise<AimPullResponse> {
   const res = await fetch(`${API_BASE}/api/aim/pull`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -181,6 +181,45 @@ export async function pullFromAim(filenames: string[]): Promise<{ ok: boolean; d
     throw new Error(err.detail || `AiM pull failed: ${res.status}`);
   }
   return res.json();
+}
+
+export interface AimPullResult {
+  filename: string;
+  bytes: number;
+  duration_s: number;
+  session_id: string;
+  parse_ok: boolean;
+  local_path: string;
+  railway_queued: boolean;
+}
+
+export interface AimPullResponse {
+  ok: boolean;
+  downloaded: string[];
+  errors?: string[];
+  error?: string;
+  results?: AimPullResult[];
+}
+
+export interface AimPullLogEntry {
+  ts: string;
+  action: 'list' | 'pull';
+  status: 'ok' | 'download_failed' | 'parse_failed' | 'list_failed' | 'list_ok';
+  device_ip: string;
+  filename?: string;
+  size: number;
+  duration_s: number;
+  session_id?: string;
+  session_count?: number;
+  railway_queued: boolean;
+  error?: string;
+}
+
+export async function fetchAimPullLog(): Promise<AimPullLogEntry[]> {
+  const res = await fetch(`${API_BASE}/api/aim/pull/log`);
+  if (!res.ok) throw new Error(`Failed to fetch AiM pull log: ${res.status}`);
+  const data = await res.json();
+  return data.entries;
 }
 
 // ─── Settings ───────────────────────────────────────────────────────────────

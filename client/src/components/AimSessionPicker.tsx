@@ -77,7 +77,18 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
           setError(`${errCount} download(s) failed: ${result.errors!.join('; ')}`);
         }
         if (count > 0) {
-          setDownloadResult(`Downloaded ${count} session${count !== 1 ? 's' : ''}`);
+          const summaries = (result.results || [])
+            .filter(r => result.downloaded?.includes(r.filename))
+            .map(r => {
+              const railwayNote = r.railway_queued ? 'Railway sync queued' : 'Railway sync skipped';
+              const parseNote = r.parse_ok ? 'indexed' : 'parse warning';
+              return `${r.filename} · ${formatSize(r.bytes)} · ${parseNote} · ${railwayNote}`;
+            });
+          setDownloadResult(
+            summaries.length > 0
+              ? summaries.join('\n')
+              : `Downloaded ${count} session${count !== 1 ? 's' : ''}`,
+          );
           onDownloaded();
           // Mark downloaded ones
           setSessions(prev => prev.map(s =>
@@ -125,10 +136,13 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
               <Loader2 className="w-5 h-5 text-primary animate-spin" />
               <p className="text-xs text-muted-foreground">Listing sessions on device...</p>
             </div>
-          ) : sessions.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-2">
+          ) : sessions.length === 0 && !error ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-2 px-5 text-center">
               <HardDrive className="w-6 h-6 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">No sessions found on device</p>
+              <p className="text-xs text-muted-foreground/70">
+                Connect to the AiM WiFi hotspot and verify the device IP in Settings (default 10.0.0.1).
+              </p>
             </div>
           ) : (
             <div className="divide-y divide-border/30">
@@ -200,7 +214,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
           </div>
         )}
         {downloadResult && (
-          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20">
+          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20 whitespace-pre-line">
             {downloadResult}
           </div>
         )}

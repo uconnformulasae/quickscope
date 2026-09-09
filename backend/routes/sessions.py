@@ -1,15 +1,24 @@
 """Session management routes — CRUD, rename, sync, AiM device integration."""
 
 import asyncio
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
-from services import session_store, sync_service, aim_connector, railway_client, gps_preview
+from services import (
+    session_store,
+    sync_service,
+    aim_connector,
+    railway_client,
+    gps_preview,
+    aim_pull_log,
+)
 from state import (
     state, logger, background_sync,
     parse_file, extract_session_info, parse_recorded_at, sanitize_filename,
+    resolve_aim_recorded_at, apply_stored_recorded_at,
 )
 
 router = APIRouter(prefix="/api")
@@ -42,7 +51,10 @@ async def load_session(session_id: str):
         logger.exception("Failed to parse session file")
         raise HTTPException(500, "Failed to parse session file")
 
-    return extract_session_info(log, entry["filename"])
+    info = extract_session_info(log, entry["filename"])
+    if entry.get("source") == "aim_device" and entry.get("recorded_at"):
+        info = apply_stored_recorded_at(info, entry["recorded_at"])
+    return info
 
 
 @router.post("/sessions/sync")
@@ -157,20 +169,43 @@ async def delete_session(session_id: str):
 
 @router.get("/aim/status")
 async def aim_status():
-    connected = await asyncio.to_thread(aim_connector.is_aim_connected)
-    device_info = None
-    if connected:
-        device_info = await asyncio.to_thread(aim_connector.discover_device)
+    device_info = await asyncio.to_thread(aim_connector.discover_device)
+    connected = device_info is not None
     return {"connected": connected, "device": device_info}
 
 
 @router.get("/aim/sessions")
 async def list_aim_sessions():
-    connected = await asyncio.to_thread(aim_connector.is_aim_connected)
-    if not connected:
-        return {"ok": False, "sessions": [], "error": "AiM device not reachable"}
+    started = time.monotonic()
+    device = await asyncio.to_thread(aim_connector.discover_device)
+    device_ip = device["ip"] if device else ""
 
-    sessions = await asyncio.to_thread(aim_connector.list_aim_sessions)
+    sessions = []
+    try:
+        sessions = await asyncio.to_thread(aim_connector.list_aim_sessions)
+    except ConnectionError as exc:
+        aim_pull_log.record(
+            action="list",
+            status="list_failed",
+            device_ip=device_ip,
+            duration_s=time.monotonic() - started,
+            session_count=0,
+            error=str(exc)[:200],
+        )
+        return {
+            "ok": False,
+            "sessions": [],
+            "error": "Could not connect to AiM device. Check WiFi connection and device IP in Settings.",
+        }
+    duration_s = time.monotonic() - started
+
+    aim_pull_log.record(
+        action="list",
+        status="list_ok",
+        device_ip=device_ip,
+        duration_s=duration_s,
+        session_count=len(sessions),
+    )
 
     local_sessions = session_store.list_sessions()
     local_filenames = {s["filename"] for s in local_sessions}
@@ -181,44 +216,136 @@ async def list_aim_sessions():
     return {"ok": True, "sessions": sessions}
 
 
+@router.get("/aim/pull/log")
+async def get_aim_pull_log():
+    """Recent AiM list/pull attempts, newest first. In-memory only."""
+    return {"entries": aim_pull_log.list_recent()}
+
+
+@router.get("/aim/download/trace")
+async def list_aim_download_traces():
+    """List persisted AiM download trace logs (newest first)."""
+    log_dir = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_download"
+    if not log_dir.is_dir():
+        return {"traces": []}
+    files = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return {
+        "traces": [
+            {
+                "path": str(path),
+                "name": path.name,
+                "size": path.stat().st_size,
+                "modified_at": path.stat().st_mtime,
+            }
+            for path in files[:20]
+        ]
+    }
+
+
+@router.get("/aim/download/trace/{name}")
+async def get_aim_download_trace(name: str):
+    """Return one AiM download trace log file."""
+    log_dir = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_download"
+    path = (log_dir / Path(name).name).resolve()
+    if not path.is_file() or not path.is_relative_to(log_dir.resolve()):
+        raise HTTPException(404, "Trace log not found")
+    return {"name": path.name, "lines": path.read_text(encoding="utf-8").splitlines()}
+
+
 class AimPullRequest(BaseModel):
     filenames: list[str]
 
 
 @router.post("/aim/pull")
 async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks):
-    connected = await asyncio.to_thread(aim_connector.is_aim_connected)
-    if not connected:
-        raise HTTPException(400, "AiM device not reachable")
-
     if not body.filenames:
-        return {"ok": False, "error": "No files selected", "downloaded": []}
+        return {"ok": False, "error": "No files selected", "downloaded": [], "results": []}
 
+    device = await asyncio.to_thread(aim_connector.discover_device)
+    device_ip = device["ip"] if device else ""
+
+    will_queue_railway = sync_service.is_railway_configured()
     logger.info("AiM pull: downloading %d selected sessions...", len(body.filenames))
+
+    device_meta_by_file: dict[str, dict] = {}
+    try:
+        aim_sessions = await asyncio.to_thread(aim_connector.list_aim_sessions)
+        device_meta_by_file = {
+            s["filename"]: s for s in aim_sessions if s.get("filename")
+        }
+    except ConnectionError as exc:
+        logger.warning("AiM pull: could not fetch device session list for dates: %s", exc)
 
     downloaded = []
     errors = []
+    results = []
+
     for raw_filename in body.filenames:
         try:
             filename = sanitize_filename(raw_filename)
         except ValueError:
             errors.append(f"{raw_filename}: invalid filename")
+            aim_pull_log.record(
+                action="pull",
+                status="download_failed",
+                device_ip=device_ip,
+                filename=raw_filename,
+                error="invalid filename",
+            )
             continue
 
         logger.info("AiM pull: downloading %s ...", filename)
+        started = time.monotonic()
         try:
             dest = session_store.session_file_path(filename)
-            await asyncio.to_thread(aim_connector.download_aim_session, filename, dest.parent)
-            logger.info("AiM pull: saved %s (%d bytes)", dest, dest.stat().st_size)
+            device_meta = device_meta_by_file.get(filename, {})
+            expected_size = int(device_meta.get("size", 0) or 0)
+            await asyncio.to_thread(
+                aim_connector.download_aim_session,
+                filename,
+                dest.parent,
+                expected_size,
+            )
+            file_bytes = dest.stat().st_size
+            duration_s = time.monotonic() - started
+            if expected_size > 0 and file_bytes < expected_size:
+                raise RuntimeError(
+                    f"Incomplete download: got {file_bytes} bytes, expected {expected_size} bytes"
+                )
+            logger.info(
+                "AiM pull: saved %s (%d bytes%s)",
+                dest,
+                file_bytes,
+                f", expected {expected_size}" if expected_size else "",
+            )
 
+            parse_ok = True
             try:
                 log = parse_file(dest)
                 info = extract_session_info(log, filename)
                 meta = info["metadata"]
             except Exception as parse_err:
+                parse_ok = False
                 logger.warning("AiM pull: parse failed for %s: %s", filename, parse_err)
                 meta = {}
                 info = {"durationMs": 0, "lapCount": 0}
+                aim_pull_log.record(
+                    action="pull",
+                    status="parse_failed",
+                    device_ip=device_ip,
+                    filename=filename,
+                    size=file_bytes,
+                    duration_s=duration_s,
+                    error=str(parse_err)[:200],
+                )
+
+            device_meta = device_meta_by_file.get(filename, {})
+            recorded_at = resolve_aim_recorded_at(
+                device_meta.get("date", ""),
+                device_meta.get("hour", ""),
+                meta.get("date", ""),
+                meta.get("time", ""),
+            )
 
             entry = session_store.add_session(
                 filename=filename,
@@ -228,16 +355,47 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
                 track_name=meta.get("venue", ""),
                 driver_name=meta.get("driver", ""),
                 vehicle_name=meta.get("vehicle", ""),
-                recorded_at=parse_recorded_at(meta.get("date", ""), meta.get("time", "")),
+                recorded_at=recorded_at,
                 duration_s=info.get("durationMs", 0) / 1000,
                 lap_count=info.get("lapCount", 0),
             )
             downloaded.append(entry["filename"])
+
+            if parse_ok:
+                aim_pull_log.record(
+                    action="pull",
+                    status="ok",
+                    device_ip=device_ip,
+                    filename=filename,
+                    size=file_bytes,
+                    duration_s=duration_s,
+                    session_id=entry["id"],
+                    railway_queued=will_queue_railway,
+                )
+
+            results.append({
+                "filename": filename,
+                "bytes": file_bytes,
+                "duration_s": round(duration_s, 3),
+                "session_id": entry["id"],
+                "parse_ok": parse_ok,
+                "local_path": str(dest),
+                "railway_queued": will_queue_railway,
+            })
         except Exception as e:
+            duration_s = time.monotonic() - started
             logger.error("AiM pull: failed to download %s: %s", filename, e, exc_info=True)
             errors.append(f"{filename}: {e}")
+            aim_pull_log.record(
+                action="pull",
+                status="download_failed",
+                device_ip=device_ip,
+                filename=filename,
+                duration_s=duration_s,
+                error=str(e)[:200],
+            )
 
-    if downloaded:
+    if downloaded and will_queue_railway:
         background_tasks.add_task(background_sync)
 
-    return {"ok": True, "downloaded": downloaded, "errors": errors}
+    return {"ok": True, "downloaded": downloaded, "errors": errors, "results": results}

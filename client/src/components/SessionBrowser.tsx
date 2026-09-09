@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   listSessions, loadSession, syncSessions, pullSession, deleteSession,
-  renameSession, getAimStatus, uploadFile, fetchUploadLog,
+  renameSession, getAimStatus, uploadFile, fetchUploadLog, fetchAimPullLog,
   type LocalSession, type SessionInfo, type AimStatus, type UploadLogEntry,
+  type AimPullLogEntry,
 } from '../lib/api';
 import {
   RefreshCw, Cloud, Wifi, WifiOff, Upload, Trash2,
@@ -101,7 +102,9 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     loaded: number; total: number; ratePerSec: number;
   } | null>(null);
   const [uploadLog, setUploadLog] = useState<UploadLogEntry[]>([]);
-  const [showUploadLog, setShowUploadLog] = useState(false);
+  const [aimPullLog, setAimPullLog] = useState<AimPullLogEntry[]>([]);
+  const [showActivityLog, setShowActivityLog] = useState(false);
+  const [activityTab, setActivityTab] = useState<'uploads' | 'aim'>('uploads');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
@@ -326,20 +329,24 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
           onClick={handleSync}
           disabled={syncing}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-muted/50 text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+          title="Sync sessions with Railway cloud storage"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
-          Sync
+          Cloud Sync
         </button>
 
-        {aimStatus?.connected && (
-          <button
-            onClick={() => setAimPickerOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Pull from AiM
-          </button>
-        )}
+        <button
+          onClick={() => setAimPickerOpen(true)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+            aimStatus?.connected
+              ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20'
+              : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+          }`}
+          title={aimStatus?.connected ? 'Download sessions from AiM device' : 'Pull from AiM (device not currently reachable via WiFi)'}
+        >
+          <Download className="w-3.5 h-3.5" />
+          Pull from AiM
+        </button>
 
         {/*
          * Live button is always visible. The LiveView itself probes the
@@ -362,24 +369,30 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
         <button
           onClick={async () => {
-            if (!showUploadLog) {
+            if (!showActivityLog) {
               try {
-                setUploadLog(await fetchUploadLog());
+                const [uploads, aimPulls] = await Promise.all([
+                  fetchUploadLog(),
+                  fetchAimPullLog(),
+                ]);
+                setUploadLog(uploads);
+                setAimPullLog(aimPulls);
               } catch {
                 setUploadLog([]);
+                setAimPullLog([]);
               }
             }
-            setShowUploadLog(v => !v);
+            setShowActivityLog(v => !v);
           }}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            showUploadLog
+            showActivityLog
               ? 'bg-primary/20 text-primary'
               : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
           }`}
-          title="Recent uploads (server-side log)"
+          title="Recent uploads and AiM pulls (server-side log)"
         >
           <FileClock className="w-3.5 h-3.5" />
-          Uploads
+          Activity
         </button>
 
         <div className="flex-1" />
@@ -424,20 +437,40 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         </div>
       )}
 
-      {/* Upload log panel */}
-      {showUploadLog && (
+      {/* Activity log panel */}
+      {showActivityLog && (
         <div className="mx-4 mt-2 rounded-md border border-border/50 bg-card/50 overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2 border-b border-border/50">
             <div className="flex items-center gap-2 text-xs font-medium">
               <FileClock className="w-3.5 h-3.5 text-primary" />
-              Recent uploads (server-side log)
+              Activity (server-side log)
+              <div className="flex rounded-md border border-border/50 overflow-hidden ml-2">
+                <button
+                  onClick={() => setActivityTab('uploads')}
+                  className={`px-2 py-0.5 text-[10px] ${activityTab === 'uploads' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted/50'}`}
+                >
+                  Uploads
+                </button>
+                <button
+                  onClick={() => setActivityTab('aim')}
+                  className={`px-2 py-0.5 text-[10px] ${activityTab === 'aim' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted/50'}`}
+                >
+                  AiM Pulls
+                </button>
+              </div>
             </div>
             <button
               onClick={async () => {
                 try {
-                  setUploadLog(await fetchUploadLog());
+                  const [uploads, aimPulls] = await Promise.all([
+                    fetchUploadLog(),
+                    fetchAimPullLog(),
+                  ]);
+                  setUploadLog(uploads);
+                  setAimPullLog(aimPulls);
                 } catch {
                   setUploadLog([]);
+                  setAimPullLog([]);
                 }
               }}
               className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50"
@@ -447,35 +480,78 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
             </button>
           </div>
           <div className="max-h-48 overflow-y-auto">
-            {uploadLog.length === 0 ? (
-              <p className="text-xs text-muted-foreground px-3 py-3">No uploads recorded since the backend started.</p>
+            {activityTab === 'uploads' ? (
+              uploadLog.length === 0 ? (
+                <p className="text-xs text-muted-foreground px-3 py-3">No uploads recorded since the backend started.</p>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="text-muted-foreground bg-muted/30">
+                    <tr>
+                      <th className="text-left px-3 py-1.5 font-medium">When</th>
+                      <th className="text-left px-3 py-1.5 font-medium">File</th>
+                      <th className="text-right px-3 py-1.5 font-medium">Size</th>
+                      <th className="text-right px-3 py-1.5 font-medium">Time</th>
+                      <th className="text-right px-3 py-1.5 font-medium">Rate</th>
+                      <th className="text-left px-3 py-1.5 font-medium">From</th>
+                      <th className="text-left px-3 py-1.5 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadLog.map((e, i) => (
+                      <tr key={i} className="border-t border-border/30 hover:bg-muted/20">
+                        <td className="px-3 py-1.5 text-muted-foreground tabular">{formatRelativeTime(e.ts)}</td>
+                        <td className="px-3 py-1.5 font-mono truncate max-w-[200px]" title={e.filename}>{e.filename}</td>
+                        <td className="px-3 py-1.5 text-right tabular">{formatBytes(e.size)}</td>
+                        <td className="px-3 py-1.5 text-right tabular">{e.duration_s.toFixed(2)}s</td>
+                        <td className="px-3 py-1.5 text-right tabular">
+                          {e.duration_s > 0 ? formatRate(e.size / e.duration_s) : '—'}
+                        </td>
+                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{e.client_ip}</td>
+                        <td className="px-3 py-1.5">
+                          <span className={
+                            e.status === 'ok'
+                              ? 'text-emerald-500 dark:text-emerald-400'
+                              : 'text-red-500 dark:text-red-400'
+                          } title={e.error}>
+                            {e.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )
+            ) : aimPullLog.length === 0 ? (
+              <p className="text-xs text-muted-foreground px-3 py-3">No AiM list/pull attempts recorded since the backend started.</p>
             ) : (
               <table className="w-full text-xs">
                 <thead className="text-muted-foreground bg-muted/30">
                   <tr>
                     <th className="text-left px-3 py-1.5 font-medium">When</th>
+                    <th className="text-left px-3 py-1.5 font-medium">Action</th>
                     <th className="text-left px-3 py-1.5 font-medium">File</th>
                     <th className="text-right px-3 py-1.5 font-medium">Size</th>
                     <th className="text-right px-3 py-1.5 font-medium">Time</th>
-                    <th className="text-right px-3 py-1.5 font-medium">Rate</th>
-                    <th className="text-left px-3 py-1.5 font-medium">From</th>
+                    <th className="text-left px-3 py-1.5 font-medium">Device</th>
+                    <th className="text-left px-3 py-1.5 font-medium">Railway</th>
                     <th className="text-left px-3 py-1.5 font-medium">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {uploadLog.map((e, i) => (
+                  {aimPullLog.map((e, i) => (
                     <tr key={i} className="border-t border-border/30 hover:bg-muted/20">
                       <td className="px-3 py-1.5 text-muted-foreground tabular">{formatRelativeTime(e.ts)}</td>
-                      <td className="px-3 py-1.5 font-mono truncate max-w-[200px]" title={e.filename}>{e.filename}</td>
-                      <td className="px-3 py-1.5 text-right tabular">{formatBytes(e.size)}</td>
-                      <td className="px-3 py-1.5 text-right tabular">{e.duration_s.toFixed(2)}s</td>
-                      <td className="px-3 py-1.5 text-right tabular">
-                        {e.duration_s > 0 ? formatRate(e.size / e.duration_s) : '—'}
+                      <td className="px-3 py-1.5">{e.action}</td>
+                      <td className="px-3 py-1.5 font-mono truncate max-w-[160px]" title={e.filename}>
+                        {e.filename || (e.session_count != null ? `${e.session_count} sessions` : '—')}
                       </td>
-                      <td className="px-3 py-1.5 font-mono text-muted-foreground">{e.client_ip}</td>
+                      <td className="px-3 py-1.5 text-right tabular">{e.size > 0 ? formatBytes(e.size) : '—'}</td>
+                      <td className="px-3 py-1.5 text-right tabular">{e.duration_s > 0 ? `${e.duration_s.toFixed(2)}s` : '—'}</td>
+                      <td className="px-3 py-1.5 font-mono text-muted-foreground">{e.device_ip || '—'}</td>
+                      <td className="px-3 py-1.5 text-muted-foreground">{e.railway_queued ? 'queued' : 'skipped'}</td>
                       <td className="px-3 py-1.5">
                         <span className={
-                          e.status === 'ok'
+                          e.status === 'ok' || e.status === 'list_ok'
                             ? 'text-emerald-500 dark:text-emerald-400'
                             : 'text-red-500 dark:text-red-400'
                         } title={e.error}>

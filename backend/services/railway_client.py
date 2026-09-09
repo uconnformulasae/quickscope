@@ -19,6 +19,12 @@ TIMEOUT_DOWNLOAD = 120
 TIMEOUT_UPLOAD = 120
 
 
+def is_railway_configured() -> bool:
+    """True when a non-empty Railway API URL is set."""
+    settings = load_settings()
+    return bool(settings.get("railway_url", "").strip())
+
+
 def _base_url() -> str:
     settings = load_settings()
     url = settings.get("railway_url", "").rstrip("/")
