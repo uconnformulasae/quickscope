@@ -68,10 +68,26 @@ if ! "$VENV_PY" -c "import libxrk" 2>/dev/null; then
 fi
 
 # Install Node deps if needed
-if [ ! -d "node_modules" ]; then
+if [ ! -d "node_modules/.bin" ]; then
     echo "Installing Node dependencies..."
     npm install
 fi
+
+# npm 11+ warns on devdir injected by some tooling (e.g. Cursor); not a valid npm config key.
+unset npm_config_devdir NPM_CONFIG_DEVDIR 2>/dev/null || true
+
+stop_listener_on_port() {
+    local port="$1"
+    local pids
+    pids=$(lsof -ti :"$port" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "Stopping existing process on port $port (PID(s): $pids)..."
+        kill -9 $pids 2>/dev/null || true
+    fi
+}
+
+stop_listener_on_port 8000
+stop_listener_on_port 5000
 
 # Start backend
 echo "Starting QuickScope backend on :8000 (parser: $PARSER_MODE)..."
