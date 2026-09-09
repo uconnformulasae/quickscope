@@ -23,7 +23,7 @@ Built for UConn Formula SAE Electric.
 
 The backend parses `.xrk`/`.xrz` files using the official AiM MatLabXRK DLL when available (Windows), falling back to [libxrk](https://pypi.org/project/libxrk/) on other platforms or if the DLL is missing. See `backend/vendor/README.md` for Windows dev setup.
 
-Sessions are persisted locally in `./data/sessions.json` with raw files cached in `./data/sessions/`. When configured, sessions sync bidirectionally with the Data-Development Railway backend.
+Sessions are persisted locally in `backend/data/sessions.json` with raw files cached in `backend/data/sessions/`. When configured, sessions sync bidirectionally with the Data-Development Railway backend.
 
 ## Install (for end users)
 
@@ -66,6 +66,9 @@ npm run test          # unit regression (no DLL, no libxrk fixtures)
 npm run test:dll      # DLL vs Race Studio CSV (Windows + fixtures)
 npm run test:libxrk   # libxrk fallback parser on XRK fixtures
 npm run check         # TypeScript only
+
+# AiM download protocol + reassembly
+.venv\Scripts\python.exe -m pytest tests/test_aim_download.py -v
 ```
 
 Parser validation against a local XRK + Race Studio export:
@@ -97,18 +100,35 @@ Click the gear icon in the session browser to configure:
 - **AiM WiFi SSID** -- your AiM device's hotspot name
 - **AiM Device IP** -- default `10.0.0.1`
 
-Settings are stored in `./data/settings.json`.
+Settings are stored in `backend/data/settings.json`.
+
+Optional env overrides:
+
+| Variable | Purpose |
+|----------|---------|
+| `QUICKSCOPE_DATA_DIR` | Override `backend/data` location |
+| `QUICKSCOPE_PARSER` | `libxrk` or `aim_dll` (same as start-script flags) |
+| `AIM_XRK_DLL` | Path to `MatLabXRK-2017-64-ReleaseU.dll` |
 
 ## AiM Device Connection
 
 When connected to the AiM device's WiFi hotspot:
 
 1. The green AiM indicator appears in the session browser header
-2. Click "Pull from AiM" to browse sessions on the device
+2. Click **Pull from AiM** to browse sessions on the device
 3. Select which sessions to download
-4. Downloaded sessions are saved locally and auto-uploaded to Railway (if configured)
+4. Downloaded `.xrz` files are saved locally and auto-uploaded to Railway (if configured)
 
-The connection uses the AiM binary TCP protocol (port 2000) with UDP discovery (port 36002).
+The connection uses the AiM binary TCP protocol (port 2000) with UDP discovery (port 36002). File downloads send **progress-encoded STCP micro-ACKs** (cumulative bytes received at each ~982 KB batch boundary), matching RaceStudio behavior captured in Wireshark. Live streaming still uses zero-byte micro-ACKs; see `docs/protocol/aim-live-protocol-deep-dive.md` vs download captures such as `116CaptureWireshark.pcapng`.
+
+**Download troubleshooting**
+
+- Each pull writes a JSONL trace to `backend/data/logs/aim_download/` (timestamp + filename). Use these logs to compare `extracted_bytes`, `batch_complete_ack`, and `ack_payload_bytes` against a known-good RaceStudio capture.
+- List traces via API: `GET /api/aim/download/trace` (and `/api/aim/download/trace/{name}` for a single log).
+- Run `pytest tests/test_aim_download.py` after protocol changes; includes a regression test against `116CaptureWireshark.pcapng` stream 38.
+- Device session list dates are preferred over embedded XRK metadata when indexing pulled sessions.
+
+**Validated:** QuickScope pulls of multi-minute sessions (e.g. `a_0141`) match RaceStudio exports on core EV channels (pack voltage/current, RPM, torque, phase currents, throttle, brakes) when compared sample-for-sample.
 
 ## Project Structure
 
@@ -120,7 +140,10 @@ backend/
     settings_store.py      # Persistent settings
     railway_client.py      # Data-Development API client
     aim_connector.py       # AiM device protocol (UDP discovery + TCP session list/download)
+    aim_download_trace.py  # JSONL download traces for debugging truncated pulls
     sync_service.py        # Bidirectional Railway sync
+
+docs/protocol/             # Reverse-engineered AiM WiFi protocol notes + Wireshark analysis
 
 client/src/
   App.tsx                  # Root -- view routing (session browser vs analysis)
