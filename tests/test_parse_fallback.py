@@ -76,8 +76,13 @@ def test_falls_back_to_libxrk_when_dll_raises(monkeypatch: pytest.MonkeyPatch):
 
 def test_forced_aim_dll_does_not_fallback(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("QUICKSCOPE_PARSER", "aim_dll")
+    monkeypatch.setattr("parsers.sys.platform", "win32")
     monkeypatch.setattr(aim_dll, "dll_available", lambda: True)
     monkeypatch.setattr(aim_dll, "parse", lambda path: (_ for _ in ()).throw(RuntimeError("DLL parse failed")))
+    monkeypatch.setattr(
+        "parsers._parse_libxrk",
+        lambda path: (_ for _ in ()).throw(AssertionError("libxrk fallback should not run")),
+    )
 
     with pytest.raises(RuntimeError, match="DLL parse failed"):
         parse_xrk(Path("strict.xrk"))
