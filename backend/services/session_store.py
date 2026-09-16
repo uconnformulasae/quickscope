@@ -176,3 +176,43 @@ def session_file_path(filename: str) -> Path:
     if not resolved.is_relative_to(SESSIONS_DIR.resolve()):
         raise ValueError("Invalid filename")
     return resolved
+
+
+def resolve_session_path(entry: dict) -> Optional[Path]:
+    """Return the on-disk session file, if present.
+
+    Stored ``local_path`` values may be stale absolute paths from another OS
+    (e.g. Windows paths when running in Docker/Linux). Fall back to the
+    canonical file under the current ``SESSIONS_DIR``.
+    """
+    filename = entry.get("filename")
+    if not filename:
+        return None
+
+    stored = entry.get("local_path")
+    if stored:
+        stored_path = Path(stored)
+        if stored_path.is_file():
+            return stored_path
+
+    try:
+        canonical = session_file_path(filename)
+    except ValueError:
+        return None
+
+    if canonical.is_file():
+        return canonical
+
+    return None
+
+
+def repair_session_path(session_id: str, entry: dict) -> Optional[Path]:
+    """Like :func:`resolve_session_path`, but rewrite stale ``local_path`` in the index."""
+    path = resolve_session_path(entry)
+    if path is None:
+        return None
+
+    canonical = str(path)
+    if entry.get("local_path") != canonical:
+        update_session(session_id, local_path=canonical)
+    return path

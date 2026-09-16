@@ -18,7 +18,7 @@ Built for UConn Formula SAE Electric.
 
 ## Architecture
 
-- **Frontend**: React 18 + TypeScript + Vite + Tailwind CSS (port 5000)
+- **Frontend**: React 18 + TypeScript + Vite + Tailwind CSS (port 5173)
 - **Backend**: Python FastAPI + AiM DLL (primary on Windows) / libxrk (fallback) (port 8000)
 
 The backend parses `.xrk`/`.xrz` files using the official AiM MatLabXRK DLL when available (Windows), falling back to [libxrk](https://pypi.org/project/libxrk/) on other platforms or if the DLL is missing. See `backend/vendor/README.md` for Windows dev setup.
@@ -45,9 +45,31 @@ See [docs/PACKAGING.md](docs/PACKAGING.md) for the release/signing workflow.
 ./start.sh
 ```
 
-This installs dependencies (if needed) and starts both servers. Open `http://localhost:5000`.
+This installs dependencies (if needed) and starts both servers. Open `http://localhost:5173`.
 
-**Parser flags** (optional):
+### Docker (cross-platform dev)
+
+Consistent libxrk environment on Mac, Windows, and Linux:
+
+```bash
+docker compose up --build
+```
+
+Open `http://localhost:5173` (frontend) and `http://localhost:8000` (backend API).
+
+Docker mounts `backend/data` into the container, so sessions and settings are shared with native `./start.sh` / `./start.ps1`.
+
+For hot reload with source bind-mounts:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+Docker always uses the **libxrk** parser (`QUICKSCOPE_PARSER=libxrk`). The AiM DLL cannot run inside Linux containers. For DLL testing on Windows, use the native start scripts below.
+
+CI uses the same backend image for libxrk regression. Parser fixture downloads require a one-time `fixtures-v1` release — see [docs/CI.md](docs/CI.md).
+
+**Parser flags** (native start scripts, optional):
 
 ```bash
 ./start.sh              # auto: DLL on Windows when available, else libxrk

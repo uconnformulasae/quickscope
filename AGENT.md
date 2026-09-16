@@ -12,7 +12,7 @@ It is a local-only single-user app. The backend holds one parsed session in memo
 start.sh                    ← Single entry point, starts both servers
 ├── backend/main.py         ← FastAPI + XRK parsers (port 8000)
 │   └── parsers/            ← aim_dll (primary) + libxrk (fallback)
-└── client/                 ← React + Vite + Tailwind (port 5000)
+└── client/                 ← React + Vite + Tailwind (port 5173)
     └── src/
         ├── App.tsx                     ← Root component, wires everything
         ├── lib/

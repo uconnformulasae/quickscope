@@ -1,6 +1,6 @@
 name: libxrk Regression
 
-# libxrk fallback parser regression — no DLL, no Race Studio CSV.
+# libxrk fallback parser regression — runs inside the Linux backend Docker image.
 # Independent of dll-regression.yml and test.yml.
 
 on:
@@ -20,16 +20,11 @@ jobs:
   libxrk-regression:
     name: libxrk-regression
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
 
       - name: Download fixtures
         uses: ./.github/actions/setup-parser-assets
@@ -37,12 +32,16 @@ jobs:
           download-fixtures: 'true'
           download-dll: 'false'
 
-      - name: Install Python test deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/requirements-dev.txt
+      - name: Build backend image
+        run: docker build -f docker/backend.Dockerfile -t quickscope-ci-backend .
 
-      - name: Pytest (libxrk integration)
+      - name: Pytest (libxrk integration in Docker)
         env:
           QUICKSCOPE_PARSER: libxrk
-        run: python -m pytest -m libxrk -q
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace:ro" \
+            -w /workspace \
+            -e QUICKSCOPE_PARSER=libxrk \
+            quickscope-ci-backend \
+            bash -c "pip install -q -r backend/requirements-dev.txt && python -m pytest -m libxrk -q"

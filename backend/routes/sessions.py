@@ -37,8 +37,8 @@ async def load_session(session_id: str):
     if not entry:
         raise HTTPException(404, "Session not found")
 
-    local_path = entry.get("local_path")
-    if not local_path or not Path(local_path).exists():
+    local_path = session_store.repair_session_path(session_id, entry)
+    if local_path is None:
         raise HTTPException(400, "Session file not available locally. Pull it first.")
 
     try:
@@ -103,11 +103,11 @@ async def rename_session(session_id: str, body: RenameRequest):
         raise HTTPException(409, "A session with that filename already exists")
 
     # Rename physical file on disk
-    old_path = entry.get("local_path")
+    old_path = session_store.resolve_session_path(entry)
     new_path = None
-    if old_path and Path(old_path).exists():
+    if old_path and old_path.exists():
         new_path = str(session_store.session_file_path(new_filename))
-        Path(old_path).rename(new_path)
+        old_path.rename(new_path)
 
     # Rename on Railway if synced
     remote_id = entry.get("remote_id")
@@ -125,7 +125,7 @@ async def rename_session(session_id: str, body: RenameRequest):
         session_id,
         filename=new_filename,
         aim_session_id=Path(new_filename).stem,
-        local_path=new_path or old_path,
+        local_path=new_path or (str(old_path) if old_path else entry.get("local_path")),
     )
     return updated
 
@@ -141,8 +141,8 @@ async def get_gps_preview(session_id: str):
     entry = session_store.get_session(session_id)
     if not entry:
         raise HTTPException(404, "Session not found")
-    local_path = entry.get("local_path")
-    if not local_path:
+    local_path = session_store.resolve_session_path(entry)
+    if local_path is None:
         return {"preview": None}
     preview = await asyncio.to_thread(gps_preview.compute_preview, local_path)
     return {"preview": preview}
@@ -154,9 +154,9 @@ async def delete_session(session_id: str):
     if not entry:
         raise HTTPException(404, "Session not found")
 
-    local_path = entry.get("local_path")
+    local_path = session_store.resolve_session_path(entry)
     if local_path:
-        Path(local_path).unlink(missing_ok=True)
+        local_path.unlink(missing_ok=True)
 
     if state.session_id == session_id:
         state.clear()

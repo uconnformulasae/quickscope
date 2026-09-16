@@ -65,7 +65,7 @@ function Stop-ListenerOnPort([int]$Port) {
 }
 
 Stop-ListenerOnPort 8000
-Stop-ListenerOnPort 5000
+Stop-ListenerOnPort 5173
 
 # Parser selection (backend reads QUICKSCOPE_PARSER)
 $parserMode = "auto"
@@ -87,7 +87,7 @@ $backend = Start-Process -FilePath $venvPy `
     -NoNewWindow -PassThru
 
 # Start frontend dev server (npm is a cmd shim — must run via cmd.exe on Windows)
-Write-Host "Starting QuickScope frontend on :5000..."
+Write-Host "Starting QuickScope frontend on :5173..."
 $frontend = Start-Process -FilePath "cmd.exe" `
     -ArgumentList "/c", "npm run dev" `
     -WorkingDirectory $PSScriptRoot `
@@ -103,7 +103,7 @@ Register-EngineEvent PowerShell.Exiting -Action $cleanup | Out-Null
 
 Write-Host ""
 Write-Host "QuickScope is running!"
-Write-Host "  Frontend: http://localhost:5000"
+Write-Host "  Frontend: http://localhost:5173"
 Write-Host "  Backend:  http://localhost:8000"
 Write-Host ""
 Write-Host "Press Ctrl+C to stop."

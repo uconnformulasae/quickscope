@@ -79,7 +79,7 @@ echo "Starting QuickScope backend on :8000 (parser: $PARSER_MODE)..."
 BACKEND_PID=$!
 
 # Start frontend dev server
-echo "Starting QuickScope frontend on :5000..."
+echo "Starting QuickScope frontend on :5173..."
 npm run dev &
 FRONTEND_PID=$!
 
@@ -88,7 +88,7 @@ trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit" INT TERM EXIT
 
 echo ""
 echo "QuickScope is running!"
-echo "  Frontend: http://localhost:5000"
+echo "  Frontend: http://localhost:5173"
 echo "  Backend:  http://localhost:8000"
 echo ""
 echo "Press Ctrl+C to stop."

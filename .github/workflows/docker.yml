@@ -1,0 +1,46 @@
+name: Docker
+
+# Validates Docker images build and the backend container starts cleanly.
+# Parser regression still lives in libxrk-regression.yml / dll-regression.yml.
+
+on:
+  push:
+    branches: [main, Dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-build:
+    name: docker-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Backend healthcheck
+        run: |
+          docker compose up -d backend
+          for i in $(seq 1 30); do
+            if docker compose exec -T backend python -c \
+              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs')"; then
+              echo "Backend healthy"
+              docker compose down
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs backend
+          docker compose down
+          exit 1

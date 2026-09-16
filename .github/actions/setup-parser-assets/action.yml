@@ -22,12 +22,40 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p tests/fixtures
+
+        fixture_count="$(find tests/fixtures -maxdepth 1 \( -name '*.xrk' -o -name '*.xrz' \) | wc -l | tr -d ' ')"
+        if [ "$fixture_count" -gt 0 ]; then
+          echo "Found $fixture_count XRK/XRZ fixture(s) in tests/fixtures — skipping release download."
+          exit 0
+        fi
+
         echo "Downloading fixtures from fixtures-v1 release..."
-        gh release download fixtures-v1 --repo "${{ github.repository }}" \
+        if ! gh release download fixtures-v1 --repo "${{ github.repository }}" \
           --pattern "*.xrk" --pattern "*_rs.csv" \
-          --dir tests/fixtures
-        if [ "$(find tests/fixtures -maxdepth 1 \( -name '*.xrk' -o -name '*.xrz' \) | wc -l)" -eq 0 ]; then
-          echo "::error::Fixture download failed. Publish fixtures-v1 release (see docs/CI.md)."
+          --dir tests/fixtures 2>&1; then
+          cat <<'EOF' >&2
+        ::error::Parser fixtures are not available.
+
+        CI expects tests/fixtures/*.xrk from the fixtures-v1 GitHub Release, but that
+        release does not exist (or has no assets) on this repository yet.
+
+        One-time fix (repo maintainer, from a machine with gh auth and local fixtures):
+
+          gh auth login
+          .\\scripts\\publish_fixtures_release.ps1
+
+        Required local files before publishing:
+          tests/fixtures/endurance_CT16-EV_Standardized_a_5816.xrk
+          tests/fixtures/endurance_CT16-EV_Standardized_a_5816_rs.csv
+
+        See docs/CI.md for details.
+        EOF
+          exit 1
+        fi
+
+        fixture_count="$(find tests/fixtures -maxdepth 1 \( -name '*.xrk' -o -name '*.xrz' \) | wc -l | tr -d ' ')"
+        if [ "$fixture_count" -eq 0 ]; then
+          echo "::error::Fixture download succeeded but no .xrk/.xrz files were found in tests/fixtures."
           exit 1
         fi
 

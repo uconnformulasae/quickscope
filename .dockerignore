@@ -1,0 +1,33 @@
+# Python
+.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+
+# Node
+node_modules
+dist
+release
+
+# App data and large fixtures
+backend/data
+tests/fixtures/*.xrk
+tests/fixtures/*.xrz
+tests/fixtures/*_rs.csv
+
+# Git and IDE
+.git
+.gitignore
+.cursor
+*.md
+!README.md
+
+# Electron / build artifacts
+backend/dist
+*.dmg
+*.exe
+*.AppImage
+
+# OS
+.DS_Store
+Thumbs.db

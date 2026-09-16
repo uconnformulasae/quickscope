@@ -73,11 +73,8 @@ async def sync_with_railway() -> dict:
     for local in local_sessions:
         if local["sync_status"] != "local_only":
             continue
-        if not local.get("local_path"):
-            continue
-
-        file_path = Path(local["local_path"])
-        if not file_path.exists():
+        file_path = session_store.resolve_session_path(local)
+        if file_path is None:
             continue
 
         try:

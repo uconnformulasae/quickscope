@@ -1,0 +1,31 @@
+services:
+  backend:
+    volumes:
+      - ./backend:/app
+      - ./backend/data:/data
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload",
+      ]
+
+  frontend:
+    volumes:
+      - ./client:/app/client
+      - ./server:/app/server
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./tailwind.config.ts:/app/tailwind.config.ts
+      - ./postcss.config.js:/app/postcss.config.js
+      - ./components.json:/app/components.json
+      - frontend-node-modules:/app/node_modules
+
+volumes:
+  frontend-node-modules:
