@@ -15,11 +15,16 @@ QuickScope uses **GitHub-hosted runners** for all CI workflows.
 
 `test.yml`, `libxrk-regression.yml`, and `dll-regression.yml` are **independent** — separate workflows with separate concurrency groups.
 
-## Parser fixtures release (required once)
+## Parser fixtures
 
-DLL and libxrk regression need a real `.xrk` in `tests/fixtures/`. Those files are **gitignored** (large binaries), so CI downloads them from the **`fixtures-v1`** GitHub Release.
+DLL and libxrk regression need a real `.xrk` in `tests/fixtures/`. The canonical pair is **committed to git**:
 
-If CI fails with `release not found`, publish the release once from a machine that already has the fixture pair:
+- `tests/fixtures/endurance_CT16-EV_Standardized_a_5816.xrk`
+- `tests/fixtures/endurance_CT16-EV_Standardized_a_5816_rs.csv`
+
+CI uses files from the checkout when present (see `setup-parser-assets`). Optionally, you can also publish them to the **`fixtures-v1`** GitHub Release for backup or forks:
+
+If CI fails with `release not found` and the files are missing from the repo, publish once from a machine that has the fixture pair:
 
 ```powershell
 gh auth login

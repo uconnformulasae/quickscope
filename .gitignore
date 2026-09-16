@@ -12,6 +12,7 @@ data/
 .cursor/
 *.csv
 !tests/fixtures/golden/**/*.csv
+!tests/fixtures/endurance_CT16-EV_Standardized_a_5816_rs.csv
 *.pcapng
 
 # PyInstaller output
@@ -24,4 +25,5 @@ release/
 
 # Local parser validation fixtures (large binary logs)
 tests/fixtures/*.xrk
+!tests/fixtures/endurance_CT16-EV_Standardized_a_5816.xrk
 tests/fixtures/*.xrz
