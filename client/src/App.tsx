@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
+import { useSidebarWidths, LEFT_SIDEBAR, RIGHT_SIDEBAR } from './lib/useSidebarWidths';
 import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
 import { resolveChartColor } from './lib/chart-utils';
@@ -16,6 +17,7 @@ import { SessionInfoModal } from './components/SessionInfoModal';
 import { SessionBrowser } from './components/SessionBrowser';
 import { SettingsDialog } from './components/SettingsDialog';
 import { LiveView } from './components/LiveView';
+import { ResizeHandle } from './components/ResizeHandle';
 import { Upload } from 'lucide-react';
 
 type View = 'browser' | 'analysis' | 'live';
@@ -49,6 +51,9 @@ export default function App() {
   } = useAppState();
 
   const { theme, toggleTheme } = useTheme();
+  const { widths, setLeftWidth, setRightWidth } = useSidebarWidths();
+  const leftPanelRef = useRef<HTMLDivElement>(null);
+  const rightPanelRef = useRef<HTMLDivElement>(null);
 
   // View state
   const [view, setView] = useState<View>('browser');
@@ -368,7 +373,11 @@ export default function App() {
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left sidebar -- channel picker */}
         {leftSidebarOpen && (
-          <div className="w-48 flex-shrink-0 overflow-hidden">
+          <div
+            ref={leftPanelRef}
+            style={{ width: widths.left }}
+            className="flex-shrink-0 overflow-hidden"
+          >
             {session ? (
               <ChannelSidebar
                 session={session}
@@ -394,8 +403,20 @@ export default function App() {
           </div>
         )}
 
+        {leftSidebarOpen && (
+          <ResizeHandle
+            side="left"
+            panelRef={leftPanelRef}
+            width={widths.left}
+            bounds={LEFT_SIDEBAR}
+            onCommit={setLeftWidth}
+            label="Resize channel sidebar"
+          />
+        )}
+
         {/* Main chart area */}
         <div
+          data-chart-area="true"
           className="flex-1 min-w-0 flex flex-col overflow-hidden bg-background relative"
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -471,7 +492,21 @@ export default function App() {
 
         {/* Right sidebar -- analysis */}
         {rightSidebarOpen && session && (
-          <div className="w-72 flex-shrink-0 overflow-hidden">
+          <ResizeHandle
+            side="right"
+            panelRef={rightPanelRef}
+            width={widths.right}
+            bounds={RIGHT_SIDEBAR}
+            onCommit={setRightWidth}
+            label="Resize analysis sidebar"
+          />
+        )}
+        {rightSidebarOpen && session && (
+          <div
+            ref={rightPanelRef}
+            style={{ width: widths.right }}
+            className="flex-shrink-0 overflow-hidden"
+          >
             <AnalysisPanel
               session={session}
               activeChannels={activeChannels}
