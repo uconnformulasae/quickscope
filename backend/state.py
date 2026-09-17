@@ -145,7 +145,9 @@ def parse_recorded_at(date_str: str, time_str: str) -> Optional[str]:
     """Parse XRK 'Log Date' + 'Log Time' into an ISO-8601 datetime string."""
     if not date_str:
         return None
-    for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+    # AiM loggers write US month/day/year ("09/07/2026" is 7 Sept); try that first,
+    # otherwise every date with day <= 12 lands in the wrong month.
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
         try:
             d = _dt.strptime(date_str.strip(), fmt)
             break

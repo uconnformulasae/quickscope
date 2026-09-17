@@ -15,8 +15,8 @@ def main() -> None:
     captures = [
         ("live1", Path(__file__).parent.parent / "live1_tcp_stream0.txt"),
         ("live2", Path(__file__).parent.parent / "live2_tcp_stream0.txt"),
-        ("siblA", Path("/Users/mdabek/dev/Data-Development/aim_tcp_stream0.txt")),
-        ("siblB", Path("/Users/mdabek/dev/Data-Development/aim_tcp_stream1.txt")),
+        ("siblA", Path("/Users/mdabek/dev/Formula/software/Data-Development/aim_tcp_stream0.txt")),
+        ("siblB", Path("/Users/mdabek/dev/Formula/software/Data-Development/aim_tcp_stream1.txt")),
     ]
     for label, path in captures:
         if not path.exists():

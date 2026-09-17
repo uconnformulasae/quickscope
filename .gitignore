@@ -15,3 +15,9 @@ backend/dist/
 
 # electron-builder output
 release/
+
+# Local-only data that must never enter history
+# backend/data is a symlink to this machine's telemetry library.
+backend/data
+# Pre-library snapshot kept for comparison (66 MB).
+backend/data.before-library/
