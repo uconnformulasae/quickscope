@@ -18,15 +18,20 @@ import struct
 import time
 from pathlib import Path
 
+from services.aim_discovery import (
+    DATA_PORT,
+    DEFAULT_DEVICE_IP,
+    candidate_device_ips,
+    configured_device_ip,
+    parse_discovery_text,
+    probe_device_ips,
+)
+from services.aim_device_cache import record_from_parsed, record_tcp_device
 from services.aim_download_trace import AimDownloadTrace
 from services.aim_live import decode_frame, encode_frame
 from services.settings_store import load as load_settings
 
 logger = logging.getLogger(__name__)
-
-DISCOVERY_PORT = 36002
-DATA_PORT = 2000
-DISCOVERY_MAGIC = b"aim-ka"
 
 # ── Hardcoded protocol messages (from Wireshark captures of RaceStudio3) ────
 # CRITICAL: these must be exact byte-for-byte copies — the device firmware
@@ -77,61 +82,24 @@ def _detect_duplicate_batch_content(file_data: bytes) -> bool:
     return False
 
 
-_DEFAULT_DEVICE_IPS = ("10.0.0.1", "192.168.137.1", "192.168.1.1", "192.168.4.1")
-
-
 def _get_device_ip() -> str:
-    return load_settings().get("aim_device_ip", "10.0.0.1")
+    return configured_device_ip()
 
 
 def _get_data_port() -> int:
     return int(load_settings().get("aim_device_port", DATA_PORT))
 
 
-def _candidate_ips() -> list[str]:
-    """Configured IP first, then common AiM hotspot defaults."""
-    candidates = [_get_device_ip()]
-    for default_ip in _DEFAULT_DEVICE_IPS:
-        if default_ip not in candidates:
-            candidates.append(default_ip)
-    return candidates
-
-
-def _udp_probe(ip: str, timeout: float = 2.0) -> bytes | None:
-    """Send discovery magic to one IP; return reply payload or None."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.settimeout(timeout)
-            s.sendto(DISCOVERY_MAGIC, (ip, DISCOVERY_PORT))
-            data, _addr = s.recvfrom(4096)
-            return data if data else None
-    except (socket.timeout, OSError):
-        return None
-
-
-def _probe_device_ips() -> tuple[str, bytes] | None:
-    """Try UDP discovery across candidate IPs. Returns (ip, reply) or None."""
-    for candidate in _candidate_ips():
-        data = _udp_probe(candidate)
-        if data:
-            return candidate, data
-    return None
-
-
 def _parse_discovery_reply(ip: str, data: bytes) -> dict:
-    info = {"ip": ip, "ssid": "", "device_name": ""}
-    try:
-        text = data.decode("ascii", errors="replace")
-        aim_match = re.search(r"(AiM-[A-Za-z0-9_-]+)", text)
-        if aim_match:
-            info["ssid"] = aim_match.group(1)
-        if len(data) > 0x54:
-            raw_name = data[0x14:0x54].split(b"\x00")[0].decode("ascii", errors="replace")
-            if raw_name and raw_name.isprintable():
-                info["device_name"] = raw_name
-    except Exception:
-        pass
-    return info
+    parsed = parse_discovery_text(ip, data)
+    return {
+        "ip": parsed["ip"],
+        "ssid": parsed["ssid"],
+        "device_name": parsed["device_name"],
+        "model": parsed.get("model", ""),
+        "serial": parsed.get("serial", ""),
+        "vehicle": parsed.get("vehicle", ""),
+    }
 
 
 def _open_device_socket(timeout: float = 10) -> tuple[socket.socket, str]:
@@ -142,12 +110,13 @@ def _open_device_socket(timeout: float = 10) -> tuple[socket.socket, str]:
     """
     port = _get_data_port()
     last_exc: OSError | None = None
-    for ip in _candidate_ips():
+    for ip in candidate_device_ips():
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.settimeout(timeout)
             sock.connect((ip, port))
+            record_tcp_device(ip)
             logger.info("Connected to AiM device at %s:%d", ip, port)
             return sock, ip
         except OSError as exc:
@@ -163,7 +132,7 @@ def _open_device_socket(timeout: float = 10) -> tuple[socket.socket, str]:
 
 def is_aim_connected() -> bool:
     """Check if an AiM device is reachable via UDP discovery probe."""
-    return _probe_device_ips() is not None
+    return probe_device_ips() is not None
 
 
 def discover_device() -> dict | None:
@@ -171,12 +140,13 @@ def discover_device() -> dict | None:
 
     Returns dict with ip, ssid, device_name or None if not found.
     """
-    probed = _probe_device_ips()
+    probed = probe_device_ips()
     if not probed:
         return None
 
     ip, data = probed
     info = _parse_discovery_reply(ip, data)
+    record_from_parsed(parse_discovery_text(ip, data))
     logger.info("Discovered AiM device at %s: %s", ip, info)
     return info
 
@@ -227,14 +197,43 @@ def _extract_session_csv(raw: bytes) -> str | None:
     return csv_text.strip()
 
 
+def parse_aim_session_csv_rows(csv_text: str) -> list[dict]:
+    """Parse session list CSV body into QuickScope session dicts."""
+    sessions = []
+    reader = csv.DictReader(io.StringIO(csv_text))
+    for row in reader:
+        name = row.get("name", "").strip()
+        if not name:
+            continue
+        try:
+            sessions.append({
+                "filename": name,
+                "size": int(row.get("size", 0) or 0),
+                "date": row.get("date", ""),
+                "hour": row.get("hour", ""),
+                "lap_count": int(row.get("nlap", 0) or 0),
+                "vehicle": row.get("veicolo", ""),
+                "device_name": row.get("device", ""),
+            })
+        except (ValueError, KeyError):
+            continue
+    return sessions
+
+
 # ── Session listing ──────────────────────────────────────────────────────────
 
 def list_aim_sessions() -> list[dict]:
-    """Connect to AiM device and retrieve session listing via TCP protocol.
+    """Connect, fetch session CSV, and close TCP (Dev / RS3 download path).
 
-    Uses the 7-message handshake sequence. Each message must be a separate
-    TCP write — the device firmware won't process batched commands.
+    UI session browser uses ``aim_primary_hub.list_sessions`` on the primary socket.
+    Pull/download must use this dedicated connection so port 2000 is free for the
+    second download TCP.
     """
+    return _list_aim_sessions_legacy_tcp()
+
+
+def _list_aim_sessions_legacy_tcp() -> list[dict]:
+    """Fallback: own TCP for session list (pre–primary-hub behavior)."""
     port = _get_data_port()
     logger.info("Connecting to AiM device on port %d for session listing...", port)
 
@@ -301,25 +300,7 @@ def list_aim_sessions() -> list[dict]:
         logger.error("Could not find session CSV in device response")
         return []
 
-    sessions = []
-    reader = csv.DictReader(io.StringIO(csv_text))
-    for row in reader:
-        name = row.get("name", "").strip()
-        if not name:
-            continue
-        try:
-            sessions.append({
-                "filename": name,
-                "size": int(row.get("size", 0) or 0),
-                "date": row.get("date", ""),
-                "hour": row.get("hour", ""),
-                "lap_count": int(row.get("nlap", 0) or 0),
-                "vehicle": row.get("veicolo", ""),
-                "device_name": row.get("device", ""),
-            })
-        except (ValueError, KeyError):
-            continue
-
+    sessions = parse_aim_session_csv_rows(csv_text)
     logger.info("Found %d sessions on device", len(sessions))
     return sessions
 
@@ -727,6 +708,10 @@ def _receive_file_data(
 
 
 def download_aim_session(filename: str, dest_dir: Path, expected_size: int = 0) -> Path:
+    """Download one log file over a **dedicated** TCP session (RS3 stream 38 in 116CaptureWireshark.pcapng).
+
+    Session list and live view share the primary hub TCP; downloads do not.
+    """
     """Download a single session file from the AiM device via TCP protocol."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     out_path = dest_dir / filename

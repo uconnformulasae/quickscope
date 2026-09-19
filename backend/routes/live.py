@@ -1,11 +1,7 @@
 """Live-data WebSocket endpoint.
 
-Wraps `AimLiveClient.stream()` and forwards each snapshot to a WebSocket
-client as JSON. One WebSocket = one live session against the device. We
-explicitly do NOT support fanning a single device stream out to multiple
-WebSocket clients yet — the device only tolerates one TCP poller at a time
-and we'd need a session-state machine on top to coordinate. For an FSAE
-team's pit-side analysis tool, single-client-at-a-time is fine.
+Wraps the shared primary ``AimLiveClient`` (same TCP as session list). One WebSocket
+client at a time; log download uses a separate TCP via ``aim_connector``.
 """
 
 from __future__ import annotations
@@ -15,7 +11,12 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from services.aim_primary_hub import get_aim_primary_hub
+from services.aim_discovery import DEFAULT_DEVICE_IP
+from services.aim_device_cache import get_cached
 from services import aim_live
+from services.aim_live import user_visible_error
+from services.aim_live_trace import AimLiveTrace
 from services.settings_store import load as load_settings
 
 logger = logging.getLogger(__name__)
@@ -27,14 +28,35 @@ router = APIRouter()
 async def live_ws(websocket: WebSocket) -> None:
     await websocket.accept()
     settings = load_settings()
-    host = settings.get("aim_device_ip", "10.0.0.1")
-    client = aim_live.AimLiveClient(host=host)
+    host = settings.get("aim_device_ip", DEFAULT_DEVICE_IP)
+    cached = get_cached()
+    if cached is not None:
+        host = cached.ip
+    logger.info(
+        "Live WS: client connected (configured_host=%s cached=%s)",
+        settings.get("aim_device_ip", DEFAULT_DEVICE_IP),
+        cached.ip if cached else None,
+    )
+    trace = AimLiveTrace(configured_host=host)
+    hub = get_aim_primary_hub()
     try:
-        await client.connect()
+        client = await hub.acquire_for_live(host, trace=trace)
     except Exception as exc:
-        await websocket.send_json({"type": "error", "message": str(exc)})
+        msg = user_visible_error(exc)
+        trace.log("connect_failed", error=msg, exc_type=type(exc).__name__)
+        logger.warning("Live WS: AiM connect failed: %s (trace=%s)", msg, trace.path)
+        await websocket.send_json({"type": "error", "message": msg})
+        trace.close(outcome="connect_failed")
         await websocket.close()
         return
+
+    device_ip = client.identity.ip if client.identity else host
+    logger.info(
+        "Live WS: streaming to client (device_ip=%s model=%s serial=%s)",
+        device_ip,
+        client.identity.model if client.identity else "",
+        client.identity.serial if client.identity else "",
+    )
 
     await websocket.send_json({
         "type": "connected",
@@ -49,8 +71,10 @@ async def live_ws(websocket: WebSocket) -> None:
     # Run the live-poll loop in a task so we can also listen for client
     # close/abort messages on the WebSocket.
     stop = asyncio.Event()
+    device_dropped = False
 
     async def _pump_live() -> None:
+        nonlocal device_dropped
         try:
             async for snap in client.stream():
                 if stop.is_set():
@@ -60,7 +84,18 @@ async def live_ws(websocket: WebSocket) -> None:
                     "ts": snap.timestamp_ms,
                     "subsystem": snap.subsystem,
                     "raw": snap.raw_b64,
+                    "channels": snap.channels,
                 })
+        except ConnectionError as exc:
+            device_dropped = True
+            logger.info("Live WS: device closed TCP during stream: %s", exc)
+            try:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "AiM device closed the live connection. Close Race Studio live if open and retry.",
+                })
+            except Exception:
+                pass
         except Exception as exc:
             logger.exception("live stream pump failed")
             try:
@@ -71,7 +106,6 @@ async def live_ws(websocket: WebSocket) -> None:
     pump_task = asyncio.create_task(_pump_live())
     try:
         while True:
-            # Receive any client message (we mostly use this to detect disconnect).
             msg = await websocket.receive_text()
             if msg == "stop":
                 break
@@ -86,7 +120,17 @@ async def live_ws(websocket: WebSocket) -> None:
             await pump_task
         except (asyncio.CancelledError, Exception):
             pass
-        await client.close()
+        if device_dropped:
+            logger.info("Live WS: session ending, closing primary TCP after device drop")
+            await hub.close_primary()
+        else:
+            logger.info("Live WS: session ending, releasing primary TCP (keep open)")
+        await hub.release_live()
+        trace.close(
+            outcome="device_drop" if device_dropped else "normal",
+            snapshots=client._snapshots_yielded,
+            poll_a_timeouts=client._poll_a_timeouts,
+        )
         try:
             await websocket.close()
         except Exception:
@@ -100,13 +144,38 @@ async def live_status() -> dict:
     Returns the parsed identity if the device replies to a UDP probe.
     """
     settings = load_settings()
-    host = settings.get("aim_device_ip", "10.0.0.1")
-    ident = await aim_live.discover(ip=host)
+    host = settings.get("aim_device_ip", DEFAULT_DEVICE_IP)
+    cached = get_cached()
+    if cached is not None:
+        logger.debug(
+            "Live status: using cached device %s (age %.1fs)",
+            cached.ip,
+            cached.age_s(),
+        )
+        return {
+            "reachable": True,
+            "host": cached.ip,
+            "source": "cache",
+            "device": {
+                "ip": cached.ip,
+                "model": cached.model,
+                "serial": cached.serial,
+                "vehicle": cached.vehicle,
+            },
+        }
+    ident = await aim_live.discover()
     if ident is None:
+        logger.info("Live status: unreachable (configured_host=%s)", host)
         return {"reachable": False, "host": host}
+    logger.debug(
+        "Live status: reachable at %s model=%s serial=%s",
+        ident.ip,
+        ident.model,
+        ident.serial,
+    )
     return {
         "reachable": True,
-        "host": host,
+        "host": ident.ip,
         "device": {
             "ip": ident.ip,
             "model": ident.model,

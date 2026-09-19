@@ -4,6 +4,7 @@ Parses .xrk files using libxrk and serves channel data via FastAPI.
 Multi-session with local persistence and Railway/AiM sync.
 """
 
+import asyncio
 import logging
 
 from fastapi import FastAPI
@@ -11,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routes import sessions, analysis, settings, live
 from services import session_store
+from services.aim_live_logging import setup_aim_live_file_logging
+from services.aim_primary_hub import get_aim_primary_hub
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +42,9 @@ async def _recover_stale_sync_state() -> None:
     'uploading' or 'downloading' forever. Reset them on boot so they re-enter
     the normal sync flow and the user sees them, instead of the silent
     "phone upload never showed up" experience."""
+    log_path = setup_aim_live_file_logging()
+    logger.info("AiM live diagnostics log file: %s", log_path)
+    get_aim_primary_hub().bind_loop(asyncio.get_running_loop())
     reset = session_store.reset_stale_sync_states()
     if reset:
         logger.warning("Reset %d session(s) from stale uploading/downloading state", reset)

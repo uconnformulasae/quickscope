@@ -75,7 +75,14 @@ export interface LocalSession {
 
 export interface AimStatus {
   connected: boolean;
-  device: { ip: string; ssid: string; device_name: string } | null;
+  device: {
+    ip: string;
+    ssid: string;
+    device_name: string;
+    model?: string;
+    serial?: string;
+    vehicle?: string;
+  } | null;
 }
 
 export interface AimSession {
@@ -434,7 +441,7 @@ export async function fetchLiveStatus(): Promise<LiveStatus> {
 
 export type LiveWSMessage =
   | { type: 'connected'; device: LiveDeviceInfo }
-  | { type: 'snapshot'; ts: number; subsystem: string; raw: string }
+  | { type: 'snapshot'; ts: number; subsystem: string; raw: string; channels?: Record<string, number> }
   | { type: 'error'; message: string };
 
 export function liveWebSocketUrl(): string {

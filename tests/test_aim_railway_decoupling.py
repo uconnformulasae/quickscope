@@ -55,9 +55,14 @@ def test_aim_sessions_succeeds_without_udp_probe(monkeypatch: pytest.MonkeyPatch
             "device_name": "EVO5",
         }
     ]
+
+    class _FakeHub:
+        async def list_sessions(self, host=None):  # noqa: ANN001
+            return fake_sessions
+
     monkeypatch.setattr(
-        "routes.sessions.aim_connector.list_aim_sessions",
-        lambda: fake_sessions,
+        "routes.sessions.get_aim_primary_hub",
+        lambda: _FakeHub(),
     )
 
     with patch("routes.sessions.railway_client.list_remote_sessions", new_callable=AsyncMock) as mock_railway:
@@ -83,10 +88,14 @@ def test_aim_sessions_returns_error_on_connection_failure(monkeypatch: pytest.Mo
         lambda: None,
     )
 
-    def _fail():
-        raise ConnectionError("Failed to connect to AiM device: timed out")
+    class _FailHub:
+        async def list_sessions(self, host=None):  # noqa: ANN001
+            raise ConnectionError("Failed to connect to AiM device: timed out")
 
-    monkeypatch.setattr("routes.sessions.aim_connector.list_aim_sessions", _fail)
+    monkeypatch.setattr(
+        "routes.sessions.get_aim_primary_hub",
+        lambda: _FailHub(),
+    )
 
     res = client.get("/api/aim/sessions")
     assert res.status_code == 200
@@ -117,9 +126,16 @@ def test_aim_pull_does_not_require_railway(monkeypatch: pytest.MonkeyPatch, isol
         path.write_bytes(b"x" * 500)
         return path
 
+    class _EmptyHub:
+        async def list_sessions(self, host=None):  # noqa: ANN001
+            return []
+
+        async def release_for_download(self) -> None:
+            return None
+
     monkeypatch.setattr(
-        "routes.sessions.aim_connector.list_aim_sessions",
-        lambda: [],
+        "routes.sessions.get_aim_primary_hub",
+        lambda: _EmptyHub(),
     )
 
     monkeypatch.setattr(

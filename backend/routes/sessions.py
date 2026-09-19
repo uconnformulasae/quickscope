@@ -15,6 +15,9 @@ from services import (
     gps_preview,
     aim_pull_log,
 )
+from services.aim_primary_hub import get_aim_primary_hub
+from parsers.parse_gate import PRIORITY_INTERACTIVE
+from services.session_cache import session_cache
 from state import (
     state, logger, background_sync,
     parse_file, extract_session_info, parse_recorded_at, sanitize_filename,
@@ -41,15 +44,22 @@ async def load_session(session_id: str):
     if local_path is None:
         raise HTTPException(400, "Session file not available locally. Pull it first.")
 
-    try:
-        log = parse_file(local_path)
-        state.log = log
+    cached = session_cache.get_valid(session_id, local_path)
+    if cached is not None:
+        log, _ = cached
+        session_cache.set_active(session_id)
         state.filename = entry["filename"]
-        state.session_id = session_id
-    except Exception:
-        state.clear()
-        logger.exception("Failed to parse session file")
-        raise HTTPException(500, "Failed to parse session file")
+    else:
+        try:
+            log = await asyncio.to_thread(
+                parse_file, local_path, PRIORITY_INTERACTIVE,
+            )
+        except Exception:
+            logger.exception("Failed to parse session file")
+            raise HTTPException(500, "Failed to parse session file")
+        session_cache.put(session_id, log, entry["filename"], local_path)
+        session_cache.set_active(session_id)
+        state.filename = entry["filename"]
 
     info = extract_session_info(log, entry["filename"])
     if entry.get("source") == "aim_device" and entry.get("recorded_at"):
@@ -144,7 +154,9 @@ async def get_gps_preview(session_id: str):
     local_path = session_store.resolve_session_path(entry)
     if local_path is None:
         return {"preview": None}
-    preview = await asyncio.to_thread(gps_preview.compute_preview, local_path)
+    preview = await asyncio.to_thread(
+        gps_preview.compute_preview, local_path, session_id,
+    )
     return {"preview": preview}
 
 
@@ -160,6 +172,7 @@ async def delete_session(session_id: str):
 
     if state.session_id == session_id:
         state.clear()
+    session_cache.evict(session_id)
 
     session_store.delete_session(session_id)
     return {"ok": True}
@@ -182,7 +195,8 @@ async def list_aim_sessions():
 
     sessions = []
     try:
-        sessions = await asyncio.to_thread(aim_connector.list_aim_sessions)
+        hub = get_aim_primary_hub()
+        sessions = await hub.list_sessions(device_ip or None)
     except ConnectionError as exc:
         aim_pull_log.record(
             action="list",
@@ -276,6 +290,18 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
     except ConnectionError as exc:
         logger.warning("AiM pull: could not fetch device session list for dates: %s", exc)
 
+    hub = get_aim_primary_hub()
+    try:
+        await hub.release_for_download()
+    except ConnectionError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "downloaded": [],
+            "errors": [str(exc)],
+            "results": [],
+        }
+
     downloaded = []
     errors = []
     results = []
@@ -362,6 +388,11 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
             downloaded.append(entry["filename"])
 
             if parse_ok:
+                session_cache.put(entry["id"], log, filename, dest)
+                try:
+                    gps_preview.warm_from_log(entry["id"], dest, log)
+                except Exception:
+                    logger.exception("Failed to warm GPS preview cache for %s", filename)
                 aim_pull_log.record(
                     action="pull",
                     status="ok",

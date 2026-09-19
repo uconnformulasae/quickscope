@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo } from './lib/api';
+import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
@@ -54,6 +54,8 @@ export default function App() {
   // View state
   const [view, setView] = useState<View>('browser');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** AiM device from session browser status when user opens Live (avoids re-probing). */
+  const [liveAimDevice, setLiveAimDevice] = useState<AimStatus['device']>(null);
 
   // Dialog state
   const [derivedDialogOpen, setDerivedDialogOpen] = useState(false);
@@ -326,7 +328,10 @@ export default function App() {
         <SessionBrowser
           onSessionLoaded={handleSessionLoaded}
           onOpenSettings={() => setSettingsOpen(true)}
-          onOpenLive={() => setView('live')}
+          onOpenLive={(device) => {
+            setLiveAimDevice(device);
+            setView('live');
+          }}
           theme={theme}
           onToggleTheme={toggleTheme}
         />
@@ -339,7 +344,7 @@ export default function App() {
   if (view === 'live') {
     return (
       <div className="flex flex-col h-full bg-background overflow-hidden">
-        <LiveView onBack={() => setView('browser')} />
+        <LiveView onBack={() => setView('browser')} aimDevice={liveAimDevice} />
       </div>
     );
   }

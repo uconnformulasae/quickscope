@@ -143,6 +143,8 @@ When connected to the AiM device's WiFi hotspot:
 
 The connection uses the AiM binary TCP protocol (port 2000) with UDP discovery (port 36002). File downloads send **progress-encoded STCP micro-ACKs** (cumulative bytes received at each ~982 KB batch boundary), matching RaceStudio behavior captured in Wireshark. Live streaming still uses zero-byte micro-ACKs; see `docs/protocol/aim-live-protocol-deep-dive.md` vs download captures such as `116CaptureWireshark.pcapng`.
 
+**Live view debugging:** logs under [`backend/data/logs/aim_live/`](backend/data/logs/aim_live/). Session pull and live view use different TCP handshakes after the same hello; attach `sessions/*_live.jsonl` if live Connect fails while pull works.
+
 **Download troubleshooting**
 
 - Each pull writes a JSONL trace to `backend/data/logs/aim_download/` (timestamp + filename). Use these logs to compare `extracted_bytes`, `batch_complete_ack`, and `ack_payload_bytes` against a known-good RaceStudio capture.

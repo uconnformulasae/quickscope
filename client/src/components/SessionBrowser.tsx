@@ -18,7 +18,7 @@ import { GPSThumbnail } from './GPSThumbnail';
 interface SessionBrowserProps {
   onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
   onOpenSettings: () => void;
-  onOpenLive: () => void;
+  onOpenLive: (device: AimStatus['device']) => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
 }
@@ -349,13 +349,11 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         </button>
 
         {/*
-         * Live button is always visible. The LiveView itself probes the
-         * device on mount and shows a friendly "device not reachable" state
-         * when offline, so users can find the feature without an AiM
-         * connected and developers can dev against the empty state.
+         * Live opens the dashboard and starts the live TCP session immediately
+         * (same idea as Race Studio’s first screen after selecting the logger).
          */}
         <button
-          onClick={onOpenLive}
+          onClick={() => onOpenLive(aimStatus?.connected ? aimStatus.device : null)}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
             aimStatus?.connected
               ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20'
@@ -568,7 +566,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       )}
 
       {/* Session list */}
-      <div className="flex-1 overflow-y-auto px-4 py-3">
+      <div id="session-list-scroll" className="flex-1 overflow-y-auto px-4 py-3">
         {sortedSessions.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/60">
             {sessions.length === 0 ? (

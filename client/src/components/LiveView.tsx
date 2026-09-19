@@ -1,10 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { liveWebSocketUrl, fetchLiveStatus, type LiveDeviceInfo, type LiveWSMessage } from '../lib/api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { liveWebSocketUrl, type LiveDeviceInfo, type LiveWSMessage, type AimStatus } from '../lib/api';
 import { Activity, AlertCircle, ArrowLeft, Pause, Play, Wifi, WifiOff, Loader2 } from 'lucide-react';
-
-interface Props {
-  onBack: () => void;
-}
 
 interface Snapshot {
   ts: number;
@@ -41,6 +37,8 @@ const CHANNEL_META: ChannelMeta[] = [
   { name: 'RPM',                unit: 'rpm', precision: 0 },
   { name: 'LFspeed',            unit: 'kph', precision: 1 },
   { name: 'Throttle_Pos',       unit: '%',   precision: 0 },
+  { name: 'TPS_1',              unit: '%',   precision: 1 },
+  { name: 'TPS_2',              unit: '%',   precision: 1 },
   { name: 'BSE_Voltage',        unit: 'V',   precision: 2 },
   { name: 'Direction',          unit: '',    precision: 0 },
   { name: 'BrakeBias',          unit: '%',   precision: 1 },
@@ -140,7 +138,7 @@ const PANEL_OWNED_CHANNELS = new Set<string>([
   // Cooling
   'Motor_Temp',
   // Vehicle dynamics
-  'Throttle_Pos', 'BSE_Voltage', 'LFspeed', 'RPM', 'YawRate', 'RollRate', 'PitchRate',
+  'Throttle_Pos', 'TPS_1', 'TPS_2', 'BSE_Voltage', 'LFspeed', 'RPM', 'YawRate', 'RollRate', 'PitchRate',
   'LateralAcc', 'InlineAcc', 'VerticalAcc',
   'FrBrakePressure', 'RBrkPressure', 'BrakeBias', 'Direction',
   // Inverter / motor
@@ -153,14 +151,30 @@ const PANEL_OWNED_CHANNELS = new Set<string>([
   ...BOOL_CHANNELS.map((b) => b.name),
 ]);
 
-type Status = 'idle' | 'probing' | 'connecting' | 'streaming' | 'paused' | 'error';
+type Status = 'idle' | 'connecting' | 'streaming' | 'paused' | 'error';
 
-export function LiveView({ onBack }: Props) {
+function aimStatusToLiveDevice(device: NonNullable<AimStatus['device']>): LiveDeviceInfo {
+  return {
+    ip: device.ip,
+    model: device.model ?? '',
+    serial: device.serial ?? '',
+    vehicle: device.vehicle ?? device.device_name ?? '',
+  };
+}
+
+interface Props {
+  onBack: () => void;
+  /** Device already discovered on the session browser — live TCP starts immediately. */
+  aimDevice?: AimStatus['device'];
+}
+
+export function LiveView({ onBack, aimDevice = null }: Props) {
   const [status, setStatus] = useState<Status>('idle');
   const [device, setDevice] = useState<LiveDeviceInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [latest, setLatest] = useState<Snapshot | null>(null);
   const [count, setCount] = useState(0);
+  const [totalReceived, setTotalReceived] = useState(0);
   const [bufferStats, setBufferStats] = useState({ bySubsystem: {} as Record<string, number> });
   const [gpsTrail, setGpsTrail] = useState<{ lat: number; lon: number; speed: number }[]>([]);
 
@@ -168,38 +182,9 @@ export function LiveView({ onBack }: Props) {
   const ringRef = useRef<Snapshot[]>([]);
   const gpsTrailRef = useRef<{ lat: number; lon: number; speed: number }[]>([]);
   const pausedRef = useRef(false);
-  // Once the user has clicked Connect, the mount-time UDP probe's late-
-  // arriving response must not clobber state.
-  const connectInitiatedRef = useRef(false);
 
-  useEffect(() => {
-    setStatus('probing');
-    fetchLiveStatus()
-      .then(s => {
-        if (connectInitiatedRef.current) return;
-        if (s.reachable && s.device) {
-          setDevice(s.device);
-          setStatus('idle');
-        } else {
-          setStatus('error');
-          setError(`AiM device not reachable at ${s.host}. Connect to the device's WiFi hotspot first.`);
-        }
-      })
-      .catch(err => {
-        if (connectInitiatedRef.current) return;
-        setStatus('error');
-        setError(err instanceof Error ? err.message : String(err));
-      });
-
-    return () => {
-      wsRef.current?.close();
-      wsRef.current = null;
-    };
-  }, []);
-
-  const connect = () => {
+  const connect = useCallback(() => {
     if (wsRef.current) return;
-    connectInitiatedRef.current = true;
     setStatus('connecting');
     setError(null);
     const ws = new WebSocket(liveWebSocketUrl());
@@ -213,15 +198,16 @@ export function LiveView({ onBack }: Props) {
           setStatus('streaming');
         } else if (msg.type === 'snapshot') {
           if (pausedRef.current) return;
-          const snap: Snapshot = { ts: msg.ts, subsystem: msg.subsystem, raw: msg.raw };
+          const snap: Snapshot = {
+            ts: msg.ts,
+            subsystem: msg.subsystem,
+            raw: msg.raw,
+            channels: msg.channels,
+          };
           ringRef.current.push(snap);
           if (ringRef.current.length > RING_BUFFER_SIZE) {
             ringRef.current.shift();
           }
-          // GPS trail — once channel decoding lands, snap.channels.GPS_Lat
-          // / GPS_Lon arrive here and we append. Until then there are no
-          // GPS points and the Track panel shows the "waiting for fix"
-          // empty state.
           const lat = snap.channels?.['GPS_Lat'];
           const lon = snap.channels?.['GPS_Lon'];
           if (lat !== undefined && lon !== undefined && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1) {
@@ -232,6 +218,7 @@ export function LiveView({ onBack }: Props) {
           }
           setLatest(snap);
           setCount(ringRef.current.length);
+          setTotalReceived((n) => n + 1);
           if (ringRef.current.length % 8 === 0) {
             const bySubsystem: Record<string, number> = {};
             for (const s of ringRef.current) {
@@ -258,7 +245,19 @@ export function LiveView({ onBack }: Props) {
       wsRef.current = null;
       setStatus(prev => (prev === 'error' ? 'error' : 'idle'));
     };
-  };
+  }, []);
+
+  useEffect(() => {
+    if (aimDevice) {
+      setDevice(aimStatusToLiveDevice(aimDevice));
+    }
+    setStatus('connecting');
+    connect();
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, [aimDevice, connect]);
 
   const disconnect = () => {
     wsRef.current?.send('stop');
@@ -267,6 +266,7 @@ export function LiveView({ onBack }: Props) {
     ringRef.current = [];
     gpsTrailRef.current = [];
     setCount(0);
+    setTotalReceived(0);
     setLatest(null);
     setBufferStats({ bySubsystem: {} });
     setGpsTrail([]);
@@ -355,27 +355,21 @@ ${points}
               Connecting
             </span>
           )}
-          {status === 'probing' && (
-            <span className="flex items-center gap-1.5 text-muted-foreground/50">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Probing
-            </span>
-          )}
         </div>
       </header>
 
       {/* Action bar — mirrors SessionBrowser */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border/50 bg-card/50">
-        {!isLive ? (
+        {!isLive && status !== 'connecting' && (
           <button
             onClick={connect}
-            disabled={status === 'connecting' || status === 'probing'}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
           >
             <Wifi className="w-3.5 h-3.5" />
-            Connect
+            {status === 'error' ? 'Retry' : 'Connect'}
           </button>
-        ) : (
+        )}
+        {isLive && (
           <>
             <button
               onClick={togglePause}
@@ -396,8 +390,10 @@ ${points}
         <div className="flex-1" />
 
         {isLive && (
-          <span className="text-xs text-muted-foreground tabular">
-            {count} / {RING_BUFFER_SIZE} frames buffered
+          <span className="text-xs text-muted-foreground tabular" title="Ring buffer holds the last 60s of snapshots (~4/s max); count stops at 240">
+            Buffer {count}/{RING_BUFFER_SIZE}
+            <span className="mx-1.5 text-muted-foreground/40">·</span>
+            Received {totalReceived}
           </span>
         )}
       </div>
@@ -420,10 +416,23 @@ ${points}
             <Dashboard
               latest={latest}
               count={count}
+              totalReceived={totalReceived}
               bufferStats={bufferStats}
               gpsTrail={gpsTrail}
               onExportGpx={exportGpx}
             />
+          </div>
+        )}
+
+        {status === 'connecting' && !error && (
+          <div className="max-w-md mx-auto text-center mt-16 px-4">
+            <Loader2 className="w-8 h-8 animate-spin text-primary mx-auto mb-3" />
+            <p className="text-sm text-foreground font-medium mb-1">Opening live stream</p>
+            <p className="text-xs text-muted-foreground">
+              {device
+                ? `Connecting to ${device.vehicle || device.model || 'AiM'} at ${device.ip}…`
+                : 'Using the same device identity as the session browser when available.'}
+            </p>
           </div>
         )}
 
@@ -432,13 +441,9 @@ ${points}
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 mb-3">
               <Wifi className="w-5 h-5 text-primary" />
             </div>
-            <p className="text-sm text-foreground font-medium mb-1">
-              {device ? `Ready to connect to ${device.vehicle || 'AiM device'}` : 'Connect to AiM device'}
-            </p>
+            <p className="text-sm text-foreground font-medium mb-1">Live stream stopped</p>
             <p className="text-xs text-muted-foreground">
-              {device
-                ? `${device.model} ${device.serial} reachable at ${device.ip}.`
-                : 'Connect to the AiM device WiFi hotspot, then click Connect.'}
+              Click Retry to reconnect, or go back to the session browser.
             </p>
           </div>
         )}
@@ -458,12 +463,14 @@ ${points}
 function Dashboard({
   latest,
   count,
+  totalReceived,
   bufferStats,
   gpsTrail,
   onExportGpx,
 }: {
   latest: Snapshot | null;
   count: number;
+  totalReceived: number;
   bufferStats: { bySubsystem: Record<string, number> };
   gpsTrail: { lat: number; lon: number; speed: number }[];
   onExportGpx: () => void;
@@ -550,9 +557,12 @@ function Dashboard({
         <div className="space-y-2.5">
           {/* Throttle / Brake bar */}
           <div>
-            <div className="flex items-center justify-between text-[10px] mb-1">
+            <div className="flex items-center justify-between text-[10px] mb-1 gap-2">
               <span className="text-emerald-600 dark:text-emerald-400 font-medium">THR {fmt(ch['Throttle_Pos'], 0)}%</span>
-              <span className="text-red-500 dark:text-red-400 font-medium">
+              <span className="text-emerald-600/80 dark:text-emerald-400/80 font-medium">
+                TPS1 {fmt(ch['TPS_1'], 1)}% · TPS2 {fmt(ch['TPS_2'], 1)}%
+              </span>
+              <span className="text-red-500 dark:text-red-400 font-medium shrink-0">
                 FR/RR {fmt(ch['FrBrakePressure'], 0)}/{fmt(ch['RBrkPressure'], 0)}
               </span>
             </div>
@@ -733,9 +743,16 @@ function Dashboard({
       <Panel title="Stream health" className="lg:col-span-3">
         <div className="space-y-2 text-xs">
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Frames</span>
+            <span className="text-muted-foreground">History buffer</span>
             <span className="tabular font-semibold">{count} / {RING_BUFFER_SIZE}</span>
           </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Snapshots received</span>
+            <span className="tabular font-semibold">{totalReceived}</span>
+          </div>
+          <p className="text-[10px] text-muted-foreground/70 leading-snug">
+            Buffer fills as live data arrives (cap {RING_BUFFER_SIZE} ≈ 60s). It is not a TCP frame counter.
+          </p>
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Latest ts</span>
             <span className="tabular font-semibold">{latest ? `${(latest.ts / 1000).toFixed(2)}s` : '—'}</span>
@@ -745,7 +762,9 @@ function Dashboard({
             <span className="font-mono font-semibold">{latest?.subsystem || '—'}</span>
           </div>
           <div className="pt-1.5 border-t border-border/40 space-y-1">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Buffer composition</p>
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">
+              Buffer by subsystem (counts in ring, max {RING_BUFFER_SIZE} total)
+            </p>
             {Object.entries(bufferStats.bySubsystem).length === 0 && (
               <p className="text-[10px] text-muted-foreground/60">collecting…</p>
             )}

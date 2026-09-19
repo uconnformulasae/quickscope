@@ -8,7 +8,6 @@ developer package or place at backend/vendor/MatLabXRK-2017-64-ReleaseU.dll.
 from __future__ import annotations
 
 import sys
-import threading
 from ctypes import CDLL, POINTER, Structure, byref, c_char_p, c_double, c_int
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,11 +20,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 DEFAULT_DLL_NAME = "MatLabXRK-2017-64-ReleaseU.dll"
-
-# The AiM DLL is not thread-safe — concurrent open/parse calls crash with
-# access violations (e.g. load_session + gps-preview racing on the same file).
-_parse_lock = threading.Lock()
-
 
 class AimDllError(Exception):
     """Error from AIM DLL operations."""
@@ -295,10 +289,9 @@ class AimDll:
 
 def parse(path: str | Path) -> LogFile:
     """Open path with the AiM DLL and return a libxrk-compatible LogFile."""
-    with _parse_lock:
-        with AimDll() as dll:
-            idx = dll.open_file(path)
-            try:
-                return dll_to_logfile(dll, idx, str(Path(path).name))
-            finally:
-                dll.close_file(idx)
+    with AimDll() as dll:
+        idx = dll.open_file(path)
+        try:
+            return dll_to_logfile(dll, idx, str(Path(path).name))
+        finally:
+            dll.close_file(idx)
