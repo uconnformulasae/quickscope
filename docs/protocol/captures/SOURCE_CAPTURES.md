@@ -23,8 +23,18 @@ On that single connection, client STNC order is roughly:
 | Live only | `c:\Users\jesse\Downloads\Live.pcapng` | **1** | Connect → live dashboard only |
 | Live + pedals | `c:\Users\jesse\Downloads\live_pedal.pcapng` | **45** | Live while moving TPS1/TPS2 |
 | **Live 1 min steady** | `c:\Users\jesse\Downloads\RS3_live_1min.pcapng` | **36** | ~60 s RS3 live only — poll-pair cadence (~97×691 B / min) |
+| **113ch pedal (RS3)** | `c:\Users\jesse\Downloads\RS3-5-47.pcapng` | **0** | 707 B `Syst` / `Q:703`; micro cycles all `(1,1)` |
+| **QS drop (pre-fix)** | `c:\Users\jesse\Downloads\working-dropped-5-55.pcapng` | **8** | 21×707 B then device RST; 19/22 cycles `(1,2)` from post-LIVE micro |
 
 Fixtures: `live_2026_follow_raw.txt`, `live_pedal_2026_follow_raw.txt`.
+
+**After TCP-drop fix:** capture ≥60 s QuickScope live on car, then:
+
+```powershell
+python scripts/compare_live_pcaps.py "path\to\new_qs.pcapng" "c:\Users\jesse\Downloads\RS3-5-47.pcapng"
+```
+
+Expect `bad` micro cycles **0**, LIVE count growing, no `RST from 10.0.0.1` in TCP end.
 
 Analyze RS3 1 min capture:
 

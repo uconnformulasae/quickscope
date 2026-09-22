@@ -17,8 +17,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 CAPTURES = ROOT / "docs" / "protocol" / "captures"
+SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(CAPTURES))
+sys.path.insert(0, str(SCRIPTS))
 
 from services.aim_live import (  # noqa: E402
     LIVE_FRAME_SIZE_113CH,
@@ -35,6 +37,7 @@ from services.aim_live import (  # noqa: E402
     encode_frame,
     parse_live_snapshot,
 )
+from compare_live_pcaps import analyze_poll_micro_cycles  # noqa: E402
 from parse_aim_stream import load_stream, parse_frames  # noqa: E402
 
 FIXTURE_LIVE = CAPTURES / "fixtures" / "live_2026_follow_raw.txt"
@@ -197,6 +200,32 @@ def test_rs3_first_system_enum_client_prefix() -> None:
     assert int.from_bytes(cframes[1].payload[8:12], "little") == STNC_SYSTEM
     assert cframes[2].cmd == b"STCP" and len(cframes[2].payload) == 68
     assert cframes[3].cmd == b"STCP" and len(cframes[3].payload) == 4
+
+
+def test_rs3_fixture_one_micro_per_poll_stnc() -> None:
+    """RS3 steady poll: one 4 B ack after 0x20003 and one after 0x20053; no post-LIVE micro."""
+    c2s, _ = load_stream(FIXTURE_LIVE)
+    cframes = parse_frames(c2s, "C")
+    mc = analyze_poll_micro_cycles(cframes)
+    assert mc["cycle_count"] >= 10
+    assert mc["bad_cycles"] == 0
+    assert mc["all_rs3_micro"]
+
+
+def test_pedal_fixture_one_micro_per_poll_stnc() -> None:
+    assert FIXTURE_PEDAL.is_file()
+    c2s, _ = load_stream(FIXTURE_PEDAL)
+    cframes = parse_frames(c2s, "C")
+    mc = analyze_poll_micro_cycles(cframes)
+    assert mc["cycle_count"] >= 5
+    assert mc["all_rs3_micro"]
+
+
+def test_stream_impl_no_post_snapshot_micro_ack() -> None:
+    """Guard against extra STCP ack after yield snap (working-dropped-5-55 root cause)."""
+    src = (ROOT / "backend" / "services" / "aim_live.py").read_text(encoding="utf-8")
+    assert "yield snap" in src
+    assert "yield snap\n                    await self._send_stcp(_STCP_4BYTE_ACK)" not in src
 
 
 def test_rs3_aux_enum_sends_date_without_immediate_micro_ack() -> None:

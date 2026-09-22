@@ -4,6 +4,10 @@
 
 - `c:\Users\jesse\Downloads\Live.pcapng` — tcp.stream **1**
 - `c:\Users\jesse\Downloads\live_pedal.pcapng` — tcp.stream **45**
+- `c:\Users\jesse\Downloads\RS3-5-47.pcapng` — tcp.stream **0** (113ch steady **707 B** `Syst`, `Q:703`)
+- `c:\Users\jesse\Downloads\working-dropped-5-55.pcapng` — QuickScope paired capture; device **FIN+RST** after extra post-LIVE micro acks
+
+**Steady poll ack rule (RS3):** one driver micro immediately after each STNC `0x00020003` and `0x00020053`; **no** additional 4 B STCP ack after consuming the LIVE payload. Violations show up as `(1, 2)` micro cycles in `scripts/compare_live_pcaps.py`.
 
 See [captures/SOURCE_CAPTURES.md](captures/SOURCE_CAPTURES.md). Committed follow dumps: `captures/fixtures/live_2026_follow_raw.txt` and `live_pedal_2026_follow_raw.txt`.
 

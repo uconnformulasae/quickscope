@@ -195,7 +195,48 @@ def analyze_poll_pairs(cframes: list) -> dict:
     }
 
 
-def tcp_close_hint(pcap: Path, stream: int) -> str:
+def analyze_poll_micro_cycles(cframes: list) -> dict:
+    """Count 4 B acks after each steady poll STNC A/B; RS3 expects (1, 1) every cycle."""
+    first_poll = None
+    for i, f in enumerate(cframes):
+        if stnc_sub(f) == STNC_LIVE_POLL_A:
+            first_poll = i
+            break
+    if first_poll is None:
+        return {"cycle_count": 0, "bad_cycles": 0, "bad_samples": [], "all_rs3_micro": False}
+
+    poll = cframes[first_poll:]
+    cycles: list[tuple[int, int]] = []
+    ci = 0
+    while ci < len(poll) - 3:
+        if stnc_sub(poll[ci]) == STNC_LIVE_POLL_A:
+            j = ci + 1
+            micros_a = 0
+            while j < len(poll) and poll[j].cmd == b"STCP" and len(poll[j].payload) == 4:
+                micros_a += 1
+                j += 1
+            if j < len(poll) and stnc_sub(poll[j]) == STNC_LIVE_POLL_B:
+                k = j + 1
+                micros_b = 0
+                while k < len(poll) and poll[k].cmd == b"STCP" and len(poll[k].payload) == 4:
+                    micros_b += 1
+                    k += 1
+                cycles.append((micros_a, micros_b))
+                ci = k
+                continue
+        ci += 1
+
+    bad = [(i, a, b) for i, (a, b) in enumerate(cycles) if a != 1 or b != 1]
+    return {
+        "cycle_count": len(cycles),
+        "bad_cycles": len(bad),
+        "bad_samples": bad[:8],
+        "all_rs3_micro": len(cycles) > 0 and len(bad) == 0,
+    }
+
+
+def tcp_close_detail(pcap: Path, stream: int) -> dict:
+    """FIN/RST sources on the tcp.stream (device is usually 10.0.0.1)."""
     out = subprocess.check_output(
         [
             str(TSHARK),
@@ -217,20 +258,37 @@ def tcp_close_hint(pcap: Path, stream: int) -> str:
         text=True,
         errors="replace",
     )
-    last_fin = ""
-    rst = False
+    last_fin_src = ""
+    last_fin_t = ""
+    last_rst_src = ""
+    last_rst_t = ""
     for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) < 4:
             continue
         reset, fin, src, t = parts[0], parts[1], parts[2], parts[3]
-        if reset == "1":
-            rst = True
-        if fin == "1":
-            last_fin = f"FIN from {src} @ {t}s"
-    if rst:
-        return "TCP RST seen"
-    return last_fin or "unknown"
+        if reset in ("1", "True"):
+            last_rst_src = src
+            last_rst_t = t
+        if fin in ("1", "True"):
+            last_fin_src = src
+            last_fin_t = t
+    hint = "unknown"
+    if last_rst_src:
+        hint = f"RST from {last_rst_src} @ {last_rst_t}s"
+    elif last_fin_src:
+        hint = f"FIN from {last_fin_src} @ {last_fin_t}s"
+    return {
+        "fin_src": last_fin_src or None,
+        "fin_t": last_fin_t,
+        "rst_src": last_rst_src or None,
+        "rst_t": last_rst_t,
+        "hint": hint,
+    }
+
+
+def tcp_close_hint(pcap: Path, stream: int) -> str:
+    return tcp_close_detail(pcap, stream)["hint"]
 
 
 @dataclass
@@ -242,7 +300,9 @@ class Report:
     server_bytes: int
     live_count: int
     poll: dict
+    micro_cycles: dict
     close: str
+    close_detail: dict
     server_live_gaps: list[int]
 
 
@@ -255,6 +315,7 @@ def analyze(pcap: Path, *, stream: int | None, label: str) -> Report:
     live_idxs = [i for i, f in enumerate(sframes) if describe(f).startswith("LIVE:")]
     gaps = [live_idxs[i + 1] - live_idxs[i] for i in range(len(live_idxs) - 1)][:15]
     poll = analyze_poll_pairs(cframes)
+    close_detail = tcp_close_detail(pcap, stream)
     return Report(
         label=label,
         pcap=str(pcap),
@@ -263,7 +324,9 @@ def analyze(pcap: Path, *, stream: int | None, label: str) -> Report:
         server_bytes=len(server),
         live_count=len(live_idxs),
         poll=poll,
-        close=tcp_close_hint(pcap, stream),
+        micro_cycles=analyze_poll_micro_cycles(cframes),
+        close=close_detail["hint"],
+        close_detail=close_detail,
         server_live_gaps=gaps,
     )
 
@@ -288,10 +351,24 @@ def print_report(r: Report) -> None:
             f"legacy micro-between-A-and-B: {p['micro_after_live_before_b']}"
         )
         print(f"  first tokens: {p['first_16_tokens']}")
+    mc = r.micro_cycles
+    if mc.get("cycle_count"):
+        flag = "ok" if mc.get("all_rs3_micro") else "DRIFT"
+        print(
+            f"  micro cycles A/B: {mc['cycle_count']} total, "
+            f"{mc['bad_cycles']} not (1,1) [{flag}]"
+        )
+        if mc.get("bad_samples"):
+            print(f"  bad cycle samples (idx, micros_A, micros_B): {mc['bad_samples']}")
     if r.server_live_gaps:
         print(f"  server frame gaps between LIVE (first 15): {r.server_live_gaps}")
         print(f"  common gap: {Counter(r.server_live_gaps).most_common(2)}")
+    cd = r.close_detail
     print(f"  TCP end: {r.close}")
+    if cd.get("rst_src"):
+        print(f"  TCP RST: {cd['rst_src']} @ {cd.get('rst_t', '?')}s")
+    elif cd.get("fin_src"):
+        print(f"  TCP FIN: {cd['fin_src']} @ {cd.get('fin_t', '?')}s")
 
 
 def main() -> None:
@@ -324,15 +401,20 @@ def main() -> None:
 
     print(f"\n{'=' * 72}")
     print("SUMMARY (steady poll phase)")
-    print(f"{'label':28} {'LIVE':>6} {'A':>5} {'B':>5} {'micro':>6} {'def':>5} {'pairs':>6} close")
+    print(
+        f"{'label':28} {'LIVE':>6} {'A':>5} {'B':>5} {'micro':>6} {'def':>5} "
+        f"{'pairs':>6} {'cyc':>4} {'bad':>4} close"
+    )
     for r in reports:
         p = r.poll
         if p.get("first_poll_idx") is None:
             print(f"{r.label:28} {'—':>6}")
             continue
+        mc = r.micro_cycles
         print(
             f"{r.label:28} {r.live_count:6} {p['stnc_a']:5} {p['stnc_b']:5} {p['micro']:6} "
-            f"{p['micro_deficit']:5} {p['rs3_pair_sequences']:6} {r.close[:40]}"
+            f"{p['micro_deficit']:5} {p['rs3_pair_sequences']:6} "
+            f"{mc.get('cycle_count', 0):4} {mc.get('bad_cycles', 0):4} {r.close[:32]}"
         )
 
 

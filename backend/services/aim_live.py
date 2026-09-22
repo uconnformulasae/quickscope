@@ -812,7 +812,6 @@ class AimLiveClient:
                             self._snapshots_yielded,
                         )
                     yield snap
-                    await self._send_stcp(_STCP_4BYTE_ACK)
                 except TimeoutError:
                     self._poll_a_timeouts += 1
                     self._pending_live_size = None
@@ -981,6 +980,7 @@ class AimLiveClient:
                 return
 
     async def _wait_for_live_frame(self, *, timeout: float) -> LiveSnapshot:
+        """Wait for telemetry; poll drain stashes LIVE/hb and _read_one_frame serves stash first."""
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
