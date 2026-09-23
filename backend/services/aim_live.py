@@ -69,6 +69,14 @@ POLL_INTERVAL_S = 0.125  # RS3 steady poll step (RS3-5-47.pcapng)
 POLL_STNC_DRAIN_S = 0.4
 SETUP_DRAIN_IDLE_S = 0.35
 
+# The EVO5 does not keep a live TCP session open forever: RS3-9-22-26-long.pcapng
+# shows Race Studio itself cycling a fresh TCP connection to port 2000 every
+# ~40-90s (device sends the FIN in working-dropped-6-50.pcapng after ~16 live
+# frames / ~30s), and Race Studio just reconnects immediately so the operator
+# never notices. We do the same here instead of ending the stream.
+RECONNECT_MAX_ATTEMPTS = 10
+RECONNECT_BACKOFF_S = 1.0
+
 _ENUM_BLOB_MIN_LEN = 3400
 
 
@@ -832,8 +840,20 @@ class AimLiveClient:
                             self._poll_a_timeouts,
                         )
             except ConnectionError:
-                logger.info("AiM live stream: device closed connection during poll")
-                break
+                logger.warning(
+                    "AiM live stream: device closed connection during poll "
+                    "(snapshots=%d so far); attempting reconnect",
+                    self._snapshots_yielded,
+                )
+                self._emit_trace("device_dropped", snapshots=self._snapshots_yielded)
+                # Raises (propagating to the caller) if the device never comes back.
+                await self._reconnect_with_retry(
+                    max_attempts=RECONNECT_MAX_ATTEMPTS,
+                    base_backoff_s=RECONNECT_BACKOFF_S,
+                )
+                await self._autorespond_drain(
+                    idle_s=0.15, overall_timeout=1.0, label="post-reconnect-sync"
+                )
 
     async def _send_rs3_poll_stnc(self, sub_cmd: int) -> None:
         """RS3 steady poll: STNC then immediate micro (RS3-5-47.pcapng)."""
@@ -909,6 +929,68 @@ class AimLiveClient:
             len(blob),
             phase,
         )
+
+    def _reset_stream_state(self) -> None:
+        """Clear per-TCP-connection state before a reconnect (keeps cumulative stats)."""
+        self._buf.clear()
+        self._frame_stash.clear()
+        self._pending_live_size = None
+        self._handshake_done = False
+
+    async def _reconnect(self, *, timeout: float = 15.0) -> None:
+        """Tear down the dead socket and redo TCP connect + live handshake."""
+        if self._writer is not None:
+            try:
+                self._writer.close()
+                await self._writer.wait_closed()
+            except Exception:
+                pass
+        self._writer = None
+        self._reader = None
+        self._reset_stream_state()
+        # discover_first=True but the device cache written on the original
+        # connect is still fresh, so this resolves instantly without a new
+        # UDP broadcast (see connect()'s cache check).
+        await self.connect(discover_first=True, timeout=timeout)
+
+    async def _reconnect_with_retry(self, *, max_attempts: int, base_backoff_s: float) -> None:
+        last_exc: BaseException | None = None
+        for attempt in range(1, max_attempts + 1):
+            await asyncio.sleep(base_backoff_s * attempt)
+            try:
+                await self._reconnect()
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "AiM live stream: reconnect attempt %d/%d failed: %s",
+                    attempt,
+                    max_attempts,
+                    exc,
+                )
+                self._emit_trace(
+                    "device_reconnect_attempt_failed",
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    error=str(exc),
+                )
+                continue
+            logger.info(
+                "AiM live stream: reconnected after device drop "
+                "(attempt %d/%d, snapshots so far=%d)",
+                attempt,
+                max_attempts,
+                self._snapshots_yielded,
+            )
+            self._emit_trace(
+                "device_reconnected", snapshots=self._snapshots_yielded, attempt=attempt
+            )
+            return
+        self._emit_trace(
+            "device_reconnect_failed", snapshots=self._snapshots_yielded, attempts=max_attempts
+        )
+        raise ConnectionError(
+            f"AiM device did not come back after {max_attempts} reconnect attempts"
+        ) from last_exc
 
     async def stop_streaming(self) -> None:
         """Stop the live poll loop but keep the TCP socket open (RS3 primary session)."""

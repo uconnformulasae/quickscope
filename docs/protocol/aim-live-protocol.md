@@ -6,8 +6,12 @@
 - `c:\Users\jesse\Downloads\live_pedal.pcapng` — tcp.stream **45**
 - `c:\Users\jesse\Downloads\RS3-5-47.pcapng` — tcp.stream **0** (113ch steady **707 B** `Syst`, `Q:703`)
 - `c:\Users\jesse\Downloads\working-dropped-5-55.pcapng` — QuickScope paired capture; device **FIN+RST** after extra post-LIVE micro acks
+- `~/Downloads/wireshark/working-dropped-6-50.pcapng` — QuickScope, clean `(1,1)` micro cycles (prior fix held), device still **FIN**s the socket after 16 live frames / ~31s
+- `~/Downloads/wireshark/RS3-9-22-26-long.pcapng` — RS3 on the same car, tcp.stream 30/31/32: **client**-initiated FIN every ~40–90s, immediately followed by a brand-new TCP connect + full re-handshake
 
 **Steady poll ack rule (RS3):** one driver micro immediately after each STNC `0x00020003` and `0x00020053`; **no** additional 4 B STCP ack after consuming the LIVE payload. Violations show up as `(1, 2)` micro cycles in `scripts/compare_live_pcaps.py`.
+
+**Live TCP sessions are not permanent.** Even with a clean `(1,1)` micro pattern, the EVO5 only keeps a live socket open for roughly a minute (~16–80 live frames depending on how busy the enumeration phase was) before hanging up — `working-dropped-6-50.pcapng` shows the *device* sending FIN after 16 `Syst`/`kkk` frames with zero protocol violations on our side. `RS3-9-22-26-long.pcapng` shows Race Studio hitting the same wall every 40–90s and simply reconnecting (new TCP handshake + full RS3 enumeration) so the operator never sees a gap. `AimLiveClient.stream()` now does the same: on `ConnectionError` it tears down the dead socket and redoes `connect()` (cached device IP, no new UDP broadcast) with a short backoff, up to `RECONNECT_MAX_ATTEMPTS` tries, before finally propagating the drop to the caller.
 
 See [captures/SOURCE_CAPTURES.md](captures/SOURCE_CAPTURES.md). Committed follow dumps: `captures/fixtures/live_2026_follow_raw.txt` and `live_pedal_2026_follow_raw.txt`.
 

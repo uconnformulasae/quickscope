@@ -25,6 +25,8 @@ On that single connection, client STNC order is roughly:
 | **Live 1 min steady** | `c:\Users\jesse\Downloads\RS3_live_1min.pcapng` | **36** | ~60 s RS3 live only — poll-pair cadence (~97×691 B / min) |
 | **113ch pedal (RS3)** | `c:\Users\jesse\Downloads\RS3-5-47.pcapng` | **0** | 707 B `Syst` / `Q:703`; micro cycles all `(1,1)` |
 | **QS drop (pre-fix)** | `c:\Users\jesse\Downloads\working-dropped-5-55.pcapng` | **8** | 21×707 B then device RST; 19/22 cycles `(1,2)` from post-LIVE micro |
+| **QS drop (post micro-fix, still no reconnect)** | `~/Downloads/wireshark/working-dropped-6-50.pcapng` | **10** | Clean `(1,1)` micro cycles, 16×707 B, then **device**-initiated FIN at ~31s. Client (pre-fix) kept polling after FIN → device RST. Root cause of the "drops around 20 frames" bug: `AimLiveClient.stream()` treated the device FIN as fatal instead of reconnecting. |
+| **RS3 long session (reconnect reference)** | `~/Downloads/wireshark/RS3-9-22-26-long.pcapng` | **30/31/32** | Race Studio itself gets the same device-initiated close every 40–90s and reconnects transparently (new TCP + full enum) — this is the behavior QuickScope now mirrors |
 
 Fixtures: `live_2026_follow_raw.txt`, `live_pedal_2026_follow_raw.txt`.
 

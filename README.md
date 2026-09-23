@@ -145,6 +145,11 @@ The connection uses the AiM binary TCP protocol (port 2000) with UDP discovery (
 
 **Live view debugging:** logs under [`backend/data/logs/aim_live/`](backend/data/logs/aim_live/). Session pull and live view use different TCP handshakes after the same hello; attach `sessions/*_live.jsonl` if live Connect fails while pull works.
 
+**macOS: UDP discovery times out with zero replies from every candidate IP** — you'll see `aim_discovery` log lines like `no reply from ['10.0.0.1', ...]` repeating forever with no other errors. Two independent causes produce this identical symptom, so check both:
+
+1. **macOS Local Network privacy permission** — macOS silently drops local-subnet traffic from apps that haven't been granted access (no exception is raised; it just looks like a timeout). Fix: **System Settings → Privacy & Security → Local Network**, and enable the toggle for whichever process opens the sockets — typically **Terminal**/**iTerm** (dev mode, parent of the Python backend), **Python**, and **Google Chrome** (the frontend tab); for the packaged Electron build, look for **QuickScope** instead. Toggles may only appear after a connection attempt has been made once while on the AiM WiFi. If the toggle already shows enabled but still doesn't work, the TCC grant may be stale (e.g. after a venv/interpreter path change) — run `tccutil reset LocalNetwork` and re-grant from scratch.
+2. **Wrong device IP guess** — discovery unicasts a probe to a short hardcoded list of common AiM hotspot IPs (`10.0.0.1`, `192.168.137.1`, `192.168.1.1`, `192.168.4.1`) before falling back to a real LAN broadcast. If your Mac's DHCP-assigned address/gateway on the AiM WiFi doesn't match one of the guesses, the unicast attempts always time out and only the broadcast fallback finds the device. Confirm with `ipconfig getifaddr en0` and `netstat -rn | grep default` while connected to the AiM hotspot — if the gateway isn't in the candidate list above, permission fixes alone won't help; the broadcast fallback (`services/aim_discovery.broadcast_probe`) is what saves you.
+
 **Download troubleshooting**
 
 - Each pull writes a JSONL trace to `backend/data/logs/aim_download/` (timestamp + filename). Use these logs to compare `extracted_bytes`, `batch_complete_ack`, and `ack_payload_bytes` against a known-good RaceStudio capture.
