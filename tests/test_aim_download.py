@@ -315,6 +315,53 @@ def _load_pcap_server_stream(repo_root: Path) -> bytes:
     return bytes(s2c)
 
 
+class _FixedChunkReplaySocket:
+    """Like a real trickling TCP socket: recv() ignores the caller's
+    requested size and hands back its own fixed-size slices, regardless of
+    where AiM protocol frame boundaries fall."""
+
+    def __init__(self, stream: bytes, chunk_size: int) -> None:
+        self._stream = stream
+        self._chunk_size = chunk_size
+        self._offset = 0
+        self.sent: list[bytes] = []
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def settimeout(self, _timeout: float) -> None:
+        return None
+
+    def recv(self, _requested_size: int) -> bytes:
+        if self._offset >= len(self._stream):
+            return b""
+        chunk = self._stream[self._offset : self._offset + self._chunk_size]
+        self._offset += len(chunk)
+        return chunk
+
+
+@pytest.mark.parametrize("chunk_size", [536, 1072])
+def test_receive_file_data_incremental_matches_legacy_reassembly(chunk_size):
+    """Regression test for the incremental reassembler (perf fix): feed a
+    synthetic multi-batch STCP file stream through `_receive_file_data()` in
+    small chunks whose boundaries don't line up with frame boundaries, and
+    check the result is byte-identical to `_extract_data_blocks()` run once
+    over the whole stream -- the same algorithm, used as the final
+    authoritative check after the incremental hot path finishes.
+    """
+    batch_one = b"".join(
+        _file_block(off, bytes([off % 251]) * 200) for off in range(0, 2000, 200)
+    )
+    batch_two = _file_block(0, b"Z" * 300)  # offset resets -> new batch
+    raw = batch_one + batch_two
+    expected = _extract_data_blocks(raw)
+
+    sock = _FixedChunkReplaySocket(raw, chunk_size)
+    file_data = _receive_file_data(sock, len(expected), trace=None)
+
+    assert file_data == expected
+
+
 class _ReplaySocket:
     """Replays server bytes from a capture and records client progress ACKs."""
 

@@ -113,6 +113,14 @@ def _open_device_socket(timeout: float = 10) -> tuple[socket.socket, str]:
     for ip in candidate_device_ips():
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Default RCVBUF (often 64-128 KB) caps the TCP receive window well
+        # below what a download over WiFi can sustain; a bigger window lets
+        # the device keep sending without stalling on ACKs. Best-effort: some
+        # platforms clamp this silently, which is harmless.
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+        except OSError:
+            pass
         try:
             sock.settimeout(timeout)
             sock.connect((ip, port))
@@ -364,6 +372,44 @@ def _iter_file_blocks(raw: bytes) -> list[tuple[int, bytes]]:
     return blocks
 
 
+class _IncrementalReassembler:
+    """Applies one (file_offset, data) block at a time to a running buffer.
+
+    This is the same batch-offset-reset algorithm `_extract_data_blocks()`
+    used to run from scratch on every `recv()` over the *entire* stream seen
+    so far (O(n) work times ~1300 calls = O(n^2) for a ~1.24 MB file). Feeding
+    one block at a time as it's parsed off the wire makes each block O(1)
+    amortized, and `_extract_data_blocks()` now just replays all blocks
+    through the same class once, as the final authoritative check.
+    """
+
+    def __init__(self) -> None:
+        self.file_data = bytearray()
+        self._batch_base = 0
+        self._prev_offset = -1
+
+    def feed(self, file_offset: int, data: bytes) -> None:
+        if _is_first_batch_retransmit(self.file_data, file_offset, data):
+            return
+        if self.file_data and file_offset < self._prev_offset:
+            self._batch_base = len(self.file_data)
+        abs_offset = self._batch_base + file_offset
+        if (
+            abs_offset + len(data) <= len(self.file_data)
+            and self.file_data[abs_offset:abs_offset + len(data)] == data
+        ):
+            self._prev_offset = max(self._prev_offset, file_offset + len(data) - 1)
+            return
+        needed = abs_offset + len(data)
+        if needed > len(self.file_data):
+            self.file_data.extend(b"\x00" * (needed - len(self.file_data)))
+        self.file_data[abs_offset:abs_offset + len(data)] = data
+        self._prev_offset = file_offset
+
+    def __len__(self) -> int:
+        return len(self.file_data)
+
+
 def _extract_data_blocks(raw: bytes, expected_size: int = 0) -> bytes:
     """Parse STCP data blocks and reassemble the file.
 
@@ -376,27 +422,10 @@ def _extract_data_blocks(raw: bytes, expected_size: int = 0) -> bytes:
     if not blocks:
         raise RuntimeError(f"No data blocks found in {len(raw)} bytes of response")
 
-    file_data = bytearray()
-    batch_base = 0
-    prev_offset = -1
-
+    reassembler = _IncrementalReassembler()
     for file_offset, data in blocks:
-        if _is_first_batch_retransmit(file_data, file_offset, data):
-            continue
-        if file_data and file_offset < prev_offset:
-            batch_base = len(file_data)
-        abs_offset = batch_base + file_offset
-        if (
-            abs_offset + len(data) <= len(file_data)
-            and file_data[abs_offset:abs_offset + len(data)] == data
-        ):
-            prev_offset = max(prev_offset, file_offset + len(data) - 1)
-            continue
-        needed = abs_offset + len(data)
-        if needed > len(file_data):
-            file_data.extend(b"\x00" * (needed - len(file_data)))
-        file_data[abs_offset:abs_offset + len(data)] = data
-        prev_offset = file_offset
+        reassembler.feed(file_offset, data)
+    file_data = reassembler.file_data
 
     if expected_size > 0 and len(file_data) > expected_size:
         return bytes(file_data[:expected_size])
@@ -409,6 +438,45 @@ def _try_extract_file_size(raw: bytes) -> int:
         return len(_extract_data_blocks(raw))
     except RuntimeError:
         return 0
+
+
+def _drain_download_frames_incremental(
+    frame_buffer: bytes,
+    reassembler: "_IncrementalReassembler",
+    trace: AimDownloadTrace | None = None,
+) -> bytes:
+    """Parse complete frames out of `frame_buffer`, feeding file-data blocks
+    into `reassembler` as they're decoded instead of re-parsing the whole
+    stream from byte 0 (see `_try_extract_file_size`'s old hot-path use,
+    now replaced by this for `_receive_file_data`'s per-`recv()` loop).
+    Download mode never ACKs control frames inline (only batch/stall ACKs),
+    so unlike `_drain_download_frames()` this never touches the socket.
+    """
+    while True:
+        try:
+            frame, consumed = decode_frame(frame_buffer)
+        except ValueError as exc:
+            if trace is not None:
+                trace.log("frame_resync", error=str(exc), buffer_len=len(frame_buffer))
+            resync = frame_buffer.find(b"<h", 1)
+            if resync == -1:
+                frame_buffer = b""
+                break
+            frame_buffer = frame_buffer[resync:]
+            continue
+        if frame is None or consumed == 0:
+            break
+        frame_buffer = frame_buffer[consumed:]
+        if frame.cmd != b"STCP":
+            continue
+        if _is_stcp_file_payload(frame.payload):
+            file_offset = struct.unpack_from("<I", frame.payload, 0)[0]
+            data = frame.payload[4:]
+            if data:
+                reassembler.feed(file_offset, data)
+        elif trace is not None and len(frame.payload) <= 64:
+            trace.log_frame(frame, ack_sent=False)
+    return frame_buffer
 
 
 def _make_download_progress_ack(byte_count: int) -> bytes:
@@ -538,8 +606,12 @@ def _receive_file_data(
     trace: AimDownloadTrace | None = None,
 ) -> bytes:
     """Read STCP file blocks until complete, prompting device between batches."""
-    raw_data = b""
+    # bytearray + .extend(): amortized O(1) per recv(), not the O(n) copy that
+    # `raw_data = b""` / `raw_data += chunk` did on every one of the ~1300
+    # recv() calls for a ~1.24 MB file.
+    raw_data = bytearray()
     frame_buffer = b""
+    reassembler = _IncrementalReassembler()
     extracted_size = 0
     micro_acks_sent = 0
     stall_ack_round = 0
@@ -549,7 +621,11 @@ def _receive_file_data(
     idle_limit_s = 60 + max(0, total_file_size // 100_000)
     idle_deadline = time.monotonic() + idle_limit_s
     last_progress_size = 0
-    sock.settimeout(2.0)
+    # Lowered from 2.0s: a stalled batch used to sit for a full 2s before the
+    # stall-ack nudge went out (the ~1.4s gaps seen early in captured
+    # transfers). 0.4s notices the pause and re-prompts the device sooner
+    # without adding meaningful CPU/syscall overhead when data is flowing.
+    sock.settimeout(0.4)
 
     if trace is not None:
         trace.log("receive_start", total_file_size=total_file_size)
@@ -627,14 +703,16 @@ def _receive_file_data(
             break
 
         recv_count += 1
-        raw_data += chunk
+        raw_data.extend(chunk)
         frame_buffer += chunk
-        frame_buffer, sent = _drain_download_frames(
-            sock, frame_buffer, trace, reply_to_control=False
-        )
-        micro_acks_sent += sent
+        # Feeds each file-data block into `reassembler` as it's parsed off
+        # `frame_buffer`, instead of `_try_extract_file_size(raw_data)`
+        # re-decoding and re-reassembling the entire stream received so far
+        # on every single recv() (O(n) work x ~1300 calls = O(n^2)).
+        frame_buffer = _drain_download_frames_incremental(frame_buffer, reassembler, trace)
+        sent = 0
 
-        extracted_size = _try_extract_file_size(raw_data)
+        extracted_size = len(reassembler)
         acked_through, batch_sent = _prompt_next_batch(
             sock,
             extracted_size=extracted_size,

@@ -1,7 +1,14 @@
-"""One-off analyzer for RS3_live_1min.pcapng — steady-state live poll pattern."""
+"""Analyzer for an AiM live-poll pcap — steady-state live poll pattern.
+
+Originally a one-off script hardcoded to RS3_live_1min.pcapng stream 36; now
+takes the path and --stream on the command line so it can be pointed at any
+capture (see speed_up_aim_transfers plan, "verify" phase).
+"""
 
 from __future__ import annotations
 
+import argparse
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -23,14 +30,21 @@ from services.aim_live import (  # noqa: E402
     decode_frame,
 )
 
-TSHARK = r"C:\Program Files\Wireshark\tshark.exe"
-PCAP = Path(r"c:\Users\jesse\Downloads\RS3_live_1min.pcapng")
-STREAM = 36
+_DEFAULT_TSHARK_WIN = r"C:\Program Files\Wireshark\tshark.exe"
 
 
-def load_follow(stream: int) -> tuple[bytearray, bytearray]:
+def _tshark_path() -> str:
+    found = shutil.which("tshark")
+    if found:
+        return found
+    if Path(_DEFAULT_TSHARK_WIN).exists():
+        return _DEFAULT_TSHARK_WIN
+    raise SystemExit("tshark not found on PATH or at the default Windows install location")
+
+
+def load_follow(pcap: Path, stream: int) -> tuple[bytearray, bytearray]:
     raw = subprocess.check_output(
-        [TSHARK, "-r", str(PCAP), "-q", "-z", f"follow,tcp,raw,{stream}"],
+        [_tshark_path(), "-r", str(pcap), "-q", "-z", f"follow,tcp,raw,{stream}"],
         text=True,
         errors="replace",
     )
@@ -85,8 +99,13 @@ def describe(frame) -> str:
 
 
 def main() -> None:
-    client, server = load_follow(STREAM)
-    print(f"Stream {STREAM}: client {len(client)} B, server {len(server)} B")
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("pcap", type=Path, help="path to the .pcapng capture")
+    ap.add_argument("--stream", type=int, required=True, help="tcp.stream index")
+    args = ap.parse_args()
+
+    client, server = load_follow(args.pcap, args.stream)
+    print(f"Stream {args.stream}: client {len(client)} B, server {len(server)} B")
 
     cframes = list(iter_frames(client))
     sframes = list(iter_frames(server))

@@ -66,8 +66,21 @@ logger = logging.getLogger(__name__)
 LIVE_FRAME_SIZE_LEGACY = 547
 LIVE_FRAME_SIZE_113CH = 707
 POLL_INTERVAL_S = 0.125  # RS3 steady poll step (RS3-5-47.pcapng)
-POLL_STNC_DRAIN_S = 0.4
-SETUP_DRAIN_IDLE_S = 0.35
+# RS3 sends its next steady-poll STNC every 150-190 ms without waiting for a
+# snapshot (RS3-5-47.pcapng). The pump task below reproduces that instead of
+# the old fixed lockstep "send, sleep, send, sleep, block for snapshot" loop.
+PUMP_PERIOD_S = 0.16
+# RS3 acks the device's Q frame ~0.4 ms after it arrives (410.3ms Q -> 410.7ms
+# micro in the capture) rather than blindly right after sending the poll STNC.
+# The reader task pays the ack immediately when Q/I/E is seen; this fallback
+# only fires if, for some reason, none of them showed up after a poll STNC.
+PUMP_FALLBACK_MICRO_DELAY_S = 0.07
+# Setup STNCs are 100-160 ms apart in Race Studio's own capture; the previous
+# 0.35s / 0.5s fixed idle drains were a large multiple of that, on every one
+# of the 6 setup commands plus the post-setup wait -- most of the ~10s
+# reconnect-to-first-snapshot gap.
+SETUP_DRAIN_IDLE_S = 0.16
+POST_SETUP_DRAIN_IDLE_S = 0.2
 
 # The EVO5 does not keep a live TCP session open forever: RS3-9-22-26-long.pcapng
 # shows Race Studio itself cycling a fresh TCP connection to port 2000 every
@@ -386,7 +399,16 @@ class AimLiveClient:
         self._snapshots_yielded = 0
         self._decode_resync_bytes = 0
         self._channel_fields: list[ChannelField] = []
-        self._frame_stash: deque[Frame] = deque()
+        # Guards the physical socket write so the reader task's immediate
+        # Q-ack and the pump task's STNC/fallback-ack never interleave.
+        self._write_lock = asyncio.Lock()
+        # "Is a micro-ack owed for the STNC the pump most recently sent?" The
+        # reader pays it the instant Q/I/E arrives; the pump pays it itself
+        # as a fallback if nothing arrived within PUMP_FALLBACK_MICRO_DELAY_S.
+        self._micro_lock = asyncio.Lock()
+        self._micro_owed = False
+        self._snapshot_gaps_ms: deque[float] = deque(maxlen=64)
+        self._last_snapshot_at: float | None = None
 
     def _emit_trace(self, event: str, **fields: object) -> None:
         if self._session_trace is not None:
@@ -505,8 +527,9 @@ class AimLiveClient:
     async def _send_stnc(self, sub_cmd: int) -> None:
         assert self._writer is not None
         logger.debug("AiM live TX: STNC sub=0x%08x", sub_cmd)
-        self._writer.write(encode_frame(b"STNC", _stnc_payload(sub_cmd)))
-        await self._writer.drain()
+        async with self._write_lock:
+            self._writer.write(encode_frame(b"STNC", _stnc_payload(sub_cmd)))
+            await self._writer.drain()
 
     async def _respond_stcp64(
         self,
@@ -557,8 +580,9 @@ class AimLiveClient:
             logger.debug("AiM live TX: STCP micro-ack (4 bytes)")
         else:
             logger.debug("AiM live TX: STCP payload len=%d", len(payload))
-        self._writer.write(encode_frame(b"STCP", payload))
-        await self._writer.drain()
+        async with self._write_lock:
+            self._writer.write(encode_frame(b"STCP", payload))
+            await self._writer.drain()
 
     async def _run_live_handshake(self, *, timeout: float) -> None:
         """Mimic Race Studio post-hello setup from 2026 Live.pcapng captures."""
@@ -579,7 +603,7 @@ class AimLiveClient:
                 respond_stcp_control=False,
             )
         await self._autorespond_drain(
-            idle_s=0.5,
+            idle_s=POST_SETUP_DRAIN_IDLE_S,
             overall_timeout=timeout,
             label="post-setup",
             respond_stcp_control=False,
@@ -614,8 +638,8 @@ class AimLiveClient:
                 return
             if not wait_blob and sent_followup:
                 await self._autorespond_drain(
-                    idle_s=0.25,
-                    overall_timeout=1.5,
+                    idle_s=0.15,
+                    overall_timeout=0.5,
                     label=f"enum-aux-0x{sub_cmd:08x}",
                     respond_stcp_control=False,
                 )
@@ -670,6 +694,29 @@ class AimLiveClient:
                 reason="no_blob",
             )
             raise TimeoutError(f"enumeration pass 0x{sub_cmd:08x} did not receive device blob")
+
+    async def _ingest_stcp_control_frame(self, frame: Frame) -> bool:
+        """Consume a Q/I/E/4B control frame during handshake drains without
+        acking it (`_autorespond_drain(respond_stcp_control=False)` -- setup
+        STNCs, aux enum pass, pre/post-poll sync). Steady-state polling uses
+        `_reader_loop`/`_pay_micro_if_owed` instead; this is handshake-only.
+        """
+        if frame.cmd != b"STCP":
+            return False
+        pl = frame.payload
+        if len(pl) == 4:
+            return True
+        if len(pl) == 64 and len(pl) > 24:
+            op = pl[24]
+            if op == _STCP_OP_Q:
+                hint = struct.unpack("<I", pl[16:20])[0]
+                live_len = _q_hint_live_payload_size(hint)
+                if live_len is not None:
+                    self._pending_live_size = live_len
+                return True
+            if op in (_STCP_OP_I, _STCP_OP_E):
+                return True
+        return False
 
     async def _autorespond_drain(
         self,
@@ -751,8 +798,6 @@ class AimLiveClient:
             self._emit_trace("rx", phase=phase, summary=summary)
 
     async def _read_one_frame(self) -> Frame:
-        if self._frame_stash:
-            return self._frame_stash.popleft()
         assert self._reader is not None
         while True:
             try:
@@ -776,27 +821,163 @@ class AimLiveClient:
                 raise ConnectionError("AiM device closed the connection")
             self._buf.extend(chunk)
 
+    async def _pay_micro_if_owed(self) -> None:
+        """Send the micro-ack owed for the last poll STNC, if not already paid."""
+        async with self._micro_lock:
+            if not self._micro_owed:
+                return
+            self._micro_owed = False
+        await self._send_stcp(_STCP_4BYTE_ACK)
+
+    async def _pump_loop(self) -> None:
+        """Alternate STNC A/B on a fixed period. Never waits for a snapshot.
+
+        RS3 does not wait for the previous LIVE frame before sending the next
+        poll command (RS3-5-47.pcapng), which is what makes its rate 2.5-3x
+        ours. This task's only job is to keep that cadence; the reader task
+        (below) is what actually acks the device and produces snapshots.
+        """
+        toggle = STNC_LIVE_POLL_A
+        loop = asyncio.get_running_loop()
+        while True:
+            cycle_start = loop.time()
+            await self._send_stnc(toggle)
+            async with self._micro_lock:
+                self._micro_owed = True
+            # Give the reader a chance to ack in response to the device's Q
+            # (typically <10ms). Only pay it ourselves if nothing showed up.
+            await asyncio.sleep(PUMP_FALLBACK_MICRO_DELAY_S)
+            await self._pay_micro_if_owed()
+            toggle = STNC_LIVE_POLL_B if toggle == STNC_LIVE_POLL_A else STNC_LIVE_POLL_A
+            elapsed = loop.time() - cycle_start
+            await asyncio.sleep(max(0.0, PUMP_PERIOD_S - elapsed))
+
+    async def _reader_loop(self, queue: "asyncio.Queue[LiveSnapshot]") -> None:
+        """Continuously read frames; ack Q/I/E the instant they arrive, and
+        push each decoded snapshot onto `queue`. Never sends anything after a
+        snapshot -- the (1, 2) micro-ack drop pattern this module used to hit
+        came from exactly that (see `test_stream_impl_no_post_snapshot_micro_ack`).
+        """
+        while True:
+            frame = await self._read_one_frame()
+            self._log_rx_frame(frame, phase="stream")
+            if frame.cmd != b"STCP":
+                continue
+            pl = frame.payload
+            if len(pl) == 4:
+                # Server 4B STCP during live poll is not echoed by RS3.
+                continue
+            if len(pl) == 64 and len(pl) > 24:
+                op = pl[24]
+                if op == _STCP_OP_Q:
+                    hint = struct.unpack("<I", pl[16:20])[0]
+                    live_len = _q_hint_live_payload_size(hint)
+                    if live_len is not None:
+                        self._pending_live_size = live_len
+                    await self._pay_micro_if_owed()
+                    continue
+                if op in (_STCP_OP_I, _STCP_OP_E):
+                    await self._pay_micro_if_owed()
+                    continue
+                if op in (_STCP_OP_A, _STCP_OP_H):
+                    # Rare mid-stream; same date-followup handling as setup.
+                    await self._respond_stcp64(pl, phase="stream", post_date_ack=False)
+                    continue
+                logger.debug("AiM live reader: unhandled STCP-64 opcode in stream phase")
+                continue
+            if is_layout_blob(pl):
+                self._ingest_channel_layout(pl, phase="stream")
+                continue
+            if len(pl) in (12, 324, 68):
+                continue
+            if _is_live_snapshot_payload(pl):
+                snap = parse_live_snapshot(pl, self._channel_fields or None)
+                await queue.put(snap)
+                continue
+            logger.debug("AiM live reader: unrecognized STCP payload len=%d", len(pl))
+
+    def _record_snapshot_gap(self) -> None:
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if self._last_snapshot_at is not None:
+            self._snapshot_gaps_ms.append((now - self._last_snapshot_at) * 1000)
+        self._last_snapshot_at = now
+
+    def _log_rate(self) -> None:
+        """Phase-0 measurement hook: snapshot rate + gap percentiles, so a car
+        test can be checked against the plan's targets without Wireshark."""
+        gaps = sorted(self._snapshot_gaps_ms)
+        if not gaps:
+            return
+        p50 = gaps[len(gaps) // 2]
+        p95 = gaps[min(len(gaps) - 1, int(len(gaps) * 0.95))]
+        hz = 1000.0 / p50 if p50 > 0 else 0.0
+        logger.info(
+            "AiM live stream: rate ~%.2f Hz (p50 gap=%.0fms p95 gap=%.0fms, n=%d, total snapshots=%d)",
+            hz,
+            p50,
+            p95,
+            len(gaps),
+            self._snapshots_yielded,
+        )
+        self._emit_trace("rate", hz=round(hz, 2), p50_gap_ms=round(p50), p95_gap_ms=round(p95))
+
     async def stream(self) -> AsyncIterator[LiveSnapshot]:
-        """Drive the live-poll loop and yield each live snapshot (RS3-5-47 pair cadence)."""
+        """Drive the live-poll loop and yield each live snapshot.
+
+        Runs two background tasks sharing the one socket: a reader that acks
+        the device immediately and decodes snapshots, and a pump that keeps
+        sending poll STNCs on a fixed period regardless of whether a snapshot
+        has arrived yet. This replaces the old fixed lockstep loop (send,
+        sleep 125ms, send, sleep 125ms, block for snapshot), which capped the
+        rate at under 1 Hz even though the device can sustain 2.5-3 Hz.
+        """
         if not self.connected:
             raise RuntimeError("call connect() first")
         assert self._writer is not None
 
         logger.info(
-            "AiM live stream: poll loop starting (RS3 pair 0x20003/0x20053 + micro, %.0fms step)",
-            POLL_INTERVAL_S * 1000,
+            "AiM live stream: event-driven pump starting (~%.0fms STNC period)",
+            PUMP_PERIOD_S * 1000,
         )
         await self._autorespond_drain(idle_s=0.15, overall_timeout=1.0, label="pre-poll-sync")
         while not self._closed:
+            self._micro_owed = False
+            queue: "asyncio.Queue[LiveSnapshot]" = asyncio.Queue(maxsize=8)
+            reader_task = asyncio.create_task(self._reader_loop(queue), name="aim-live-reader")
+            pump_task = asyncio.create_task(self._pump_loop(), name="aim-live-pump")
+            device_error: BaseException | None = None
             try:
-                await self._send_rs3_poll_stnc(STNC_LIVE_POLL_A)
-                await asyncio.sleep(POLL_INTERVAL_S)
-                await self._send_rs3_poll_stnc(STNC_LIVE_POLL_B)
-                await asyncio.sleep(POLL_INTERVAL_S)
-                try:
-                    snap = await self._wait_for_live_frame(timeout=2.0)
+                while not self._closed:
+                    get_task = asyncio.ensure_future(queue.get())
+                    done, _pending = await asyncio.wait(
+                        {get_task, reader_task, pump_task},
+                        timeout=2.0,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if reader_task in done or pump_task in done:
+                        get_task.cancel()
+                        failed = reader_task if reader_task in done else pump_task
+                        device_error = failed.exception()
+                        break
+                    if get_task not in done:
+                        get_task.cancel()
+                        self._poll_a_timeouts += 1
+                        self._pending_live_size = None
+                        msg = (
+                            "AiM live stream: no live snapshot within 2s "
+                            "(pending_live_size=%s, poll_pair_timeouts=%d)."
+                        )
+                        if self._poll_a_timeouts == 1 or self._poll_a_timeouts % 10 == 0:
+                            logger.warning(msg, self._pending_live_size, self._poll_a_timeouts)
+                        else:
+                            logger.debug(msg, self._pending_live_size, self._poll_a_timeouts)
+                        continue
+
+                    snap = get_task.result()
                     self._poll_a_timeouts = 0
                     self._snapshots_yielded += 1
+                    self._record_snapshot_gap()
                     if self._snapshots_yielded == 1:
                         raw_len = len(base64.b64decode(snap.raw_b64))
                         self._emit_trace(
@@ -815,31 +996,18 @@ class AimLiveClient:
                             len(snap.channels),
                         )
                     elif self._snapshots_yielded % 100 == 0:
-                        logger.info(
-                            "AiM live stream: %d snapshots yielded",
-                            self._snapshots_yielded,
-                        )
+                        self._log_rate()
                     yield snap
-                except TimeoutError:
-                    self._poll_a_timeouts += 1
-                    self._pending_live_size = None
-                    msg = (
-                        "AiM live stream: no live snapshot within 2s after poll pair "
-                        "(pending_live_size=%s, poll_pair_timeouts=%d)."
-                    )
-                    if self._poll_a_timeouts == 1 or self._poll_a_timeouts % 10 == 0:
-                        logger.warning(
-                            msg,
-                            self._pending_live_size,
-                            self._poll_a_timeouts,
-                        )
-                    else:
-                        logger.debug(
-                            msg,
-                            self._pending_live_size,
-                            self._poll_a_timeouts,
-                        )
-            except ConnectionError:
+            except ConnectionError as exc:
+                device_error = exc
+            finally:
+                reader_task.cancel()
+                pump_task.cancel()
+                await asyncio.gather(reader_task, pump_task, return_exceptions=True)
+
+            if self._closed:
+                return
+            if isinstance(device_error, ConnectionError):
                 logger.warning(
                     "AiM live stream: device closed connection during poll "
                     "(snapshots=%d so far); attempting reconnect",
@@ -854,70 +1022,16 @@ class AimLiveClient:
                 await self._autorespond_drain(
                     idle_s=0.15, overall_timeout=1.0, label="post-reconnect-sync"
                 )
-
-    async def _send_rs3_poll_stnc(self, sub_cmd: int) -> None:
-        """RS3 steady poll: STNC then immediate micro (RS3-5-47.pcapng)."""
-        await self._send_stnc(sub_cmd)
-        await self._send_stcp(_STCP_4BYTE_ACK)
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + POLL_STNC_DRAIN_S
-        last_frame_at = loop.time()
-        while loop.time() < deadline:
-            if loop.time() - last_frame_at >= 0.12:
-                break
-            try:
-                frame = await asyncio.wait_for(
-                    self._read_one_frame(),
-                    timeout=min(0.08, deadline - loop.time()),
-                )
-            except TimeoutError:
-                continue
-            last_frame_at = loop.time()
-            if frame.cmd == b"STCP":
-                pl = frame.payload
-                if _is_live_snapshot_payload(pl):
-                    self._frame_stash.append(frame)
-                    continue
-                if len(pl) == 12:
-                    self._frame_stash.append(frame)
-                    continue
-                if len(pl) in (LIVE_FRAME_SIZE_113CH, 324, 68) and not _is_live_snapshot_payload(pl):
-                    logger.debug(
-                        "AiM live poll: absorbed non-telemetry %d B during STNC 0x%08x",
-                        len(pl),
-                        sub_cmd,
-                    )
-                    continue
-            if await self._ingest_stcp_control_frame(frame):
-                continue
-            logger.debug(
-                "AiM live poll: stashing unexpected %s during STNC 0x%08x",
-                _describe_frame(frame),
-                sub_cmd,
-            )
-            self._frame_stash.append(frame)
-
-    async def _ingest_stcp_control_frame(self, frame: Frame) -> bool:
-        """Consume I/Q/E/4B during poll-pair drain without extra micro (driver micro already sent)."""
-        if frame.cmd != b"STCP":
-            return False
-        pl = frame.payload
-        if len(pl) == 4:
-            return True
-        if len(pl) == 64 and len(pl) > 24:
-            op = pl[24]
-            if op == _STCP_OP_Q:
-                hint = struct.unpack("<I", pl[16:20])[0]
-                live_len = _q_hint_live_payload_size(hint)
-                if live_len is not None:
-                    self._pending_live_size = live_len
-                return True
-            if op in (_STCP_OP_I, _STCP_OP_E):
-                return True
-        return False
+            elif device_error is not None:
+                raise device_error
 
     def _ingest_channel_layout(self, blob: bytes, *, phase: str) -> None:
-        fields = parse_channel_layout(blob, live_frame_len=691)
+        # Cap at the largest known live-frame size (113ch EVO5 uses 707 B `Syst`
+        # frames, not just 691 B). decode_live_channels() bounds-checks each
+        # field against the actual payload length per frame, so using the widest
+        # cap here is a safe superset: fields beyond a shorter frame just decode
+        # to None instead of being silently dropped at layout-parse time.
+        fields = parse_channel_layout(blob, live_frame_len=LIVE_FRAME_SIZE_113CH)
         if not fields:
             logger.warning("AiM live: channel layout parse returned 0 fields (%s)", phase)
             return
@@ -931,11 +1045,17 @@ class AimLiveClient:
         )
 
     def _reset_stream_state(self) -> None:
-        """Clear per-TCP-connection state before a reconnect (keeps cumulative stats)."""
+        """Clear per-TCP-connection state before a reconnect (keeps cumulative stats).
+
+        `_channel_fields` is deliberately NOT cleared -- the layout is re-sent
+        during the next handshake anyway, but keeping the old one around lets
+        the first snapshot after a reconnect decode immediately instead of
+        showing zero channels until the new layout blob arrives.
+        """
         self._buf.clear()
-        self._frame_stash.clear()
         self._pending_live_size = None
         self._handshake_done = False
+        self._micro_owed = False
 
     async def _reconnect(self, *, timeout: float = 15.0) -> None:
         """Tear down the dead socket and redo TCP connect + live handshake."""
@@ -956,7 +1076,12 @@ class AimLiveClient:
     async def _reconnect_with_retry(self, *, max_attempts: int, base_backoff_s: float) -> None:
         last_exc: BaseException | None = None
         for attempt in range(1, max_attempts + 1):
-            await asyncio.sleep(base_backoff_s * attempt)
+            # No delay before the first attempt -- the device usually just
+            # opened a fresh listener, so waiting here only adds dead time to
+            # every reconnect. Back off (base * attempts-so-far) only after a
+            # failed attempt.
+            if attempt > 1:
+                await asyncio.sleep(base_backoff_s * (attempt - 1))
             try:
                 await self._reconnect()
             except Exception as exc:
@@ -1048,77 +1173,6 @@ class AimLiveClient:
         self._emit_trace("session_list_ok", session_count=len(rows))
         logger.info("AiM primary: session list ok (%d sessions)", len(rows))
         return rows
-
-    async def _wait_for_heartbeat(self, *, timeout: float) -> None:
-        deadline = asyncio.get_running_loop().time() + timeout
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise TimeoutError("no heartbeat")
-            frame = await asyncio.wait_for(self._read_one_frame(), timeout=remaining)
-            if await self._handle_stcp_control_frame(frame):
-                continue
-            if frame.cmd == b"STCP" and len(frame.payload) == 12:
-                return
-
-    async def _wait_for_live_frame(self, *, timeout: float) -> LiveSnapshot:
-        """Wait for telemetry; poll drain stashes LIVE/hb and _read_one_frame serves stash first."""
-        deadline = asyncio.get_running_loop().time() + timeout
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                logger.warning(
-                    "AiM live snapshot wait: timeout (pending_live_size=%s)",
-                    self._pending_live_size,
-                )
-                raise TimeoutError("no live frame")
-            frame = await asyncio.wait_for(self._read_one_frame(), timeout=remaining)
-            if await self._ingest_stcp_control_frame(frame):
-                continue
-            if frame.cmd != b"STCP":
-                logger.debug("AiM live snapshot wait: skipping %s", _describe_frame(frame))
-                continue
-            pl = frame.payload
-            if len(pl) in (12, 324, 68):
-                logger.debug("AiM live snapshot wait: absorbed %d B (waiting for live)", len(pl))
-                continue
-            expected = self._pending_live_size
-            if expected and len(pl) == expected:
-                self._pending_live_size = None
-                if _is_live_snapshot_payload(pl):
-                    return parse_live_snapshot(pl, self._channel_fields or None)
-                logger.debug(
-                    "AiM live snapshot wait: size %d matched pending but not telemetry (tag=%r)",
-                    len(pl),
-                    pl[4:8],
-                )
-                continue
-            elif expected and len(pl) > 64:
-                logger.debug(
-                    "AiM live snapshot wait: payload len=%d (expected %d): %s",
-                    len(pl),
-                    expected,
-                    _describe_frame(frame),
-                )
-            if _is_live_snapshot_payload(pl):
-                return parse_live_snapshot(pl, self._channel_fields or None)
-
-    async def _handle_stcp_control_frame(self, frame: Frame) -> bool:
-        """Auto-respond to control frames. Returns True if consumed."""
-        if frame.cmd != b"STCP":
-            return False
-        pl = frame.payload
-        assert self._writer is not None
-        # Server 4 B STCP during live poll is not echoed by RS3; client drives acks after each STNC.
-        if len(pl) == 4:
-            return True
-        if len(pl) == 64 and len(pl) > 24:
-            op = pl[24]
-            if op in (_STCP_OP_Q, _STCP_OP_E, _STCP_OP_I):
-                await self._respond_stcp64(pl, phase="stream", post_date_ack=False)
-                return True
-            return False
-        return False
 
     async def close(self) -> None:
         self._closed = True

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { liveWebSocketUrl, type LiveDeviceInfo, type LiveWSMessage, type AimStatus } from '../lib/api';
+import {
+  liveWebSocketUrl,
+  type LiveDeviceInfo,
+  type LiveSnapshotMessage,
+  type LiveWSMessage,
+  type AimStatus,
+} from '../lib/api';
 import { Activity, AlertCircle, ArrowLeft, Pause, Play, Wifi, WifiOff, Loader2 } from 'lucide-react';
 
 interface Snapshot {
@@ -190,6 +196,43 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
     const ws = new WebSocket(liveWebSocketUrl());
     wsRef.current = ws;
 
+    // Applies one logical message. `batch` (sent when the WS sender fell
+    // behind the device pump) unpacks into a call of this per snapshot, so
+    // the ring buffer / GPS trail / stats update exactly as if each had
+    // arrived on its own -- only the wire framing changed.
+    const applySnapshot = (msg: LiveSnapshotMessage) => {
+      if (pausedRef.current) return;
+      const snap: Snapshot = {
+        ts: msg.ts,
+        subsystem: msg.subsystem,
+        raw: msg.raw ?? '',
+        channels: msg.channels,
+      };
+      ringRef.current.push(snap);
+      if (ringRef.current.length > RING_BUFFER_SIZE) {
+        ringRef.current.shift();
+      }
+      const lat = snap.channels?.['GPS_Lat'];
+      const lon = snap.channels?.['GPS_Lon'];
+      if (lat !== undefined && lon !== undefined && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1) {
+        gpsTrailRef.current.push({ lat, lon, speed: snap.channels?.['GPS_Speed'] ?? 0 });
+        if (gpsTrailRef.current.length > 2000) {
+          gpsTrailRef.current.shift();
+        }
+      }
+      setLatest(snap);
+      setCount(ringRef.current.length);
+      setTotalReceived((n) => n + 1);
+      if (ringRef.current.length % 8 === 0) {
+        const bySubsystem: Record<string, number> = {};
+        for (const s of ringRef.current) {
+          bySubsystem[s.subsystem] = (bySubsystem[s.subsystem] || 0) + 1;
+        }
+        setBufferStats({ bySubsystem });
+        setGpsTrail([...gpsTrailRef.current]);
+      }
+    };
+
     ws.onmessage = (event) => {
       try {
         const msg: LiveWSMessage = JSON.parse(event.data);
@@ -197,36 +240,9 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
           setDevice(msg.device);
           setStatus('streaming');
         } else if (msg.type === 'snapshot') {
-          if (pausedRef.current) return;
-          const snap: Snapshot = {
-            ts: msg.ts,
-            subsystem: msg.subsystem,
-            raw: msg.raw,
-            channels: msg.channels,
-          };
-          ringRef.current.push(snap);
-          if (ringRef.current.length > RING_BUFFER_SIZE) {
-            ringRef.current.shift();
-          }
-          const lat = snap.channels?.['GPS_Lat'];
-          const lon = snap.channels?.['GPS_Lon'];
-          if (lat !== undefined && lon !== undefined && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1) {
-            gpsTrailRef.current.push({ lat, lon, speed: snap.channels?.['GPS_Speed'] ?? 0 });
-            if (gpsTrailRef.current.length > 2000) {
-              gpsTrailRef.current.shift();
-            }
-          }
-          setLatest(snap);
-          setCount(ringRef.current.length);
-          setTotalReceived((n) => n + 1);
-          if (ringRef.current.length % 8 === 0) {
-            const bySubsystem: Record<string, number> = {};
-            for (const s of ringRef.current) {
-              bySubsystem[s.subsystem] = (bySubsystem[s.subsystem] || 0) + 1;
-            }
-            setBufferStats({ bySubsystem });
-            setGpsTrail([...gpsTrailRef.current]);
-          }
+          applySnapshot(msg);
+        } else if (msg.type === 'batch') {
+          for (const inner of msg.messages) applySnapshot(inner);
         } else if (msg.type === 'error') {
           setStatus('error');
           setError(msg.message);
@@ -564,6 +580,7 @@ function Dashboard({
               </span>
               <span className="text-red-500 dark:text-red-400 font-medium shrink-0">
                 FR/RR {fmt(ch['FrBrakePressure'], 0)}/{fmt(ch['RBrkPressure'], 0)}
+                <span className="text-muted-foreground font-normal"> · Bias {fmt(ch['BrakeBias'], 1)}%</span>
               </span>
             </div>
             <div className="flex gap-0.5 h-1.5">
@@ -581,8 +598,12 @@ function Dashboard({
             <VehicleStat label="RPM"    value={fmt(ch['RPM'], 0)}      unit="" />
             <VehicleStat label="Yaw"    value={fmt(ch['YawRate'], 1)}  unit="°/s" />
             <VehicleStat label="Roll"   value={fmt(ch['RollRate'], 1)} unit="°/s" />
+            <VehicleStat label="Pitch"  value={fmt(ch['PitchRate'], 1)} unit="°/s" />
             <VehicleStat label="Lat G"  value={fmt(ch['LateralAcc'], 2)} unit="g" />
             <VehicleStat label="Long G" value={fmt(ch['InlineAcc'], 2)}  unit="g" />
+            <VehicleStat label="Vert G" value={fmt(ch['VerticalAcc'], 2)} unit="g" />
+            <VehicleStat label="BSE"    value={fmt(ch['BSE_Voltage'], 2)} unit="V" />
+            <VehicleStat label="Dir"    value={directionLabel(ch['Direction'])} unit="" />
           </div>
         </div>
       </Panel>
@@ -790,6 +811,12 @@ function Dashboard({
 function fmt(v: number | undefined, precision: number): string {
   if (v === undefined || !Number.isFinite(v)) return '—';
   return v.toFixed(precision);
+}
+
+// Direction channel: f32 1.0 = forward (docs/protocol/aim-live-protocol-deep-dive.md).
+function directionLabel(v: number | undefined): string {
+  if (v === undefined || !Number.isFinite(v)) return '—';
+  return v === 1 ? 'FWD' : 'REV';
 }
 
 function Panel({

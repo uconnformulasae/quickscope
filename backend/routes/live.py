@@ -68,42 +68,89 @@ async def live_ws(websocket: WebSocket) -> None:
         },
     })
 
-    # Run the live-poll loop in a task so we can also listen for client
-    # close/abort messages on the WebSocket.
+    # `raw_b64` is ~1 KB/snapshot and the UI only reads `channels` -- only
+    # pay for it when a client explicitly asks (e.g. for offline debugging).
+    send_raw = websocket.query_params.get("raw") == "1"
+
+    # The device-facing pump and the WebSocket sender run as separate tasks
+    # joined by a bounded queue, so a slow browser (a busy tab, backpressure
+    # on the socket) can never hold up the loop that acks the AiM device --
+    # `await websocket.send_json(...)` used to run inline in the same loop
+    # that read `client.stream()`, which meant a slow client directly slowed
+    # down the live poll. New snapshots crowd out old ones once the queue
+    # fills, since only the latest data is useful to a live view.
     stop = asyncio.Event()
     device_dropped = False
+    queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+    _SENTINEL = None
 
-    async def _pump_live() -> None:
+    def _snapshot_message(snap) -> dict:
+        msg = {
+            "type": "snapshot",
+            "ts": snap.timestamp_ms,
+            "subsystem": snap.subsystem,
+            "channels": snap.channels,
+        }
+        if send_raw:
+            msg["raw"] = snap.raw_b64
+        return msg
+
+    def _enqueue(item: dict) -> None:
+        if queue.full():
+            try:
+                queue.get_nowait()  # drop the oldest, keep the newest
+            except asyncio.QueueEmpty:
+                pass
+        queue.put_nowait(item)
+
+    async def _pump_device() -> None:
         nonlocal device_dropped
         try:
             async for snap in client.stream():
                 if stop.is_set():
                     break
-                await websocket.send_json({
-                    "type": "snapshot",
-                    "ts": snap.timestamp_ms,
-                    "subsystem": snap.subsystem,
-                    "raw": snap.raw_b64,
-                    "channels": snap.channels,
-                })
+                _enqueue(_snapshot_message(snap))
         except ConnectionError as exc:
             device_dropped = True
             logger.info("Live WS: device closed TCP during stream: %s", exc)
-            try:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": "AiM device closed the live connection. Close Race Studio live if open and retry.",
-                })
-            except Exception:
-                pass
+            _enqueue({
+                "type": "error",
+                "message": "AiM device closed the live connection. Close Race Studio live if open and retry.",
+            })
         except Exception as exc:
             logger.exception("live stream pump failed")
-            try:
-                await websocket.send_json({"type": "error", "message": str(exc)})
-            except Exception:
-                pass
+            _enqueue({"type": "error", "message": str(exc)})
+        finally:
+            await queue.put(_SENTINEL)
 
-    pump_task = asyncio.create_task(_pump_live())
+    async def _send_loop() -> None:
+        """Drain the queue and send to the browser, batching whatever piled
+        up while a send was in flight so a burst costs one WS frame, not N."""
+        while True:
+            item = await queue.get()
+            if item is _SENTINEL:
+                return
+            batch = [item]
+            while not queue.empty():
+                nxt = queue.get_nowait()
+                if nxt is _SENTINEL:
+                    await _send_batch(batch)
+                    return
+                batch.append(nxt)
+            await _send_batch(batch)
+
+    async def _send_batch(batch: list[dict]) -> None:
+        try:
+            if len(batch) == 1:
+                await websocket.send_json(batch[0])
+            else:
+                await websocket.send_json({"type": "batch", "messages": batch})
+        except Exception:
+            logger.debug("Live WS: send failed (client likely disconnected)")
+            raise
+
+    pump_task = asyncio.create_task(_pump_device())
+    send_task = asyncio.create_task(_send_loop())
     try:
         while True:
             msg = await websocket.receive_text()
@@ -116,10 +163,12 @@ async def live_ws(websocket: WebSocket) -> None:
     finally:
         stop.set()
         pump_task.cancel()
-        try:
-            await pump_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        send_task.cancel()
+        for task in (pump_task, send_task):
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         if device_dropped:
             logger.info("Live WS: session ending, closing primary TCP after device drop")
             await hub.close_primary()
