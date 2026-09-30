@@ -35,11 +35,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import socket
 import struct
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, AsyncIterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Callable, Optional
 
 if TYPE_CHECKING:
     from services.aim_live_trace import AimLiveTrace
@@ -89,6 +90,19 @@ POST_SETUP_DRAIN_IDLE_S = 0.2
 # never notices. We do the same here instead of ending the stream.
 RECONNECT_MAX_ATTEMPTS = 10
 RECONNECT_BACKOFF_S = 1.0
+# Fast-recovery tuning. A drop is routine, so a dead attempt must be cheap:
+# the trace logs show good reconnects finish in ~3s, while a hello the device
+# never answers used to burn the full 15s. Kill that socket after
+# RECONNECT_HELLO_TIMEOUT_S and dial a fresh one, on a short capped backoff,
+# inside an overall time budget rather than an attempt count.
+RECONNECT_TCP_TIMEOUT_S = 3.0
+RECONNECT_HELLO_TIMEOUT_S = 2.0
+RECONNECT_HANDSHAKE_TIMEOUT_S = 15.0
+RECONNECT_DELAYS_S = (0.0, 0.15, 0.3, 0.5)  # last value repeats
+RECONNECT_BUDGET_S = 60.0
+# No frame of any kind from the device for this long == the link is dead even
+# if the FIN never arrives; redial instead of waiting.
+STALL_RECONNECT_S = 3.0
 
 _ENUM_BLOB_MIN_LEN = 3400
 
@@ -409,6 +423,18 @@ class AimLiveClient:
         self._micro_owed = False
         self._snapshot_gaps_ms: deque[float] = deque(maxlen=64)
         self._last_snapshot_at: float | None = None
+        self._last_rx_at: float | None = None
+        # Optional sink for connection-state events (e.g. "reconnecting" /
+        # "live") so the WS route can tell the browser the device link is
+        # cycling instead of the UI just appearing to freeze.
+        self.on_status: Optional[Callable[[dict], None]] = None
+
+    def _emit_status(self, state: str, **fields: object) -> None:
+        if self.on_status is not None:
+            try:
+                self.on_status({"state": state, **fields})
+            except Exception:
+                logger.debug("AiM live: on_status callback failed", exc_info=True)
 
     def _emit_trace(self, event: str, **fields: object) -> None:
         if self._session_trace is not None:
@@ -418,7 +444,16 @@ class AimLiveClient:
     def connected(self) -> bool:
         return self._writer is not None and not self._writer.is_closing()
 
-    async def connect(self, *, discover_first: bool = True, timeout: float = 15.0) -> None:
+    async def connect(
+        self,
+        *,
+        discover_first: bool = True,
+        timeout: float = 15.0,
+        hello_timeout: float | None = None,
+        tcp_timeout: float | None = None,
+    ) -> None:
+        hello_timeout = timeout if hello_timeout is None else hello_timeout
+        tcp_timeout = timeout if tcp_timeout is None else tcp_timeout
         configured = self.host
         self._emit_trace("connect_begin", configured_host=configured, timeout_s=timeout)
         cached = None
@@ -479,11 +514,11 @@ class AimLiveClient:
         self._emit_trace("tcp_begin", host=self.host, port=self.port)
         try:
             self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.port), timeout=timeout
+                asyncio.open_connection(self.host, self.port), timeout=tcp_timeout
             )
         except TimeoutError as exc:
             msg = (
-                f"Timed out after {timeout:.0f}s opening TCP to {self.host}:{self.port}. "
+                f"Timed out after {tcp_timeout:.0f}s opening TCP to {self.host}:{self.port}. "
                 "Close Race Studio live view and run: Test-NetConnection "
                 f"{self.host} -Port {self.port}"
             )
@@ -494,15 +529,23 @@ class AimLiveClient:
             logger.warning("AiM live connect: TCP open failed: %s", exc)
             self._emit_trace("tcp_failed", reason="oserror", message=str(exc))
             raise ConnectionError(f"TCP connect to {self.host}:{self.port} failed: {exc}") from exc
+        sock = self._writer.get_extra_info("socket")
+        if sock is not None:
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            except OSError:
+                pass
+        self._last_rx_at = asyncio.get_running_loop().time()
         logger.info("AiM live connect: TCP open ok, sending STCP hello")
         self._emit_trace("tcp_ok")
         await self._send_stcp(_STCP_HELLO)
         self._emit_trace("hello_sent")
         try:
-            hello_ack = await self._expect(b"STCP", min_payload_len=8, timeout=timeout)
+            hello_ack = await self._expect(b"STCP", min_payload_len=8, timeout=hello_timeout)
         except TimeoutError as exc:
             msg = (
-                f"Timed out after {timeout:.0f}s waiting for STCP hello-ack from {self.host}. "
+                f"Timed out after {hello_timeout:.0f}s waiting for STCP hello-ack from {self.host}. "
                 "TCP connected but the logger did not answer — another app may hold port 2000."
             )
             logger.warning("AiM live connect: %s", msg)
@@ -820,6 +863,7 @@ class AimLiveClient:
                 logger.warning("AiM live: device closed TCP (decode_resync_bytes=%d)", self._decode_resync_bytes)
                 raise ConnectionError("AiM device closed the connection")
             self._buf.extend(chunk)
+            self._last_rx_at = asyncio.get_running_loop().time()
 
     async def _pay_micro_if_owed(self) -> None:
         """Send the micro-ack owed for the last poll STNC, if not already paid."""
@@ -892,7 +936,7 @@ class AimLiveClient:
                 continue
             if _is_live_snapshot_payload(pl):
                 snap = parse_live_snapshot(pl, self._channel_fields or None)
-                await queue.put(snap)
+                queue.put_nowait(snap)
                 continue
             logger.debug("AiM live reader: unrecognized STCP payload len=%d", len(pl))
 
@@ -943,7 +987,9 @@ class AimLiveClient:
         await self._autorespond_drain(idle_s=0.15, overall_timeout=1.0, label="pre-poll-sync")
         while not self._closed:
             self._micro_owed = False
-            queue: "asyncio.Queue[LiveSnapshot]" = asyncio.Queue(maxsize=8)
+            # Unbounded on purpose: the reader must never block on a slow consumer,
+            # or it stops paying micro-acks and the device stalls/drops us.
+            queue: "asyncio.Queue[LiveSnapshot]" = asyncio.Queue()
             reader_task = asyncio.create_task(self._reader_loop(queue), name="aim-live-reader")
             pump_task = asyncio.create_task(self._pump_loop(), name="aim-live-pump")
             device_error: BaseException | None = None
@@ -964,6 +1010,12 @@ class AimLiveClient:
                         get_task.cancel()
                         self._poll_a_timeouts += 1
                         self._pending_live_size = None
+                        idle = asyncio.get_running_loop().time() - (self._last_rx_at or 0.0)
+                        if self._last_rx_at is not None and idle >= STALL_RECONNECT_S:
+                            device_error = ConnectionError(
+                                f"no data from AiM device for {idle:.1f}s"
+                            )
+                            break
                         msg = (
                             "AiM live stream: no live snapshot within 2s "
                             "(pending_live_size=%s, poll_pair_timeouts=%d)."
@@ -1014,6 +1066,8 @@ class AimLiveClient:
                     self._snapshots_yielded,
                 )
                 self._emit_trace("device_dropped", snapshots=self._snapshots_yielded)
+                dropped_at = asyncio.get_running_loop().time()
+                self._emit_status("reconnecting", snapshots=self._snapshots_yielded)
                 # Raises (propagating to the caller) if the device never comes back.
                 await self._reconnect_with_retry(
                     max_attempts=RECONNECT_MAX_ATTEMPTS,
@@ -1022,6 +1076,9 @@ class AimLiveClient:
                 await self._autorespond_drain(
                     idle_s=0.15, overall_timeout=1.0, label="post-reconnect-sync"
                 )
+                gap_ms = round((asyncio.get_running_loop().time() - dropped_at) * 1000)
+                self._emit_trace("stream_resumed", gap_ms=gap_ms)
+                self._emit_status("live", gap_ms=gap_ms)
             elif device_error is not None:
                 raise device_error
 
@@ -1057,7 +1114,13 @@ class AimLiveClient:
         self._handshake_done = False
         self._micro_owed = False
 
-    async def _reconnect(self, *, timeout: float = 15.0) -> None:
+    async def _reconnect(
+        self,
+        *,
+        timeout: float = 15.0,
+        hello_timeout: float | None = None,
+        tcp_timeout: float | None = None,
+    ) -> None:
         """Tear down the dead socket and redo TCP connect + live handshake."""
         if self._writer is not None:
             try:
@@ -1071,39 +1134,54 @@ class AimLiveClient:
         # discover_first=True but the device cache written on the original
         # connect is still fresh, so this resolves instantly without a new
         # UDP broadcast (see connect()'s cache check).
-        await self.connect(discover_first=True, timeout=timeout)
+        await self.connect(
+            discover_first=True,
+            timeout=timeout,
+            hello_timeout=hello_timeout,
+            tcp_timeout=tcp_timeout,
+        )
 
-    async def _reconnect_with_retry(self, *, max_attempts: int, base_backoff_s: float) -> None:
+    async def _reconnect_with_retry(
+        self,
+        *,
+        max_attempts: int = RECONNECT_MAX_ATTEMPTS,
+        base_backoff_s: float = RECONNECT_BACKOFF_S,
+        budget_s: float = RECONNECT_BUDGET_S,
+    ) -> None:
+        """Redial fast until the device answers or `budget_s` runs out.
+
+        Every attempt uses a brand-new socket with a short hello timeout, so a
+        listener that accepts TCP but never answers the hello costs ~2s
+        instead of 15s. `max_attempts` / `base_backoff_s` are kept for
+        call-site compatibility; the time budget is the real limit.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + budget_s
         last_exc: BaseException | None = None
-        for attempt in range(1, max_attempts + 1):
-            # No delay before the first attempt -- the device usually just
-            # opened a fresh listener, so waiting here only adds dead time to
-            # every reconnect. Back off (base * attempts-so-far) only after a
-            # failed attempt.
-            if attempt > 1:
-                await asyncio.sleep(base_backoff_s * (attempt - 1))
+        attempt = 0
+        while not self._closed and (attempt == 0 or loop.time() < deadline):
+            delay = RECONNECT_DELAYS_S[min(attempt, len(RECONNECT_DELAYS_S) - 1)]
+            attempt += 1
+            if delay:
+                await asyncio.sleep(delay)
             try:
-                await self._reconnect()
+                await self._reconnect(
+                    timeout=RECONNECT_HANDSHAKE_TIMEOUT_S,
+                    hello_timeout=RECONNECT_HELLO_TIMEOUT_S,
+                    tcp_timeout=RECONNECT_TCP_TIMEOUT_S,
+                )
             except Exception as exc:
                 last_exc = exc
-                logger.warning(
-                    "AiM live stream: reconnect attempt %d/%d failed: %s",
-                    attempt,
-                    max_attempts,
-                    exc,
-                )
+                logger.warning("AiM live stream: reconnect attempt %d failed: %s", attempt, exc)
                 self._emit_trace(
-                    "device_reconnect_attempt_failed",
-                    attempt=attempt,
-                    max_attempts=max_attempts,
-                    error=str(exc),
+                    "device_reconnect_attempt_failed", attempt=attempt, error=str(exc)
                 )
+                self._emit_status("reconnecting", attempt=attempt)
                 continue
             logger.info(
                 "AiM live stream: reconnected after device drop "
-                "(attempt %d/%d, snapshots so far=%d)",
+                "(attempt %d, snapshots so far=%d)",
                 attempt,
-                max_attempts,
                 self._snapshots_yielded,
             )
             self._emit_trace(
@@ -1111,10 +1189,10 @@ class AimLiveClient:
             )
             return
         self._emit_trace(
-            "device_reconnect_failed", snapshots=self._snapshots_yielded, attempts=max_attempts
+            "device_reconnect_failed", snapshots=self._snapshots_yielded, attempts=attempt
         )
         raise ConnectionError(
-            f"AiM device did not come back after {max_attempts} reconnect attempts"
+            f"AiM device did not come back after {attempt} reconnect attempts ({budget_s:.0f}s)"
         ) from last_exc
 
     async def stop_streaming(self) -> None:

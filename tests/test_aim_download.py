@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import shutil
 import struct
 import subprocess
@@ -13,10 +14,10 @@ import pytest
 
 from services.aim_connector import (
     _BATCH_PAYLOAD_BYTES,
+    _IncrementalReassembler,
     _STCP_MICRO_ACK,
     _STCP_Q_ACK_OPCODE,
     _STCP_Q_ACK_OPCODE_OFFSET,
-    _detect_duplicate_batch_content,
     _drain_download_frames,
     _extract_data_blocks,
     _make_download_progress_ack,
@@ -68,17 +69,12 @@ def test_try_extract_file_size_returns_zero_without_blocks():
     assert _try_extract_file_size(b"not-a-protocol-stream") == 0
 
 
-def test_extract_data_blocks_appends_when_batch_offsets_reset():
-    batch_one = _file_block(0, b"a" * 100) + _file_block(50, b"b" * 50)
-    batch_two = _file_block(0, b"c" * 80)
-    raw = batch_one + batch_two
+def test_extract_data_blocks_places_blocks_by_absolute_offset():
+    raw = _file_block(100, b"b" * 50) + _file_block(0, b"a" * 100) + _file_block(150, b"c" * 30)
 
     result = _extract_data_blocks(raw)
 
-    assert len(result) == 180
-    assert result[:50] == b"a" * 50
-    assert result[50:100] == b"b" * 50
-    assert result[100:180] == b"c" * 80
+    assert result == b"a" * 100 + b"b" * 50 + b"c" * 30
 
 
 def test_extract_data_blocks_trims_to_expected_size():
@@ -86,25 +82,32 @@ def test_extract_data_blocks_trims_to_expected_size():
     assert len(_extract_data_blocks(raw, expected_size=150)) == 150
 
 
-def test_extract_data_blocks_skips_first_batch_retransmission():
-    batch_one = _file_block(0, b"a" * 200)
-    duplicate = _file_block(0, b"a" * 200)
-    batch_two = _file_block(0, b"b" * 100)
-    raw = batch_one + duplicate + batch_two
+def test_replayed_blocks_after_resume_do_not_shift_or_corrupt_the_file():
+    """QS_Pull_242.pcapng: a mid-batch ACK made the device replay from an
+    earlier offset. Replays must overwrite the same bytes, not append."""
+    file = bytes(i % 251 for i in range(1000))
+    blocks = [(off, file[off:off + 100]) for off in range(0, 1000, 100)]
+    replay = blocks[:6] + blocks[3:8] + blocks[5:]  # restarts at 300, then 500
+    reassembler = _IncrementalReassembler()
+    for off, data in replay:
+        reassembler.feed(off, data)
 
-    result = _extract_data_blocks(raw)
+    assert len(reassembler) == 1000
+    assert reassembler.covered == 1000
+    assert bytes(reassembler.file_data) == file
+    assert reassembler.conflicts == 0
 
-    assert len(result) == 300
-    assert result[:200] == b"a" * 200
-    assert result[200:] == b"b" * 100
 
-
-def test_detect_duplicate_batch_content_flags_repeated_chunks():
-    chunk = b"Z" * _BATCH_PAYLOAD_BYTES
-    assert _detect_duplicate_batch_content(chunk + chunk) is True
-    assert _detect_duplicate_batch_content(chunk + b"Y" * _BATCH_PAYLOAD_BYTES) is False
-    interleaved = chunk + (b"\x00" * _BATCH_PAYLOAD_BYTES) + chunk
-    assert _detect_duplicate_batch_content(interleaved) is True
+def test_reassembler_tracks_gaps_and_contiguous_prefix():
+    r = _IncrementalReassembler()
+    r.feed(0, b"a" * 100)
+    r.feed(200, b"c" * 100)
+    assert len(r) == 100
+    assert r.covered == 200
+    assert not r.is_complete(300)
+    r.feed(100, b"b" * 100)
+    assert len(r) == 300
+    assert r.is_complete(300)
 
 
 def test_make_download_progress_ack_encodes_byte_count():
@@ -196,30 +199,56 @@ def test_drain_download_frames_ignores_q_ack_during_download():
     assert sock.sent == []
 
 
-def test_receive_file_data_sends_progress_stall_ack_on_timeout(tmp_path, monkeypatch):
-    trace_dir = tmp_path / "logs"
-    monkeypatch.setattr(
-        "services.aim_download_trace._LOG_DIR",
-        trace_dir,
-    )
+def test_receive_file_data_short_pause_sends_no_mid_batch_ack(tmp_path, monkeypatch):
+    """A pause shorter than _STALL_RESUME_S (normal after WiFi loss) must not
+    ACK -- that is what corrupted QS_Pull_242."""
+    monkeypatch.setattr("services.aim_download_trace._LOG_DIR", tmp_path / "logs")
     sock = _RecordingSocket()
     trace = AimDownloadTrace("test.xrz", 500)
 
-    with patch(
-        "services.aim_connector.time.monotonic",
-        side_effect=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 1000],
-    ):
-        try:
+    ticks = itertools.chain(
+        (i * 0.05 for i in range(60)),  # 3s of silence: a normal TCP-recovery pause
+        itertools.repeat(1000.0),  # then the idle limit trips
+    )
+    with patch("services.aim_connector.time.monotonic", side_effect=lambda: next(ticks)):
+        with pytest.raises(RuntimeError):
             _receive_file_data(sock, 500, trace)
-        except RuntimeError:
-            pass
 
-    progress_acks = [
-        item for item in sock.sent if _ack_payload_bytes(item) == 100
-    ]
-    assert progress_acks
+    assert sock.sent == []
     trace.close(status="test")
-    assert trace.path.exists()
+
+
+def test_receive_file_data_resume_ack_after_long_silence(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.aim_download_trace._LOG_DIR", tmp_path / "logs")
+    sock = _RecordingSocket()
+    trace = AimDownloadTrace("test.xrz", 500)
+
+    ticks = itertools.count(0, 1.0)  # 1s per clock read: silence crosses 8s quickly
+    with patch("services.aim_connector.time.monotonic", side_effect=lambda: next(ticks)):
+        with pytest.raises(RuntimeError):
+            _receive_file_data(sock, 500, trace)
+
+    assert [_ack_payload_bytes(item) for item in sock.sent][:1] == [100]
+    trace.close(status="test")
+
+
+def test_receive_file_data_multi_batch_with_replay_yields_exact_file():
+    """Batch-boundary ACKs, a mid-stream replay from an earlier offset, and
+    exact-size completion (QS_Pull_242 shape, scaled down by patching the
+    batch size)."""
+    file = bytes((i * 7) % 253 for i in range(1200))
+    blk = 100
+    blocks = [_file_block(off, file[off:off + blk]) for off in range(0, 1200, blk)]
+    # batch 1: 0..600, then device replays from 300 (an early ACK), batch continues.
+    raw = b"".join(blocks[:6] + blocks[3:9] + blocks[9:])
+
+    with patch("services.aim_connector._BATCH_PAYLOAD_BYTES", 600):
+        sock = _FixedChunkReplaySocket(raw, 777)
+        result = _receive_file_data(sock, 1200, trace=None)
+
+    assert result == file
+    acks = [_ack_payload_bytes(item) for item in sock.sent]
+    assert acks and acks[0] == 600
 
 
 @pytest.mark.skipif(
@@ -352,7 +381,7 @@ def test_receive_file_data_incremental_matches_legacy_reassembly(chunk_size):
     batch_one = b"".join(
         _file_block(off, bytes([off % 251]) * 200) for off in range(0, 2000, 200)
     )
-    batch_two = _file_block(0, b"Z" * 300)  # offset resets -> new batch
+    batch_two = _file_block(2000, b"Z" * 300)
     raw = batch_one + batch_two
     expected = _extract_data_blocks(raw)
 

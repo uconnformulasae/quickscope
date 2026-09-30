@@ -178,6 +178,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
   const [status, setStatus] = useState<Status>('idle');
   const [device, setDevice] = useState<LiveDeviceInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
   const [latest, setLatest] = useState<Snapshot | null>(null);
   const [count, setCount] = useState(0);
   const [totalReceived, setTotalReceived] = useState(0);
@@ -233,20 +234,27 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
       }
     };
 
+    const applyMessage = (msg: LiveWSMessage) => {
+      if (msg.type === 'connected') {
+        setDevice(msg.device);
+        setStatus('streaming');
+      } else if (msg.type === 'snapshot') {
+        applySnapshot(msg);
+      } else if (msg.type === 'batch') {
+        for (const inner of msg.messages) applyMessage(inner);
+      } else if (msg.type === 'status') {
+        // Keep the last values on screen through a device drop; only flag it.
+        setReconnecting(msg.state === 'reconnecting');
+      } else if (msg.type === 'error') {
+        setStatus('error');
+        setError(msg.message);
+      }
+      // 'heartbeat' needs no handling: it only proves the WS is alive.
+    };
+
     ws.onmessage = (event) => {
       try {
-        const msg: LiveWSMessage = JSON.parse(event.data);
-        if (msg.type === 'connected') {
-          setDevice(msg.device);
-          setStatus('streaming');
-        } else if (msg.type === 'snapshot') {
-          applySnapshot(msg);
-        } else if (msg.type === 'batch') {
-          for (const inner of msg.messages) applySnapshot(inner);
-        } else if (msg.type === 'error') {
-          setStatus('error');
-          setError(msg.message);
-        }
+        applyMessage(JSON.parse(event.data) as LiveWSMessage);
       } catch {
         // ignore non-JSON
       }
@@ -259,6 +267,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
 
     ws.onclose = () => {
       wsRef.current = null;
+      setReconnecting(false);
       setStatus(prev => (prev === 'error' ? 'error' : 'idle'));
     };
   }, []);
@@ -353,7 +362,13 @@ ${points}
 
         {/* Status indicator */}
         <div className="flex items-center gap-1.5 text-xs">
-          {status === 'streaming' && (
+          {status === 'streaming' && reconnecting && (
+            <span className="flex items-center gap-1.5 text-amber-500 dark:text-amber-400">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Reconnecting to logger…
+            </span>
+          )}
+          {status === 'streaming' && !reconnecting && (
             <span className="flex items-center gap-1.5 text-emerald-500 dark:text-emerald-400">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse" />
               Streaming

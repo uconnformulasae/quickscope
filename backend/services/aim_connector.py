@@ -47,39 +47,22 @@ _ACK = bytes.fromhex("3c685354435004000000003e000000003c5354435000003e")
 _STCP_MICRO_ACK = encode_frame(b"STCP", b"\x00\x00\x00\x00")
 _STCP_Q_ACK_OPCODE = ord("Q")
 _STCP_Q_ACK_OPCODE_OFFSET = 24
-_BATCH_DUP_SAMPLE = 4096
-_BATCH_BOUNDARY_MIN_OFFSET = 32_744
+# The device streams a file in batches of 30 blocks (982,320 bytes) and then
+# waits for a cumulative-progress ACK. Each block carries its *absolute* file
+# offset (RS3_PULL_241/242.pcapng: one contiguous 0..N run). An ACK for N
+# means "I have everything below N, send the next batch starting at N" -- so
+# an ACK sent mid-batch makes the device replay from N after it finishes the
+# batch in flight (QS_Pull_242.pcapng). Blocks are therefore placed by offset,
+# and completeness is judged by byte coverage rather than by stream length.
 _BATCH_PAYLOAD_BYTES = 982_320
-
-
-def _is_first_batch_retransmit(file_data: bytes, file_offset: int, data: bytes) -> bool:
-    """True when a post-boundary block repeats bytes from the first ~982 KB batch."""
-    if len(file_data) < _BATCH_BOUNDARY_MIN_OFFSET:
-        return False
-    end = file_offset + len(data)
-    if end > _BATCH_PAYLOAD_BYTES:
-        return False
-    return file_data[file_offset:end] == data
-
-
-def _detect_duplicate_batch_content(file_data: bytes) -> bool:
-    """True when reassembly contains repeated first-batch content or zero gaps."""
-    if len(file_data) < _BATCH_DUP_SAMPLE * 2:
-        return False
-    sample = _BATCH_DUP_SAMPLE
-    period = _BATCH_PAYLOAD_BYTES
-    if len(file_data) >= period + sample:
-        if file_data[:sample] == file_data[period:period + sample]:
-            return True
-        gap = file_data[period:period + sample]
-        if gap == b"\x00" * len(gap):
-            return True
-    for segment in (2, 4, 6):
-        offset = segment * period
-        if offset + sample <= len(file_data):
-            if file_data[:sample] == file_data[offset:offset + sample]:
-                return True
-    return False
+# TCP loss on the WiFi link stalls the device ~1.5-3 s (its retransmit timer;
+# it ignores dup-ACKs). That is not a reason to re-prompt it. Only after this
+# long with no bytes at all do we ask it to resume from the contiguous prefix.
+_STALL_RESUME_S = 8.0
+_HANDSHAKE_REPLY_TIMEOUT_S = 5.0
+# Give up if no *new contiguous* bytes for this long (leaves room for one or two
+# resume ACKs at _STALL_RESUME_S intervals).
+_PROGRESS_IDLE_S = 30.0
 
 
 def _get_device_ip() -> str:
@@ -119,6 +102,7 @@ def _open_device_socket(timeout: float = 10) -> tuple[socket.socket, str]:
         # platforms clamp this silently, which is harmless.
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except OSError:
             pass
         try:
@@ -185,6 +169,36 @@ def _send_and_recv(sock: socket.socket, msg: bytes, label: str, read_timeout: fl
     except socket.timeout:
         pass
 
+    logger.debug("Received %d bytes for %s", len(buf), label)
+    return buf
+
+
+def _send_and_await_frame(
+    sock: socket.socket, msg: bytes, label: str, timeout: float = 5.0
+) -> bytes:
+    """Send `msg` and return as soon as one complete protocol frame has arrived.
+
+    `_send_and_recv` always waits an extra 0.5 s idle window for continuation
+    data; a single-frame reply (the handshake hello-ack) doesn't need it.
+    """
+    logger.debug("Sending %s (%d bytes)", label, len(msg))
+    sock.sendall(msg)
+    sock.settimeout(timeout)
+    buf = b""
+    try:
+        while True:
+            chunk = sock.recv(8192)
+            if not chunk:
+                break
+            buf += chunk
+            try:
+                frame, _ = decode_frame(buf)
+            except ValueError:
+                break
+            if frame is not None:
+                break
+    except socket.timeout:
+        pass
     logger.debug("Received %d bytes for %s", len(buf), label)
     return buf
 
@@ -332,13 +346,19 @@ def _build_download_request(filepath: str) -> bytes:
     return header + bytes(payload) + trailer
 
 
+# 64-byte STCP control frames carry an opcode byte at payload[24]:
+# 'A'/'I'/'E'/'H' handshake+ack frames and 'Q' size/ack frames.
+_STCP_CONTROL_OPCODES = frozenset(b"AIQEH")
+
+
 def _is_stcp_file_payload(payload: bytes) -> bool:
     """True when payload is file data (u32 offset + bytes), not a control frame."""
     if len(payload) <= 4:
         return False
     if (
         len(payload) == 64
-        and payload[_STCP_Q_ACK_OPCODE_OFFSET] == _STCP_Q_ACK_OPCODE
+        and payload[4:8] == b"\x00\x00\x00\x00"
+        and payload[_STCP_Q_ACK_OPCODE_OFFSET] in _STCP_CONTROL_OPCODES
     ):
         return False
     return True
@@ -373,51 +393,69 @@ def _iter_file_blocks(raw: bytes) -> list[tuple[int, bytes]]:
 
 
 class _IncrementalReassembler:
-    """Applies one (file_offset, data) block at a time to a running buffer.
+    """Places (absolute file offset, data) blocks and tracks byte coverage.
 
-    This is the same batch-offset-reset algorithm `_extract_data_blocks()`
-    used to run from scratch on every `recv()` over the *entire* stream seen
-    so far (O(n) work times ~1300 calls = O(n^2) for a ~1.24 MB file). Feeding
-    one block at a time as it's parsed off the wire makes each block O(1)
-    amortized, and `_extract_data_blocks()` now just replays all blocks
-    through the same class once, as the final authoritative check.
+    Idempotent: a block the device replays (after a resume ACK) lands on the
+    same bytes it already wrote, so duplicates can never shift or corrupt the
+    file. `len()` is the *contiguous* prefix length -- the value the device
+    wants in a progress ACK -- while `covered` counts every distinct byte.
     """
 
     def __init__(self) -> None:
         self.file_data = bytearray()
-        self._batch_base = 0
-        self._prev_offset = -1
+        self._spans: list[list[int]] = []  # sorted, disjoint [start, end)
+        self.conflicts = 0  # replayed bytes that differed from what we had
 
     def feed(self, file_offset: int, data: bytes) -> None:
-        if _is_first_batch_retransmit(self.file_data, file_offset, data):
+        end = file_offset + len(data)
+        if end > len(self.file_data):
+            self.file_data.extend(b"\x00" * (end - len(self.file_data)))
+        if self._is_covered(file_offset, end) and self.file_data[file_offset:end] != data:
+            self.conflicts += 1
+        self.file_data[file_offset:end] = data
+        self._add_span(file_offset, end)
+
+    def _is_covered(self, start: int, end: int) -> bool:
+        return any(s <= start and end <= e for s, e in self._spans)
+
+    def _add_span(self, start: int, end: int) -> None:
+        spans = self._spans
+        # Fast path: in-order append (the normal case).
+        if spans and start == spans[-1][1]:
+            spans[-1][1] = end
             return
-        if self.file_data and file_offset < self._prev_offset:
-            self._batch_base = len(self.file_data)
-        abs_offset = self._batch_base + file_offset
-        if (
-            abs_offset + len(data) <= len(self.file_data)
-            and self.file_data[abs_offset:abs_offset + len(data)] == data
-        ):
-            self._prev_offset = max(self._prev_offset, file_offset + len(data) - 1)
-            return
-        needed = abs_offset + len(data)
-        if needed > len(self.file_data):
-            self.file_data.extend(b"\x00" * (needed - len(self.file_data)))
-        self.file_data[abs_offset:abs_offset + len(data)] = data
-        self._prev_offset = file_offset
+        merged: list[list[int]] = []
+        placed = False
+        for s, e in spans:
+            if e < start:
+                merged.append([s, e])
+            elif end < s:
+                if not placed:
+                    merged.append([start, end])
+                    placed = True
+                merged.append([s, e])
+            else:
+                start, end = min(start, s), max(end, e)
+        if not placed:
+            merged.append([start, end])
+        self._spans = merged
+
+    @property
+    def covered(self) -> int:
+        return sum(e - s for s, e in self._spans)
 
     def __len__(self) -> int:
-        return len(self.file_data)
+        """Contiguous bytes from offset 0."""
+        if self._spans and self._spans[0][0] == 0:
+            return self._spans[0][1]
+        return 0
+
+    def is_complete(self, total: int) -> bool:
+        return total > 0 and len(self) >= total
 
 
 def _extract_data_blocks(raw: bytes, expected_size: int = 0) -> bytes:
-    """Parse STCP data blocks and reassemble the file.
-
-    The device sends the file in batches. Each batch uses file offsets
-    relative to zero; when a new batch starts the offset resets even though
-    TCP data continues. Append batches sequentially instead of sorting by
-    absolute offset (which silently overwrites the first ~982 KB).
-    """
+    """Parse STCP data blocks out of a whole stream and reassemble the file."""
     blocks = _iter_file_blocks(raw)
     if not blocks:
         raise RuntimeError(f"No data blocks found in {len(raw)} bytes of response")
@@ -526,22 +564,28 @@ def _prompt_next_batch(
     *,
     extracted_size: int,
     acked_through: int,
+    total_file_size: int = 0,
     trace: AimDownloadTrace | None,
 ) -> tuple[int, int]:
-    """Send one progress ACK each time unique extracted size completes another batch."""
-    sent = 0
-    while extracted_size >= acked_through + _BATCH_PAYLOAD_BYTES:
-        acked_through += _BATCH_PAYLOAD_BYTES
-        _send_download_progress_ack(sock, acked_through)
-        sent += 1
-        if trace is not None:
-            trace.log(
-                "batch_complete_ack",
-                extracted_bytes=extracted_size,
-                acked_through=acked_through,
-                ack_payload_bytes=acked_through,
-            )
-    return acked_through, sent
+    """ACK the contiguous prefix once a full batch has landed since the last ACK.
+
+    `extracted_size` must be the contiguous byte count from offset 0. Nothing
+    is sent for the final (partial) batch: once the file is complete there is
+    nothing left to ask the device for.
+    """
+    if extracted_size < acked_through + _BATCH_PAYLOAD_BYTES:
+        return acked_through, 0
+    if total_file_size > 0 and extracted_size >= total_file_size:
+        return acked_through, 0
+    _send_download_progress_ack(sock, extracted_size)
+    if trace is not None:
+        trace.log(
+            "batch_complete_ack",
+            extracted_bytes=extracted_size,
+            acked_through=extracted_size,
+            ack_payload_bytes=extracted_size,
+        )
+    return extracted_size, 1
 
 
 def _drain_download_frames(
@@ -577,87 +621,65 @@ def _drain_download_frames(
     return frame_buffer, micro_acks_sent
 
 
-def _send_stall_ack(
-    sock: socket.socket,
-    *,
-    extracted_size: int,
-    last_stall_ack_bytes: int | None,
-    trace: AimDownloadTrace | None,
-) -> tuple[str, int | None, bool]:
-    """Prompt device after transfer pauses mid-file using a progress-encoded ACK."""
-    ack_payload = extracted_size
-    if last_stall_ack_bytes == ack_payload:
-        if trace is not None:
-            trace.log("stall_ack_skipped", ack_payload_bytes=ack_payload)
-        return "skipped", last_stall_ack_bytes, False
-    _send_download_progress_ack(sock, ack_payload)
-    if trace is not None:
-        trace.log(
-            "stall_ack_sent",
-            kind="progress_ack",
-            ack_payload_bytes=ack_payload,
-        )
-    return "progress_ack", ack_payload, True
-
-
 def _receive_file_data(
     sock: socket.socket,
     total_file_size: int,
     trace: AimDownloadTrace | None = None,
 ) -> bytes:
-    """Read STCP file blocks until complete, prompting device between batches."""
-    # bytearray + .extend(): amortized O(1) per recv(), not the O(n) copy that
-    # `raw_data = b""` / `raw_data += chunk` did on every one of the ~1300
-    # recv() calls for a ~1.24 MB file.
+    """Read STCP file blocks until the whole file is covered.
+
+    Blocks are placed by absolute offset; the device is ACKed only at batch
+    boundaries (RS3 behaviour). A pause is normally the device's own TCP
+    retransmit after WiFi loss, so it is waited out -- only a long dead
+    silence triggers a resume ACK for the contiguous prefix.
+    """
     raw_data = bytearray()
     frame_buffer = b""
     reassembler = _IncrementalReassembler()
     extracted_size = 0
     micro_acks_sent = 0
-    stall_ack_round = 0
-    last_stall_ack_bytes: int | None = None
+    resume_acks = 0
     recv_count = 0
     acked_through = 0
     idle_limit_s = 60 + max(0, total_file_size // 100_000)
     idle_deadline = time.monotonic() + idle_limit_s
+    last_rx = time.monotonic()
     last_progress_size = 0
-    # Lowered from 2.0s: a stalled batch used to sit for a full 2s before the
-    # stall-ack nudge went out (the ~1.4s gaps seen early in captured
-    # transfers). 0.4s notices the pause and re-prompts the device sooner
-    # without adding meaningful CPU/syscall overhead when data is flowing.
-    sock.settimeout(0.4)
+    sock.settimeout(0.5)
 
     if trace is not None:
         trace.log("receive_start", total_file_size=total_file_size)
 
     while True:
-        if total_file_size > 0 and extracted_size >= total_file_size:
+        if reassembler.is_complete(total_file_size):
             break
-        if time.monotonic() > idle_deadline:
+        now = time.monotonic()
+        if now > idle_deadline:
             if trace is not None:
                 trace.log(
                     "idle_timeout",
                     raw_bytes=len(raw_data),
                     extracted_bytes=extracted_size,
+                    covered_bytes=reassembler.covered,
                     expected_bytes=total_file_size,
                     micro_acks_sent=micro_acks_sent,
-                    stall_ack_round=stall_ack_round,
+                    resume_acks=resume_acks,
                     recv_count=recv_count,
                     frame_buffer_len=len(frame_buffer),
                 )
             logger.warning(
-                "Download idle timeout: raw=%d extracted=%d/%d micro_acks_sent=%d stall_acks=%d recv=%d",
-                len(raw_data),
+                "Download idle timeout: contiguous=%d covered=%d/%d acks=%d resumes=%d recv=%d",
                 extracted_size,
+                reassembler.covered,
                 total_file_size,
                 micro_acks_sent,
-                stall_ack_round,
+                resume_acks,
                 recv_count,
             )
             break
 
         try:
-            chunk = sock.recv(65536)
+            chunk = sock.recv(262144)
         except ConnectionResetError as exc:
             if trace is not None:
                 trace.log(
@@ -667,33 +689,37 @@ def _receive_file_data(
                     expected_bytes=total_file_size,
                     acked_through=acked_through,
                     micro_acks_sent=micro_acks_sent,
-                    stall_ack_round=stall_ack_round,
+                    resume_acks=resume_acks,
                 )
             raise RuntimeError(
-                f"Device closed download connection after {extracted_size} unique bytes "
+                f"Device closed download connection after {extracted_size} contiguous bytes "
                 f"(expected {total_file_size}, acked_through={acked_through})"
             ) from exc
         except socket.timeout:
-            if total_file_size > 0 and extracted_size >= total_file_size:
-                break
-            if extracted_size > 0 and extracted_size < total_file_size:
-                kind, last_stall_ack_bytes, sent_stall = _send_stall_ack(
-                    sock,
-                    extracted_size=extracted_size,
-                    last_stall_ack_bytes=last_stall_ack_bytes,
-                    trace=trace,
-                )
-                stall_ack_round += 1
-                if sent_stall:
-                    micro_acks_sent += 1
-                idle_deadline = time.monotonic() + 15
+            silent_s = time.monotonic() - last_rx
+            if (
+                extracted_size > 0
+                and total_file_size > 0
+                and extracted_size < total_file_size
+                and silent_s >= _STALL_RESUME_S
+            ):
+                # Dead silence well past any TCP retransmit: ask the device to
+                # resume from the contiguous prefix. Safe because replayed
+                # blocks are written at their absolute offsets.
+                _send_download_progress_ack(sock, extracted_size)
+                acked_through = extracted_size
+                resume_acks += 1
+                micro_acks_sent += 1
+                # Restart only the silence clock -- NOT idle_deadline, or a dead
+                # device would be re-prompted forever instead of timing out.
+                last_rx = time.monotonic()
                 if trace is not None:
                     trace.log(
-                        "recv_timeout",
-                        extracted_bytes=extracted_size,
+                        "resume_ack_sent",
+                        silent_s=round(silent_s, 2),
+                        ack_payload_bytes=extracted_size,
+                        covered_bytes=reassembler.covered,
                         expected_bytes=total_file_size,
-                        ack_kind=kind,
-                        ack_payload_bytes=last_stall_ack_bytes,
                     )
             continue
 
@@ -702,41 +728,35 @@ def _receive_file_data(
                 trace.log("recv_eof", raw_bytes=len(raw_data), extracted_bytes=extracted_size)
             break
 
+        last_rx = time.monotonic()
         recv_count += 1
         raw_data.extend(chunk)
         frame_buffer += chunk
-        # Feeds each file-data block into `reassembler` as it's parsed off
-        # `frame_buffer`, instead of `_try_extract_file_size(raw_data)`
-        # re-decoding and re-reassembling the entire stream received so far
-        # on every single recv() (O(n) work x ~1300 calls = O(n^2)).
         frame_buffer = _drain_download_frames_incremental(frame_buffer, reassembler, trace)
-        sent = 0
 
         extracted_size = len(reassembler)
         acked_through, batch_sent = _prompt_next_batch(
             sock,
             extracted_size=extracted_size,
             acked_through=acked_through,
+            total_file_size=total_file_size,
             trace=trace,
         )
         micro_acks_sent += batch_sent
         if trace is not None and (
-            extracted_size > last_progress_size
-            or recv_count == 1
-            or recv_count % 50 == 0
+            extracted_size > last_progress_size or recv_count == 1 or recv_count % 50 == 0
         ):
             trace.log(
                 "recv_chunk",
                 chunk_bytes=len(chunk),
                 raw_bytes=len(raw_data),
                 extracted_bytes=extracted_size,
-                micro_acks_this_chunk=sent,
                 frame_buffer_remainder=len(frame_buffer),
                 recv_count=recv_count,
             )
         if extracted_size > last_progress_size:
             last_progress_size = extracted_size
-            idle_deadline = time.monotonic() + 15
+            idle_deadline = last_rx + _PROGRESS_IDLE_S
             if trace is not None:
                 trace.log(
                     "progress",
@@ -744,45 +764,29 @@ def _receive_file_data(
                     expected_bytes=total_file_size,
                     micro_acks_sent=micro_acks_sent,
                 )
-        elif sent > 0:
-            idle_deadline = time.monotonic() + 15
 
-        if total_file_size > 0 and extracted_size >= total_file_size:
-            break
-
-    if extracted_size == 0:
+    covered = reassembler.covered
+    if covered == 0:
         if trace is not None:
             trace.analyze_raw_stream(raw_data, extracted=0, expected=total_file_size)
         raise RuntimeError(f"No data blocks found in {len(raw_data)} bytes of response")
 
-    file_data = _extract_data_blocks(raw_data, expected_size=total_file_size)
-    if _detect_duplicate_batch_content(file_data):
+    if reassembler.conflicts and trace is not None:
+        trace.log("replay_conflicts", count=reassembler.conflicts)
+    if total_file_size > 0 and not reassembler.is_complete(total_file_size):
         if trace is not None:
-            trace.analyze_raw_stream(
-                raw_data,
-                extracted=len(file_data),
-                expected=total_file_size,
-            )
+            trace.analyze_raw_stream(raw_data, extracted=extracted_size, expected=total_file_size)
         trace_hint = f" trace={trace.path}" if trace is not None else ""
         raise RuntimeError(
-            "Download contains duplicate batch data (device re-sent the same "
-            f"~982 KB chunk instead of the next segment). Got {len(file_data)} "
-            f"bytes unique payload before repeats{trace_hint}"
+            f"Incomplete download: contiguous {extracted_size} / covered {covered} bytes, "
+            f"expected {total_file_size} (raw={len(raw_data)}, acks={micro_acks_sent}, "
+            f"resumes={resume_acks}, recv_chunks={recv_count}){trace_hint}"
         )
-    if total_file_size > 0 and len(file_data) < total_file_size:
-        if trace is not None:
-            trace.analyze_raw_stream(
-                raw_data,
-                extracted=len(file_data),
-                expected=total_file_size,
-            )
-        trace_hint = f" trace={trace.path}" if trace is not None else ""
-        raise RuntimeError(
-            f"Incomplete download: got {len(file_data)} bytes, expected {total_file_size} bytes "
-            f"(raw={len(raw_data)}, micro_acks_sent={micro_acks_sent}, "
-            f"stall_acks={stall_ack_round}, recv_chunks={recv_count}){trace_hint}"
-        )
-    return file_data
+
+    file_data = reassembler.file_data
+    if total_file_size > 0 and len(file_data) > total_file_size:
+        return bytes(file_data[:total_file_size])
+    return bytes(file_data)
 
 
 def download_aim_session(filename: str, dest_dir: Path, expected_size: int = 0) -> Path:
@@ -819,7 +823,7 @@ def download_aim_session(filename: str, dest_dir: Path, expected_size: int = 0) 
         trace.log("connect", device_ip=device_ip, port=port, filepath=filepath)
 
         # Step 1: Handshake
-        _send_and_recv(s, _HANDSHAKE, "handshake", read_timeout=5)
+        _send_and_await_frame(s, _HANDSHAKE, "handshake", timeout=_HANDSHAKE_REPLY_TIMEOUT_S)
         trace.log("handshake_ok")
 
         # Step 2: File request
@@ -847,6 +851,11 @@ def download_aim_session(filename: str, dest_dir: Path, expected_size: int = 0) 
             total_file_size = struct.unpack_from("<I", info_data, 84 + 12 + 0x10)[0]
             logger.info("File size from device: %d bytes", total_file_size)
             trace.log("file_size", total_file_size=total_file_size)
+        if total_file_size <= 0 and expected_size > 0:
+            # Session list already told us the size; completion detection
+            # needs it even if the info frames were short or split.
+            total_file_size = expected_size
+            trace.log("file_size_from_session_list", total_file_size=total_file_size)
 
         # Step 4: ACK triggers data transmission
         s.sendall(_ACK)

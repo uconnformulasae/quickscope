@@ -27,22 +27,41 @@ class AimLiveTrace:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         self.path = _SESSION_DIR / f"{stamp}_live.jsonl"
         self._fh = self.path.open("w", encoding="utf-8")
+        self._closed = False
         self.log("session_start", configured_host=configured_host, trace_file=str(self.path))
         logger.info("AiM live trace: writing session log to %s", self.path)
 
     def log(self, event: str, **fields: Any) -> None:
+        # AimPrimaryHub keeps the underlying AimLiveClient (and its
+        # `_session_trace` reference) alive across WebSocket reconnects to
+        # skip re-handshaking, but each WS session's trace file is closed
+        # when that session ends. A late event from a client whose trace
+        # outlived it (e.g. `close()` firing on the *next* connect attempt,
+        # when the stale client gets torn down) must never crash the actual
+        # connect/close flow over a diagnostics-only write.
+        if self._closed:
+            return
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "event": event,
             **fields,
         }
         line = json.dumps(entry, default=str)
-        self._fh.write(line + "\n")
-        self._fh.flush()
+        try:
+            self._fh.write(line + "\n")
+            self._fh.flush()
+        except ValueError:
+            # "I/O operation on closed file" -- file closed out from under
+            # us rather than through our own `_closed` flag. Same policy:
+            # swallow it, this log is best-effort.
+            self._closed = True
 
     def log_frame(self, direction: str, summary: str, **fields: Any) -> None:
         self.log("frame", direction=direction, summary=summary, **fields)
 
     def close(self, **summary: Any) -> None:
+        if self._closed:
+            return
         self.log("session_end", **summary)
+        self._closed = True
         self._fh.close()

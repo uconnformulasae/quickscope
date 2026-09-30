@@ -72,6 +72,12 @@ class AimPrimaryHub:
             and getattr(self._client, "_handshake_done", False)
             and self._client.host == target
         ):
+            if trace is not None:
+                # Rebind to the current WS session's trace -- the client
+                # itself is being reused (fast reconnect, TCP kept open),
+                # but its old trace file was already closed when the
+                # previous WS session ended.
+                self._client._session_trace = trace
             return self._client
 
         await self.close_primary()

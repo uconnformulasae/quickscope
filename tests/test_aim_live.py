@@ -236,3 +236,34 @@ def test_rs3_aux_enum_sends_date_without_immediate_micro_ack() -> None:
     assert len(cframes[5].payload) == 68
     assert cframes[6].cmd == b"STNC"
     assert len(cframes[6].payload) == 64
+
+
+def test_reconnect_is_fast_and_reader_never_blocks() -> None:
+    """Drop recovery: short hello timeout, time-budgeted redial, non-blocking reader."""
+    import asyncio
+
+    from services import aim_live
+    from services.aim_live import AimLiveClient
+
+    assert aim_live.RECONNECT_HELLO_TIMEOUT_S <= 3.0
+    src = (ROOT / "backend" / "services" / "aim_live.py").read_text(encoding="utf-8")
+    assert "await queue.put(snap)" not in src
+
+    calls: list[float | None] = []
+
+    async def run() -> None:
+        c = AimLiveClient(host="10.0.0.1")
+        events: list[dict] = []
+        c.on_status = events.append
+
+        async def fake_reconnect(*, timeout=15.0, hello_timeout=None, tcp_timeout=None):
+            calls.append(hello_timeout)
+            if len(calls) < 3:
+                raise ConnectionError("no hello-ack")
+
+        c._reconnect = fake_reconnect  # type: ignore[method-assign]
+        await c._reconnect_with_retry(max_attempts=10, base_backoff_s=1.0)
+        assert [e["state"] for e in events] == ["reconnecting", "reconnecting"]
+
+    asyncio.run(run())
+    assert calls == [aim_live.RECONNECT_HELLO_TIMEOUT_S] * 3

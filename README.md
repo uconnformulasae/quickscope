@@ -155,6 +155,7 @@ The connection uses the AiM binary TCP protocol (port 2000) with UDP discovery (
 - Each pull writes a JSONL trace to `backend/data/logs/aim_download/` (timestamp + filename). Use these logs to compare `extracted_bytes`, `batch_complete_ack`, and `ack_payload_bytes` against a known-good RaceStudio capture.
 - List traces via API: `GET /api/aim/download/trace` (and `/api/aim/download/trace/{name}` for a single log).
 - Run `pytest tests/test_aim_download.py` after protocol changes; includes a regression test against `116CaptureWireshark.pcapng` stream 38.
+- Blocks carry **absolute** file offsets and are placed by offset; the device is ACKed only at batch boundaries. A pause of a second or two is the device's own TCP retransmit after WiFi loss — ACKing during it makes the device replay from that offset (this corrupted `QS_Pull_242`: truncated data with garbage appended, so channels like RPM were missing). The download now fails with `Incomplete download` rather than saving a partial file; look for `resume_ack_sent` / `replay_conflicts` in the trace.
 - Device session list dates are preferred over embedded XRK metadata when indexing pulled sessions.
 
 **Validated:** QuickScope pulls of multi-minute sessions (e.g. `a_0141`) match RaceStudio exports on core EV channels (pack voltage/current, RPM, torque, phase currents, throttle, brakes) when compared sample-for-sample.

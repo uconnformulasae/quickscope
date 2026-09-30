@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Sized to hold minutes of ~6 Hz snapshots: the browser gets every snapshot
+# (batched) and only overflows after a long stall, instead of shedding data
+# whenever a tab is briefly busy.
+_QUEUE_MAX = 2000
+_HEARTBEAT_S = 0.25
+
 
 @router.websocket("/api/live/ws")
 async def live_ws(websocket: WebSocket) -> None:
@@ -81,12 +87,13 @@ async def live_ws(websocket: WebSocket) -> None:
     # fills, since only the latest data is useful to a live view.
     stop = asyncio.Event()
     device_dropped = False
-    queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX)
     _SENTINEL = None
 
     def _snapshot_message(snap) -> dict:
         msg = {
             "type": "snapshot",
+            "seq": client._snapshots_yielded,
             "ts": snap.timestamp_ms,
             "subsystem": snap.subsystem,
             "channels": snap.channels,
@@ -94,6 +101,23 @@ async def live_ws(websocket: WebSocket) -> None:
         if send_raw:
             msg["raw"] = snap.raw_b64
         return msg
+
+    reconnecting = False
+
+    def _on_device_status(evt: dict) -> None:
+        nonlocal reconnecting
+        reconnecting = evt.get("state") == "reconnecting"
+        _enqueue({"type": "status", **evt})
+
+    client.on_status = _on_device_status
+
+    async def _heartbeat() -> None:
+        # While the device link is cycling no snapshots flow; keep the
+        # browser told the WebSocket itself is alive so it doesn't look hung.
+        while True:
+            await asyncio.sleep(_HEARTBEAT_S)
+            if reconnecting:
+                _enqueue({"type": "heartbeat"})
 
     def _enqueue(item: dict) -> None:
         if queue.full():
@@ -151,6 +175,7 @@ async def live_ws(websocket: WebSocket) -> None:
 
     pump_task = asyncio.create_task(_pump_device())
     send_task = asyncio.create_task(_send_loop())
+    hb_task = asyncio.create_task(_heartbeat())
     try:
         while True:
             msg = await websocket.receive_text()
@@ -164,7 +189,9 @@ async def live_ws(websocket: WebSocket) -> None:
         stop.set()
         pump_task.cancel()
         send_task.cancel()
-        for task in (pump_task, send_task):
+        hb_task.cancel()
+        client.on_status = None
+        for task in (pump_task, send_task, hb_task):
             try:
                 await task
             except (asyncio.CancelledError, Exception):
