@@ -15,6 +15,7 @@ from services import (
     gps_preview,
     aim_pull_log,
 )
+from services.aim_keepalive import AimKeepalive
 from services.aim_primary_hub import get_aim_primary_hub
 from parsers.parse_gate import PRIORITY_INTERACTIVE
 from services.session_cache import session_cache
@@ -281,16 +282,18 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
     will_queue_railway = sync_service.is_railway_configured()
     logger.info("AiM pull: downloading %d selected sessions...", len(body.filenames))
 
+    hub = get_aim_primary_hub()
+    # Must run on the primary TCP *before* it is released: the device ignores a
+    # second port-2000 connection while the primary is open (QS_Pull_241/242).
     device_meta_by_file: dict[str, dict] = {}
     try:
-        aim_sessions = await asyncio.to_thread(aim_connector.list_aim_sessions)
+        aim_sessions = await hub.list_sessions(device_ip or None)
         device_meta_by_file = {
             s["filename"]: s for s in aim_sessions if s.get("filename")
         }
-    except ConnectionError as exc:
+    except (ConnectionError, TimeoutError, RuntimeError, OSError) as exc:
         logger.warning("AiM pull: could not fetch device session list for dates: %s", exc)
 
-    hub = get_aim_primary_hub()
     try:
         await hub.release_for_download()
     except ConnectionError as exc:
@@ -302,11 +305,48 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
             "results": [],
         }
 
+    keepalive = await _start_download_keepalive(hub.resolve_host(device_ip or None))
+    try:
+        downloaded, errors, results = await _download_selected(
+            body.filenames,
+            device_meta_by_file=device_meta_by_file,
+            device_ip=device_ip,
+            will_queue_railway=will_queue_railway,
+        )
+    finally:
+        if keepalive is not None:
+            await keepalive.stop()
+
+    if downloaded and will_queue_railway:
+        background_tasks.add_task(background_sync)
+
+    return {"ok": True, "downloaded": downloaded, "errors": errors, "results": results}
+
+
+async def _start_download_keepalive(host: str) -> AimKeepalive | None:
+    """Race Studio keeps ``aim-ka`` running during downloads (RS3_PULL_241/242);
+    without it the device drops port 2000 ~30 s after the last datagram."""
+    keepalive = AimKeepalive(host)
+    try:
+        await keepalive.start()
+    except OSError as exc:
+        logger.warning("AiM pull: keepalive could not start (%s); long downloads may drop", exc)
+        return None
+    return keepalive
+
+
+async def _download_selected(
+    filenames: list[str],
+    *,
+    device_meta_by_file: dict[str, dict],
+    device_ip: str,
+    will_queue_railway: bool,
+) -> tuple[list[str], list[str], list[dict]]:
     downloaded = []
     errors = []
     results = []
 
-    for raw_filename in body.filenames:
+    for raw_filename in filenames:
         try:
             filename = sanitize_filename(raw_filename)
         except ValueError:
@@ -426,7 +466,4 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
                 error=str(e)[:200],
             )
 
-    if downloaded and will_queue_railway:
-        background_tasks.add_task(background_sync)
-
-    return {"ok": True, "downloaded": downloaded, "errors": errors, "results": results}
+    return downloaded, errors, results

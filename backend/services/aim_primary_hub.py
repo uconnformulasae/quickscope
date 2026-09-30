@@ -1,8 +1,10 @@
 """Shared primary TCP session to the AiM device (Race Studio model).
 
 Wireshark reference: ``connect.pcapng`` stream 29 — one TCP socket for connect,
-live enumeration, live polling, and session list. Log file download uses a
-**second** TCP (``116CaptureWireshark.pcapng`` stream 38) via ``aim_connector.download_aim_session``.
+live enumeration, live polling, and session list. Log file download closes it and
+opens a fresh TCP via ``aim_connector.download_aim_session`` (``QS_Pull_241``).
+The device ignores a second port-2000 connection while this one is open, so any
+session list needed by a pull must come from here *before* ``release_for_download``.
 """
 
 from __future__ import annotations
@@ -50,7 +52,8 @@ class AimPrimaryHub:
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=120)
 
-    def _resolve_host(self, host: str | None) -> str:
+    def resolve_host(self, host: str | None) -> str:
+        """Explicit host, else cached discovery IP, else settings/default."""
         if host:
             return host
         cached = get_cached()
@@ -65,7 +68,7 @@ class AimPrimaryHub:
         trace: AimLiveTrace | None = None,
     ) -> AimLiveClient:
         """Connect + live handshake on primary TCP if not already up."""
-        target = self._resolve_host(host)
+        target = self.resolve_host(host)
         if (
             self._client is not None
             and self._client.connected

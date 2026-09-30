@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import FakeKeepalive, FakePullHub
 from main import app
 from services import aim_pull_log, session_store
 from state import (
@@ -40,7 +41,13 @@ def _clear_aim_pull_log():
     aim_pull_log.clear()
 
 
-def _setup_pull_mocks(monkeypatch: pytest.MonkeyPatch, isolated_session_data, *, device_sessions):
+def _setup_pull_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_session_data,
+    *,
+    device_sessions,
+    list_error: Exception | None = None,
+):
     monkeypatch.setattr(
         "routes.sessions.aim_connector.discover_device",
         lambda: {"ip": "10.0.0.1", "ssid": "AiM-TEST", "device_name": ""},
@@ -49,10 +56,9 @@ def _setup_pull_mocks(monkeypatch: pytest.MonkeyPatch, isolated_session_data, *,
         "routes.sessions.sync_service.is_railway_configured",
         lambda: False,
     )
-    monkeypatch.setattr(
-        "routes.sessions.aim_connector.list_aim_sessions",
-        lambda: device_sessions,
-    )
+    hub = FakePullHub(device_sessions, list_error=list_error)
+    monkeypatch.setattr("routes.sessions.get_aim_primary_hub", lambda: hub)
+    monkeypatch.setattr("routes.sessions.AimKeepalive", FakeKeepalive)
 
     def _fake_download(filename: str, dest_dir, expected_size: int = 0):
         path = dest_dir / filename
@@ -157,14 +163,11 @@ def test_aim_pull_falls_back_to_xrk_when_device_list_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     isolated_session_data,
 ):
-    _setup_pull_mocks(monkeypatch, isolated_session_data, device_sessions=[])
-
-    def _fail_list():
-        raise ConnectionError("device offline")
-
-    monkeypatch.setattr(
-        "routes.sessions.aim_connector.list_aim_sessions",
-        _fail_list,
+    _setup_pull_mocks(
+        monkeypatch,
+        isolated_session_data,
+        device_sessions=[],
+        list_error=ConnectionError("device offline"),
     )
 
     res = client.post("/api/aim/pull", json={"filenames": ["a_0116.xrz"]})
@@ -189,7 +192,7 @@ def test_load_session_uses_stored_recorded_at_for_aim_device(
         recorded_at="2026-09-01T14:30:00",
     )
 
-    def _fake_parse(path):
+    def _fake_parse(path, *_args, **_kwargs):
         class _Log:
             metadata = {
                 "Vehicle": "V",

@@ -73,9 +73,30 @@ Then run `python -m pytest tests/test_aim_live.py`.
 | TCP | Used for |
 |-----|----------|
 | **Primary** (``aim_primary_hub``) | Connect, live handshake, live poll, session list — one socket |
-| **Download** (``download_aim_session``) | Pulling ``.xrz`` / log files only — second socket |
+| **Download** (``download_aim_session``) | Pulling ``.xrz`` / log files only — fresh socket after the primary is closed |
 
 Reference: ``connect.pcapng`` stream 29 + ``116CaptureWireshark.pcapng`` streams 37/38.
+
+Current RS3 downloads the file on the **same** TCP as the session list (RS3_PULL_* below). QuickScope deliberately keeps a separate download TCP, opened only after the primary is closed; QS_Pull_241 proves the device serves it at full speed. The device **ignores** a second port-2000 connection while another is open (accepts SYN, never replies).
+
+## Log download (A116 / a_0241 / a_0242, 2026-09)
+
+| Capture | Path | Scenario |
+|---------|------|----------|
+| `116CaptureWireshark.pcapng` | repo root / `Downloads` | RS3, 2,482,176 B; streams **37** (list) + **38** (download); client acks `0, 982320, 1964640, 0` |
+| `RS3_PULL_241.pcapng` | `Downloads` | RS3, `a_0241.xrz` 3,149,824 B on the list TCP; ~215 KB/s; 0 retransmits; `aim-ka` every 1.24 s throughout |
+| `RS3_PULL_242.pcapng` | `Downloads` | RS3, `a_0242.xrz` 4,091,904 B; acks exactly at each 982,320 boundary; no stall acks |
+| `QS_Pull_241.pcapng` | `Downloads` | QuickScope `98e3ac3`: download identical to RS3 (same SHA-1), 203 KB/s — but a legacy list TCP sat ignored for ~37 s first, and `aim-ka` stopped before the download |
+| `QS_Pull_242.pcapng` | `Downloads` | QuickScope `98e3ac3`: WiFi loss → 1.3–1.6 s device retransmit stalls → old 0.4 s stall acks at partial offsets → device queued replays (2.16 MB duplicated); only 1.47 MB of 4.09 MB unique |
+
+Download rules derived from these (``aim_connector._receive_file_data``):
+
+- Every client STCP 4-byte ack **N** queues a batch of 982,320 B starting at file offset **N**. Ack only exact boundaries (`acked_through + k * 982320`), never mid-batch.
+- Pauses of ~1.5–3 s are the device's own TCP retransmit timer; wait them out. Only resume (ack the contiguous prefix) after 8 s of silence.
+- Place blocks by absolute file offset; stop feeding once the file is complete (RS3 lists sessions next on the same TCP, which also uses offset-0 blocks).
+- Keep `aim-ka` running during the download.
+
+Replay tests (no tshark needed; pcaps located via `QUICKSCOPE_AIM_CAPTURES`, repo root, or `~/Downloads`): `pytest tests/test_aim_download.py`. Quick stream summary: `python scripts/aim_pcapng.py <file.pcapng>`.
 
 | Source | Role |
 |--------|------|

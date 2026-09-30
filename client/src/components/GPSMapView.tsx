@@ -6,6 +6,16 @@ import type { GPSData } from '../lib/api';
 // Leaflet types loaded from CDN
 declare const L: any;
 
+/** Avoid Math.max(...arr) — large GPS traces exceed the argument stack limit. */
+function maxOf(values: number[], fallback = 1): number {
+  let max = fallback;
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v > max) max = v;
+  }
+  return max;
+}
+
 interface GPSMapViewProps {
   cursorTime?: number | null; // seconds
 }
@@ -106,7 +116,7 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
       }).addTo(map);
 
       // Speed color scale
-      const maxSpeed = Math.max(...speeds, 1);
+      const maxSpeed = maxOf(speeds, 1);
       const getColor = (spd: number): string => {
         const ratio = Math.min(spd / maxSpeed, 1);
         // Green (slow) → Yellow → Red (fast)
@@ -134,6 +144,11 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
       // Fit bounds
       const bounds = L.latLngBounds(coords);
       map.fitBounds(bounds, { padding: [20, 20] });
+      // Tab panel may mount before layout settles; tiles stay blank without this.
+      requestAnimationFrame(() => {
+        map.invalidateSize();
+        map.fitBounds(bounds, { padding: [20, 20] });
+      });
 
       // Cursor position marker
       const marker = L.circleMarker(coords[0], {

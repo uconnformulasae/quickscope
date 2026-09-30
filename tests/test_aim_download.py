@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import itertools
-import shutil
+import os
 import struct
-import subprocess
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import aim_pcapng
 import pytest
 
 from services.aim_connector import (
@@ -150,6 +150,62 @@ def test_prompt_next_batch_sends_progress_ack_at_exact_batch_boundary():
     assert acked2 == _BATCH_PAYLOAD_BYTES
 
 
+def test_prompt_next_batch_acks_boundary_not_overshoot():
+    # Arrange: one large recv() carried the contiguous prefix past the boundary.
+    sock = _RecordingSocket()
+    overshoot = _BATCH_PAYLOAD_BYTES + 32_744
+
+    # Act
+    acked, sent = _prompt_next_batch(
+        sock, extracted_size=overshoot, acked_through=0, trace=None
+    )
+
+    # Assert
+    assert (acked, sent) == (_BATCH_PAYLOAD_BYTES, 1)
+    assert [_ack_payload_bytes(item) for item in sock.sent] == [_BATCH_PAYLOAD_BYTES]
+
+
+def test_prompt_next_batch_sends_single_ack_for_highest_crossed_boundary():
+    sock = _RecordingSocket()
+
+    acked, sent = _prompt_next_batch(
+        sock, extracted_size=2 * _BATCH_PAYLOAD_BYTES + 10, acked_through=0, trace=None
+    )
+
+    assert (acked, sent) == (2 * _BATCH_PAYLOAD_BYTES, 1)
+    assert [_ack_payload_bytes(item) for item in sock.sent] == [2 * _BATCH_PAYLOAD_BYTES]
+
+
+def test_prompt_next_batch_stays_aligned_to_resume_point():
+    # After a resume ACK at an unaligned offset the device batches from there.
+    sock = _RecordingSocket()
+    resume_at = 500_000
+
+    acked, sent = _prompt_next_batch(
+        sock,
+        extracted_size=resume_at + _BATCH_PAYLOAD_BYTES + 5,
+        acked_through=resume_at,
+        trace=None,
+    )
+
+    assert (acked, sent) == (resume_at + _BATCH_PAYLOAD_BYTES, 1)
+
+
+def test_prompt_next_batch_skips_ack_once_file_complete():
+    sock = _RecordingSocket()
+
+    acked, sent = _prompt_next_batch(
+        sock,
+        extracted_size=2 * _BATCH_PAYLOAD_BYTES,
+        acked_through=_BATCH_PAYLOAD_BYTES,
+        total_file_size=2 * _BATCH_PAYLOAD_BYTES,
+        trace=None,
+    )
+
+    assert (acked, sent) == (_BATCH_PAYLOAD_BYTES, 0)
+    assert sock.sent == []
+
+
 def test_process_download_frame_sends_micro_ack_on_q_ack_frame_in_live_mode():
     sock = _RecordingSocket()
     q_payload = bytearray(64)
@@ -251,97 +307,53 @@ def test_receive_file_data_multi_batch_with_replay_yields_exact_file():
     assert acks and acks[0] == 600
 
 
-@pytest.mark.skipif(
-    shutil.which("tshark") is None
-    and not Path(r"C:\Program Files\Wireshark\tshark.exe").exists(),
-    reason="tshark not available",
-)
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _find_capture(name: str) -> Path:
+    """Locate a Wireshark capture (large, never committed); skip the test if absent."""
+    roots = [os.environ.get("QUICKSCOPE_AIM_CAPTURES", ""), _REPO_ROOT, Path.home() / "Downloads"]
+    for root in roots:
+        if root and (Path(root) / name).is_file():
+            return Path(root) / name
+    pytest.skip(f"{name} not present (set QUICKSCOPE_AIM_CAPTURES)")
+
+
+def _stcp_4byte_values(stream: bytes) -> list[int]:
+    return [
+        struct.unpack("<I", frame.payload)[0]
+        for _, frame in _iter_frames(stream)
+        if frame.cmd == b"STCP" and len(frame.payload) == 4
+    ]
+
+
+def _iter_frames(stream: bytes):
+    """Yield ``(stream_offset, frame)``, resyncing past undecodable bytes."""
+    offset = 0
+    while offset < len(stream):
+        try:
+            frame, consumed = decode_frame(stream, offset)
+        except ValueError:
+            offset = stream.find(b"<h", offset + 1)
+            if offset < 0:
+                return
+            continue
+        if frame is None or consumed == 0:
+            return
+        yield offset, frame
+        offset += consumed
+
+
 def test_wireshark_a0116_capture_uses_cumulative_progress_acks():
-    repo_root = Path(__file__).resolve().parents[1]
-    pcap = repo_root / "116CaptureWireshark.pcapng"
-    if not pcap.exists():
-        pytest.skip("116CaptureWireshark.pcapng not present")
+    download = aim_pcapng.largest_stream(_find_capture("116CaptureWireshark.pcapng"))
 
-    tshark = shutil.which("tshark") or r"C:\Program Files\Wireshark\tshark.exe"
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-        follow_path = Path(handle.name)
-    try:
-        with follow_path.open("w", encoding="utf-8") as handle:
-            subprocess.run(
-                [tshark, "-r", str(pcap), "-q", "-z", "follow,tcp,raw,38"],
-                stdout=handle,
-                check=True,
-            )
-        text = follow_path.read_text(encoding="utf-8")
-    finally:
-        follow_path.unlink(missing_ok=True)
+    ack_values = _stcp_4byte_values(download.reassemble(client_to_server=True))
 
-    ack_values: list[int] = []
-    in_data = False
-    for raw_line in text.splitlines():
-        if raw_line.startswith("======="):
-            in_data = not in_data
-            continue
-        if not in_data or raw_line.startswith(("Follow:", "Filter:", "Node 0:", "Node 1:")):
-            continue
-        if raw_line.startswith("\t"):
-            continue
-        chunk = bytes.fromhex(raw_line.strip())
-        idx = 0
-        while True:
-            idx = chunk.find(b"<hSTCP", idx)
-            if idx < 0:
-                break
-            plen = int.from_bytes(chunk[idx + 6 : idx + 10], "little")
-            payload = chunk[idx + 12 : idx + 12 + plen]
-            if len(payload) == 4:
-                ack_values.append(struct.unpack("<I", payload)[0])
-            idx += 1
-
-    assert 982320 in ack_values
-    assert 1964640 in ack_values
+    assert ack_values == [0, 982320, 1964640, 0]
 
 
-def _load_pcap_server_stream(repo_root: Path) -> bytes:
-    pcap = repo_root / "116CaptureWireshark.pcapng"
-    tshark = shutil.which("tshark") or r"C:\Program Files\Wireshark\tshark.exe"
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-        follow_path = Path(handle.name)
-    try:
-        with follow_path.open("w", encoding="utf-8") as handle:
-            subprocess.run(
-                [tshark, "-r", str(pcap), "-q", "-z", "follow,tcp,raw,38"],
-                stdout=handle,
-                check=True,
-            )
-        text = follow_path.read_text(encoding="utf-8")
-    finally:
-        follow_path.unlink(missing_ok=True)
-
-    s2c = bytearray()
-    in_data = False
-    server_is_indented = True
-    for raw_line in text.splitlines():
-        if raw_line.startswith("Node 0:") and ":2000" in raw_line:
-            server_is_indented = False
-        elif raw_line.startswith("Node 1:") and ":2000" in raw_line:
-            server_is_indented = True
-    in_data = False
-    for raw_line in text.splitlines():
-        if raw_line.startswith("======="):
-            in_data = not in_data
-            continue
-        if not in_data or raw_line.startswith(("Follow:", "Filter:", "Node 0:", "Node 1:")):
-            continue
-        is_indented = raw_line.startswith("\t")
-        is_server = is_indented if server_is_indented else not is_indented
-        hex_text = raw_line.strip()
-        if not hex_text or not all(c in "0123456789abcdefABCDEF" for c in hex_text):
-            continue
-        chunk = bytes.fromhex(hex_text)
-        if is_server:
-            s2c.extend(chunk)
-    return bytes(s2c)
+def _load_pcap_server_stream(name: str = "116CaptureWireshark.pcapng") -> bytes:
+    return aim_pcapng.largest_stream(_find_capture(name)).reassemble(client_to_server=False)
 
 
 class _FixedChunkReplaySocket:
@@ -413,18 +425,8 @@ class _ReplaySocket:
         return chunk
 
 
-@pytest.mark.skipif(
-    shutil.which("tshark") is None
-    and not Path(r"C:\Program Files\Wireshark\tshark.exe").exists(),
-    reason="tshark not available",
-)
 def test_receive_file_data_replays_wireshark_a0116_server_stream():
-    repo_root = Path(__file__).resolve().parents[1]
-    pcap = repo_root / "116CaptureWireshark.pcapng"
-    if not pcap.exists():
-        pytest.skip("116CaptureWireshark.pcapng not present")
-
-    server_stream = _load_pcap_server_stream(repo_root)
+    server_stream = _load_pcap_server_stream()
     sock = _ReplaySocket(server_stream)
     file_data = _receive_file_data(sock, 2482176, trace=None)
 
@@ -434,3 +436,108 @@ def test_receive_file_data_replays_wireshark_a0116_server_stream():
     )
     assert 982320 in progress_acks
     assert 1964640 in progress_acks
+
+
+def test_receive_file_data_ignores_blocks_after_file_complete():
+    # Arrange: one read carries the whole file *and* a following offset-0 block
+    # (RS3 asks for the session list on the same TCP right after the download).
+    file = b"F" * 1000
+    trailing_session_list = _file_block(0, b"name,size,date,hour," + b"L" * 200)
+    sock = _FixedChunkReplaySocket(_file_block(0, file) + trailing_session_list, 65_536)
+
+    # Act
+    result = _receive_file_data(sock, len(file), trace=None)
+
+    # Assert
+    assert result == file
+
+
+class _OffsetReplaySocket:
+    """Replays captured server bytes in fixed chunks; records where each ACK went out."""
+
+    def __init__(self, stream: bytes, chunk_size: int) -> None:
+        self._stream = stream
+        self._chunk_size = chunk_size
+        self._offset = 0
+        self.acks: list[tuple[int, int]] = []  # (stream offset at send, ack value)
+
+    def sendall(self, data: bytes) -> None:
+        self.acks.append((self._offset, _ack_payload_bytes(data)))
+
+    def settimeout(self, _timeout: float) -> None:
+        return None
+
+    def recv(self, requested_size: int) -> bytes:
+        size = min(requested_size, self._chunk_size)
+        chunk = self._stream[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+
+def _download_phase(server_stream: bytes) -> tuple[bytes, int]:
+    """Server bytes from the first full file block on, plus the device-reported size.
+
+    RS3 captures carry session-list traffic on the same TCP before the download;
+    that traffic also contains offset-0 STCP blocks, so replay must start at the
+    file itself. The two 84 B info frames sit immediately before the first block.
+    """
+    for offset, frame in _iter_frames(server_stream):
+        payload = frame.payload
+        if (
+            frame.cmd == b"STCP"
+            and len(payload) == 4 + 32_744
+            and struct.unpack_from("<I", payload, 0)[0] == 0
+        ):
+            info = server_stream[offset - 168 : offset]
+            size = struct.unpack_from("<I", info, 84 + 12 + 0x10)[0]
+            return server_stream[offset:], size
+    raise AssertionError("no file download found in capture")
+
+
+def _block_stream_offsets(stream: bytes) -> dict[int, int]:
+    """File offset -> stream offset of the first STCP block carrying it."""
+    positions: dict[int, int] = {}
+    for offset, frame in _iter_frames(stream):
+        if frame.cmd == b"STCP" and len(frame.payload) > 64:
+            positions.setdefault(struct.unpack_from("<I", frame.payload, 0)[0], offset)
+    return positions
+
+
+# (capture, expected size, SHA-1 prefix of the RS3-downloaded file)
+_COMPLETE_PULLS = [
+    ("RS3_PULL_241.pcapng", 3_149_824, "0ea1db9e9df3"),
+    ("QS_Pull_241.pcapng", 3_149_824, "0ea1db9e9df3"),
+    ("RS3_PULL_242.pcapng", 4_091_904, "5c777c2cf0a9"),
+]
+
+
+@pytest.mark.parametrize("chunk_size", [1072, 262_144])
+@pytest.mark.parametrize("capture,expected_size,sha1_prefix", _COMPLETE_PULLS)
+def test_receive_file_data_replays_rs3_pull_captures(capture, expected_size, sha1_prefix, chunk_size):
+    # Arrange
+    stream, device_size = _download_phase(_load_pcap_server_stream(capture))
+    sock = _OffsetReplaySocket(stream, chunk_size)
+    boundaries = list(range(_BATCH_PAYLOAD_BYTES, expected_size, _BATCH_PAYLOAD_BYTES))
+    next_batch_at = _block_stream_offsets(stream)
+
+    # Act
+    file_data = _receive_file_data(sock, device_size, trace=None)
+
+    # Assert: same bytes RS3 saved, and ACKs exactly where RS3 sent them.
+    assert device_size == expected_size
+    assert len(file_data) == expected_size
+    assert hashlib.sha1(file_data).hexdigest().startswith(sha1_prefix)
+    assert [value for _, value in sock.acks] == boundaries
+    for sent_at, value in sock.acks:
+        batch_end = next_batch_at[value]
+        assert batch_end <= sent_at < batch_end + chunk_size
+
+
+def test_receive_file_data_rejects_qs_pull_242_replay_gap():
+    """Old code's mid-batch ACKs made the device replay instead of finishing
+    (QS_Pull_242); replaying those bytes must fail loudly, never save a short file."""
+    stream, device_size = _download_phase(_load_pcap_server_stream("QS_Pull_242.pcapng"))
+    sock = _OffsetReplaySocket(stream, 1072)
+
+    with pytest.raises(RuntimeError, match="Incomplete download"):
+        _receive_file_data(sock, device_size, trace=None)

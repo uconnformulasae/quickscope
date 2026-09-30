@@ -245,11 +245,12 @@ def parse_aim_session_csv_rows(csv_text: str) -> list[dict]:
 # ── Session listing ──────────────────────────────────────────────────────────
 
 def list_aim_sessions() -> list[dict]:
-    """Connect, fetch session CSV, and close TCP (Dev / RS3 download path).
+    """Deprecated: session list on its own short-lived TCP.
 
-    UI session browser uses ``aim_primary_hub.list_sessions`` on the primary socket.
-    Pull/download must use this dedicated connection so port 2000 is free for the
-    second download TCP.
+    Only works when no primary hub TCP is open -- the device silently ignores a
+    second port-2000 connection (QS_Pull_241/242 lost ~37 s per pull this way).
+    App code must use ``aim_primary_hub.list_sessions`` instead; this remains for
+    standalone scripts.
     """
     return _list_aim_sessions_legacy_tcp()
 
@@ -482,6 +483,7 @@ def _drain_download_frames_incremental(
     frame_buffer: bytes,
     reassembler: "_IncrementalReassembler",
     trace: AimDownloadTrace | None = None,
+    total_file_size: int = 0,
 ) -> bytes:
     """Parse complete frames out of `frame_buffer`, feeding file-data blocks
     into `reassembler` as they're decoded instead of re-parsing the whole
@@ -489,8 +491,12 @@ def _drain_download_frames_incremental(
     now replaced by this for `_receive_file_data`'s per-`recv()` loop).
     Download mode never ACKs control frames inline (only batch/stall ACKs),
     so unlike `_drain_download_frames()` this never touches the socket.
+
+    Stops as soon as the file is complete: anything after it on the same TCP
+    (RS3 lists sessions next, RS3_PULL_241/242) also uses offset-0 STCP blocks
+    and would overwrite the file.
     """
-    while True:
+    while not reassembler.is_complete(total_file_size):
         try:
             frame, consumed = decode_frame(frame_buffer)
         except ValueError as exc:
@@ -567,25 +573,30 @@ def _prompt_next_batch(
     total_file_size: int = 0,
     trace: AimDownloadTrace | None,
 ) -> tuple[int, int]:
-    """ACK the contiguous prefix once a full batch has landed since the last ACK.
+    """ACK the exact batch boundary once a full batch has landed since the last ACK.
 
-    `extracted_size` must be the contiguous byte count from offset 0. Nothing
-    is sent for the final (partial) batch: once the file is complete there is
-    nothing left to ask the device for.
+    `extracted_size` must be the contiguous byte count from offset 0. The ACK
+    value is always `acked_through + k * _BATCH_PAYLOAD_BYTES` -- never the raw
+    contiguous count -- because RS3 only ever ACKs boundaries and every ACK
+    queues a batch starting at its value. If a read overshoots several
+    boundaries, only the highest one is ACKed (one ACK == one queued batch).
+    Nothing is sent for the final (partial) batch.
     """
-    if extracted_size < acked_through + _BATCH_PAYLOAD_BYTES:
+    batches = (extracted_size - acked_through) // _BATCH_PAYLOAD_BYTES
+    if batches < 1:
         return acked_through, 0
     if total_file_size > 0 and extracted_size >= total_file_size:
         return acked_through, 0
-    _send_download_progress_ack(sock, extracted_size)
+    boundary = acked_through + batches * _BATCH_PAYLOAD_BYTES
+    _send_download_progress_ack(sock, boundary)
     if trace is not None:
         trace.log(
             "batch_complete_ack",
             extracted_bytes=extracted_size,
-            acked_through=extracted_size,
-            ack_payload_bytes=extracted_size,
+            acked_through=boundary,
+            ack_payload_bytes=boundary,
         )
-    return extracted_size, 1
+    return boundary, 1
 
 
 def _drain_download_frames(
@@ -732,7 +743,9 @@ def _receive_file_data(
         recv_count += 1
         raw_data.extend(chunk)
         frame_buffer += chunk
-        frame_buffer = _drain_download_frames_incremental(frame_buffer, reassembler, trace)
+        frame_buffer = _drain_download_frames_incremental(
+            frame_buffer, reassembler, trace, total_file_size
+        )
 
         extracted_size = len(reassembler)
         acked_through, batch_sent = _prompt_next_batch(

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import FakePullHub
 from main import app
 from services import aim_pull_log, session_store
 from state import background_sync
@@ -107,7 +108,9 @@ def test_aim_sessions_returns_error_on_connection_failure(monkeypatch: pytest.Mo
     assert log[0]["status"] == "list_failed"
 
 
-def test_aim_pull_does_not_require_railway(monkeypatch: pytest.MonkeyPatch, isolated_session_data):
+def test_aim_pull_does_not_require_railway(
+    monkeypatch: pytest.MonkeyPatch, isolated_session_data, fake_keepalive
+):
     monkeypatch.setattr(
         "routes.sessions.aim_connector.discover_device",
         lambda: {"ip": "10.0.0.1", "ssid": "AiM-TEST", "device_name": ""},
@@ -126,16 +129,9 @@ def test_aim_pull_does_not_require_railway(monkeypatch: pytest.MonkeyPatch, isol
         path.write_bytes(b"x" * 500)
         return path
 
-    class _EmptyHub:
-        async def list_sessions(self, host=None):  # noqa: ANN001
-            return []
-
-        async def release_for_download(self) -> None:
-            return None
-
     monkeypatch.setattr(
         "routes.sessions.get_aim_primary_hub",
-        lambda: _EmptyHub(),
+        lambda: FakePullHub(),
     )
 
     monkeypatch.setattr(
