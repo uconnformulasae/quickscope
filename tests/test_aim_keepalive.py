@@ -9,7 +9,13 @@ from services import aim_live
 from services.aim_device_cache import clear_cache_for_tests, get_cached
 from services.aim_discovery import DISCOVERY_MAGIC
 from services.aim_keepalive import AimKeepalive
-from services.aim_live import RECONNECT_HELLO_TIMEOUT_S, AimLiveClient
+from routes import sessions
+from services.aim_live import (
+    RECONNECT_HANDSHAKE_TIMEOUT_S,
+    RECONNECT_HELLO_TIMEOUT_S,
+    RECONNECT_TCP_TIMEOUT_S,
+    AimLiveClient,
+)
 
 _REPLY = b"\xec\x00\x00\x00" + b"\x00" * 120 + b"AiM-EVO5-00740-UConn-EV" + b"\x00" * 97
 
@@ -104,19 +110,23 @@ def test_keepalive_stop_is_idempotent_and_stops_sending() -> None:
     asyncio.run(body())
 
 
-def test_reconnect_uses_short_hello_timeout() -> None:
+def test_reconnect_with_retry_uses_short_timeouts(monkeypatch) -> None:  # noqa: ANN001
     async def body() -> None:
         client = AimLiveClient(host="127.0.0.1")
         calls: list[dict] = []
 
-        async def fake_connect(**kwargs) -> None:  # noqa: ANN003
+        async def fake_reconnect(**kwargs) -> None:  # noqa: ANN003
             calls.append(kwargs)
 
-        client.connect = fake_connect  # type: ignore[method-assign]
-        await client._reconnect()
+        client._reconnect = fake_reconnect  # type: ignore[method-assign]
+        await client._reconnect_with_retry()
 
         assert calls == [
-            {"discover_first": True, "timeout": 15.0, "hello_timeout": RECONNECT_HELLO_TIMEOUT_S}
+            {
+                "timeout": RECONNECT_HANDSHAKE_TIMEOUT_S,
+                "hello_timeout": RECONNECT_HELLO_TIMEOUT_S,
+                "tcp_timeout": RECONNECT_TCP_TIMEOUT_S,
+            }
         ]
 
     asyncio.run(body())
@@ -151,7 +161,9 @@ def test_unanswered_hello_on_reconnect_fails_fast(monkeypatch) -> None:  # noqa:
     asyncio.run(body())
 
 
-def test_client_close_stops_keepalive(monkeypatch) -> None:  # noqa: ANN001
+def test_download_keepalive_starts_and_stops(monkeypatch) -> None:  # noqa: ANN001
+    """Keepalive is wired into the download route, not the live client."""
+
     async def body() -> None:
         device, device_transport, device_port = await _start_fake_device()
         real_keepalive = AimKeepalive
@@ -159,18 +171,29 @@ def test_client_close_stops_keepalive(monkeypatch) -> None:  # noqa: ANN001
         def local_keepalive(host: str) -> AimKeepalive:
             return real_keepalive(host, interval_s=0.05, device_port=device_port, local_port=0)
 
-        monkeypatch.setattr(aim_live, "AimKeepalive", local_keepalive)
-        client = AimLiveClient(host="127.0.0.1")
-        await client._ensure_keepalive()
-        keepalive = client._keepalive
+        monkeypatch.setattr(sessions, "AimKeepalive", local_keepalive)
+        keepalive = await sessions._start_download_keepalive("127.0.0.1")
         assert keepalive is not None and keepalive.running
-        await client._ensure_keepalive()
-        assert client._keepalive is keepalive
+        await asyncio.sleep(0.2)
+        assert device.probes
 
-        await client.close()
+        await keepalive.stop()
         device_transport.close()
-
-        assert client._keepalive is None
         assert not keepalive.running
+
+    asyncio.run(body())
+
+
+def test_download_keepalive_start_failure_is_non_fatal(monkeypatch) -> None:  # noqa: ANN001
+    async def body() -> None:
+        class Broken:
+            def __init__(self, host: str) -> None:
+                pass
+
+            async def start(self) -> None:
+                raise OSError("no socket")
+
+        monkeypatch.setattr(sessions, "AimKeepalive", Broken)
+        assert await sessions._start_download_keepalive("127.0.0.1") is None
 
     asyncio.run(body())
