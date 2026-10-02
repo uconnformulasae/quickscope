@@ -54,6 +54,7 @@ from services.aim_discovery import (
     probe_device_ips,
 )
 from services.aim_device_cache import get_cached, record_identity
+from services.aim_keepalive import AimKeepalive
 from services.aim_live_layout import (
     ChannelField,
     decode_live_channels,
@@ -85,11 +86,11 @@ PUMP_FALLBACK_MICRO_DELAY_S = 0.07
 SETUP_DRAIN_IDLE_S = 0.16
 POST_SETUP_DRAIN_IDLE_S = 0.2
 
-# The EVO5 does not keep a live TCP session open forever: RS3-9-22-26-long.pcapng
-# shows Race Studio itself cycling a fresh TCP connection to port 2000 every
-# ~40-90s (device sends the FIN in working-dropped-6-50.pcapng after ~16 live
-# frames / ~30s), and Race Studio just reconnects immediately so the operator
-# never notices. We do the same here instead of ending the stream.
+# The EVO5 closes port 2000 ~30 s after the last UDP aim-ka keep-alive. Race
+# Studio sends aim-ka every ~1.1 s and keeps one live TCP for minutes
+# (RS3_long_live.pcapng: 149 s, client FIN); without it QuickScope was dropped
+# every 30.8 s with a ~2 s data gap (QS_Live_long_reconnect.pcapng). See
+# `aim_keepalive`. Reconnect stays as a safety net for real WiFi/device loss.
 RECONNECT_MAX_ATTEMPTS = 10
 RECONNECT_BACKOFF_S = 1.0
 # Fast-recovery tuning. A drop is routine, so a dead attempt must be cheap:
@@ -448,6 +449,7 @@ class AimLiveClient:
         self._snapshot_gaps_ms: deque[float] = deque(maxlen=64)
         self._last_snapshot_at: float | None = None
         self._last_rx_at: float | None = None
+        self._keepalive: Optional[AimKeepalive] = None
         # Optional sink for connection-state events (e.g. "reconnecting" /
         # "live") so the WS route can tell the browser the device link is
         # cycling instead of the UI just appearing to freeze.
@@ -467,6 +469,27 @@ class AimLiveClient:
     @property
     def connected(self) -> bool:
         return self._writer is not None and not self._writer.is_closing()
+
+    async def _ensure_keepalive(self) -> None:
+        """Start (or retarget) the aim-ka UDP keep-alive; it outlives reconnects."""
+        if self._keepalive is not None and self._keepalive.host == self.host and self._keepalive.running:
+            return
+        await self._stop_keepalive()
+        keepalive = AimKeepalive(self.host)
+        try:
+            await keepalive.start()
+        except OSError as exc:
+            logger.warning("AiM keepalive: could not start (%s); device will drop TCP every ~30s", exc)
+            self._emit_trace("keepalive_failed", error=str(exc))
+            return
+        self._keepalive = keepalive
+        self._emit_trace("keepalive_started", udp_port=keepalive.bound_port)
+
+    async def _stop_keepalive(self) -> None:
+        if self._keepalive is None:
+            return
+        keepalive, self._keepalive = self._keepalive, None
+        await keepalive.stop()
 
     async def connect(
         self,
@@ -535,6 +558,7 @@ class AimLiveClient:
             discover_first,
             timeout,
         )
+        await self._ensure_keepalive()
         self._emit_trace("tcp_begin", host=self.host, port=self.port)
         try:
             self._reader, self._writer = await asyncio.wait_for(
@@ -1084,12 +1108,26 @@ class AimLiveClient:
             if self._closed:
                 return
             if isinstance(device_error, ConnectionError):
+                ka = self._keepalive
+                ka_reply_age = ka.last_reply_age_s if ka is not None else None
                 logger.warning(
                     "AiM live stream: device closed connection during poll "
-                    "(snapshots=%d so far); attempting reconnect",
+                    "(snapshots=%d so far, keepalive sent=%d replies=%d last_reply_age=%s s); "
+                    "attempting reconnect",
                     self._snapshots_yielded,
+                    ka.sent_count if ka is not None else 0,
+                    ka.reply_count if ka is not None else 0,
+                    f"{ka_reply_age:.1f}" if ka_reply_age is not None else "n/a",
                 )
-                self._emit_trace("device_dropped", snapshots=self._snapshots_yielded)
+                self._emit_trace(
+                    "device_dropped",
+                    snapshots=self._snapshots_yielded,
+                    keepalive_running=ka is not None,
+                    keepalive_replies=ka.reply_count if ka is not None else 0,
+                    keepalive_last_reply_age_s=(
+                        round(ka_reply_age, 2) if ka_reply_age is not None else None
+                    ),
+                )
                 dropped_at = asyncio.get_running_loop().time()
                 self._emit_status("reconnecting", snapshots=self._snapshots_yielded)
                 # Raises (propagating to the caller) if the device never comes back.
@@ -1292,6 +1330,7 @@ class AimLiveClient:
             poll_a_timeouts=self._poll_a_timeouts,
             decode_resync_bytes=self._decode_resync_bytes,
         )
+        await self._stop_keepalive()
         if self._writer is not None:
             try:
                 self._writer.close()

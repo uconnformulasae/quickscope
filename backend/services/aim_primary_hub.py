@@ -86,7 +86,11 @@ class AimPrimaryHub:
         await self.close_primary()
         logger.info("AiM primary hub: opening TCP to %s (live handshake)", target)
         client = AimLiveClient(host=target, trace=trace)
-        await client.connect()
+        try:
+            await client.connect()
+        except BaseException:
+            await client.close()
+            raise
         self._client = client
         return client
 

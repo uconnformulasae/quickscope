@@ -27,6 +27,8 @@ On that single connection, client STNC order is roughly:
 | **QS drop (pre-fix)** | `c:\Users\jesse\Downloads\working-dropped-5-55.pcapng` | **8** | 21×707 B then device RST; 19/22 cycles `(1,2)` from post-LIVE micro |
 | **QS drop (post micro-fix, still no reconnect)** | `~/Downloads/wireshark/working-dropped-6-50.pcapng` | **10** | Clean `(1,1)` micro cycles, 16×707 B, then **device**-initiated FIN at ~31s. Client (pre-fix) kept polling after FIN → device RST. Root cause of the "drops around 20 frames" bug: `AimLiveClient.stream()` treated the device FIN as fatal instead of reconnecting. |
 | **RS3 long session (reconnect reference)** | `~/Downloads/wireshark/RS3-9-22-26-long.pcapng` | **30/31/32** | Race Studio itself gets the same device-initiated close every 40–90s and reconnects transparently (new TCP + full enum) — this is the behavior QuickScope now mirrors |
+| **RS3 long live (keepalive reference)** | `c:\Users\jesse\Downloads\RS3_long_live.pcapng` | — | `aim-ka` UDP 36002→36002 every ~1.1 s (207 sent / 174 replies); one live TCP held **149 s**, closed by RS3 (client FIN). Reconnect → first 595 B frame in 0.7–0.85 s |
+| **QS live, no keepalive** | `c:\Users\jesse\Downloads\QS_Live_long_reconnect.pcapng` | — | One `aim-ka` in 143 s → device FIN every **30.8 s**; ~2 s data gap (~4 frames) per reconnect, one 11.5 s gap when 4 hellos went unanswered. Fix: `AimLiveClient` runs `AimKeepalive` for the client's lifetime |
 
 Fixtures: `live_2026_follow_raw.txt`, `live_pedal_2026_follow_raw.txt`.
 

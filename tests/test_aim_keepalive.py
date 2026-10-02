@@ -161,8 +161,146 @@ def test_unanswered_hello_on_reconnect_fails_fast(monkeypatch) -> None:  # noqa:
     asyncio.run(body())
 
 
+class _FakeKeepalive:
+    instances: list["_FakeKeepalive"] = []
+
+    def __init__(self, host: str, *, fail: bool = False) -> None:
+        self.host = host
+        self.fail = fail
+        self.running = False
+        self.stopped = False
+        self.bound_port = 36002
+        self.sent_count = 0
+        self.reply_count = 0
+        self.last_reply_age_s = None
+        _FakeKeepalive.instances.append(self)
+
+    async def start(self) -> None:
+        if self.fail:
+            raise OSError("no socket")
+        self.running = True
+
+    async def stop(self) -> None:
+        self.running = False
+        self.stopped = True
+
+
+def _install_fake_keepalive(monkeypatch, *, fail: bool = False) -> None:  # noqa: ANN001
+    _FakeKeepalive.instances = []
+    monkeypatch.setattr(aim_live, "AimKeepalive", lambda host: _FakeKeepalive(host, fail=fail))
+    monkeypatch.setattr(aim_live, "get_cached", lambda: None)
+
+
+async def _connect_to_closed_port(client: AimLiveClient) -> None:
+    try:
+        await client.connect(discover_first=False, tcp_timeout=1.0)
+    except ConnectionError:
+        pass
+
+
+def _closed_tcp_port() -> int:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def test_live_connect_starts_keepalive_before_tcp(monkeypatch) -> None:  # noqa: ANN001
+    """QS_Live_long_reconnect.pcapng: no aim-ka during live -> device FIN every 30.8 s."""
+
+    async def body() -> None:
+        _install_fake_keepalive(monkeypatch)
+        client = AimLiveClient(host="127.0.0.1", port=_closed_tcp_port())
+        await _connect_to_closed_port(client)
+
+        assert len(_FakeKeepalive.instances) == 1
+        assert _FakeKeepalive.instances[0].host == "127.0.0.1"
+        assert _FakeKeepalive.instances[0].running
+
+        await client.close()
+        assert _FakeKeepalive.instances[0].stopped
+
+    asyncio.run(body())
+
+
+def test_live_reconnect_reuses_running_keepalive(monkeypatch) -> None:  # noqa: ANN001
+    async def body() -> None:
+        _install_fake_keepalive(monkeypatch)
+        client = AimLiveClient(host="127.0.0.1", port=_closed_tcp_port())
+        await _connect_to_closed_port(client)
+        await _connect_to_closed_port(client)
+
+        assert len(_FakeKeepalive.instances) == 1
+        await client.close()
+
+    asyncio.run(body())
+
+
+def test_live_keepalive_retargets_when_host_changes(monkeypatch) -> None:  # noqa: ANN001
+    async def body() -> None:
+        _install_fake_keepalive(monkeypatch)
+        client = AimLiveClient(host="127.0.0.1", port=_closed_tcp_port())
+        await _connect_to_closed_port(client)
+        client.host = "127.0.0.2"
+        await client._ensure_keepalive()
+
+        first, second = _FakeKeepalive.instances
+        assert first.stopped
+        assert second.host == "127.0.0.2" and second.running
+        await client.close()
+
+    asyncio.run(body())
+
+
+def test_live_keepalive_start_failure_is_non_fatal(monkeypatch) -> None:  # noqa: ANN001
+    async def body() -> None:
+        _install_fake_keepalive(monkeypatch, fail=True)
+        client = AimLiveClient(host="127.0.0.1", port=_closed_tcp_port())
+        try:
+            await client.connect(discover_first=False, tcp_timeout=1.0)
+        except ConnectionError as exc:
+            # Windows times out on a closed port; POSIX refuses it.
+            assert "TCP" in str(exc)
+        else:
+            raise AssertionError("closed port should still fail at TCP, not keepalive")
+        assert client._keepalive is None
+        await client.close()
+
+    asyncio.run(body())
+
+
+def test_hub_failed_connect_stops_keepalive(monkeypatch) -> None:  # noqa: ANN001
+    from services.aim_primary_hub import AimPrimaryHub
+
+    async def body() -> None:
+        _install_fake_keepalive(monkeypatch)
+        port = _closed_tcp_port()
+
+        class _ClosedPortClient(AimLiveClient):
+            def __init__(self, host: str, trace=None) -> None:  # noqa: ANN001
+                super().__init__(host=host, port=port, trace=trace)
+
+            async def connect(self, **kwargs) -> None:  # noqa: ANN003
+                await super().connect(discover_first=False, tcp_timeout=1.0)
+
+        from services import aim_primary_hub
+
+        monkeypatch.setattr(aim_primary_hub, "AimLiveClient", _ClosedPortClient)
+        hub = AimPrimaryHub()
+        try:
+            await hub.ensure_primary("127.0.0.1")
+        except ConnectionError:
+            pass
+        else:
+            raise AssertionError("closed port should fail")
+
+        assert _FakeKeepalive.instances and all(k.stopped for k in _FakeKeepalive.instances)
+
+    asyncio.run(body())
+
+
 def test_download_keepalive_starts_and_stops(monkeypatch) -> None:  # noqa: ANN001
-    """Keepalive is wired into the download route, not the live client."""
 
     async def body() -> None:
         device, device_transport, device_port = await _start_fake_device()
