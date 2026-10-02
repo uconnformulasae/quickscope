@@ -97,7 +97,7 @@ BACKEND_PID=$!
 # Start frontend dev server
 echo "Starting QuickScope frontend on :5173..."
 npm run dev &
-FRONTEND_PID=$!
+@@FRONTEND_PID=$!
 
 # Cleanup on exit
 trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit" INT TERM EXIT

@@ -26,17 +26,78 @@ CHART_COLORS = [
 
 
 # ─── In-memory state (active session for analysis) ──────────────────────────
+#
+# Parsed logs live in session_cache (LRU, keyed by session_id). SessionState
+# exposes the active entry for legacy routes that read state.log.
+
+from services.session_cache import session_cache
+
+_PENDING_ID = "__pending__"
+
 
 class SessionState:
+    """Facade over session_cache for the active analysis session."""
+
     def __init__(self):
-        self.log = None
-        self.filename: Optional[str] = None
-        self.session_id: Optional[str] = None
+        self._filename: Optional[str] = None
+
+    @property
+    def log(self):
+        sid = session_cache.active_id
+        if sid is None:
+            return None
+        entry = session_cache.get(sid)
+        return entry[0] if entry else None
+
+    @log.setter
+    def log(self, value):
+        if value is None:
+            session_cache.clear_active()
+            return
+        sid = session_cache.active_id or _PENDING_ID
+        session_cache.put(sid, value, self._filename or "")
+        session_cache.set_active(sid)
+
+    @property
+    def filename(self):
+        sid = session_cache.active_id
+        if sid is not None:
+            entry = session_cache.get(sid)
+            if entry:
+                return entry[1]
+        return self._filename
+
+    @filename.setter
+    def filename(self, value):
+        self._filename = value
+        sid = session_cache.active_id
+        if sid is not None:
+            entry = session_cache.get(sid)
+            if entry is not None and entry[1] != value:
+                session_cache.put(sid, entry[0], value or "")
+
+    @property
+    def session_id(self):
+        return session_cache.active_id
+
+    @session_id.setter
+    def session_id(self, value):
+        if value is None:
+            session_cache.clear_active()
+            return
+        pending = session_cache.get(_PENDING_ID)
+        if pending is not None and value != _PENDING_ID:
+            log, fn = pending
+            session_cache.evict(_PENDING_ID)
+            session_cache.put(value, log, fn)
+        session_cache.set_active(value)
 
     def clear(self):
-        self.log = None
-        self.filename = None
-        self.session_id = None
+        sid = session_cache.active_id
+        if sid is not None:
+            session_cache.evict(sid)
+        session_cache.evict(_PENDING_ID)
+        self._filename = None
 
     @property
     def loaded(self) -> bool:
@@ -44,6 +105,14 @@ class SessionState:
 
 
 state = SessionState()
+
+
+def get_log(session_id: Optional[str] = None):
+    """Resolve session_id to a parsed log without changing the active session."""
+    if not session_id:
+        return state.log
+    entry = session_cache.get(session_id)
+    return entry[0] if entry else None
 
 # Guard against concurrent sync operations
 _sync_lock = asyncio.Lock()
@@ -87,9 +156,13 @@ def channel_data(name: str, table) -> dict:
     return {"timestamps": timestamps, "values": clean_vals}
 
 
-def parse_file(file_path: str | Path):
+def parse_file(file_path: str | Path, priority: int | None = None):
     from parsers import parse_xrk
-    return parse_xrk(file_path)
+    from parsers.parse_gate import PRIORITY_INTERACTIVE
+
+    if priority is None:
+        priority = PRIORITY_INTERACTIVE
+    return parse_xrk(file_path, priority=priority)
 
 
 def extract_session_info(log, filename: str) -> dict:

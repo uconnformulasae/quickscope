@@ -10,7 +10,8 @@ from fastapi import APIRouter, UploadFile, File, Query, HTTPException, Backgroun
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from services import session_store, lap_detection, upload_log
+from services import session_store, lap_detection, upload_log, gps_preview
+from services.session_cache import session_cache
 from state import (
     state, logger, background_sync, CHART_COLORS,
     parse_file, extract_session_info, parse_recorded_at,
@@ -71,6 +72,11 @@ async def upload_file(
     existing = session_store.find_by_filename(filename)
     if existing:
         state.session_id = existing["id"]
+        session_cache.rebind_file(existing["id"], dest, filename)
+        try:
+            gps_preview.warm_from_log(existing["id"], dest, log)
+        except Exception:
+            logger.exception("Failed to warm GPS preview cache for %s", filename)
         if background_tasks:
             background_tasks.add_task(background_sync)
         upload_log.record(
@@ -92,6 +98,12 @@ async def upload_file(
         lap_count=info["lapCount"],
     )
     state.session_id = entry["id"]
+    session_cache.rebind_file(entry["id"], dest, filename)
+
+    try:
+        gps_preview.warm_from_log(entry["id"], dest, log)
+    except Exception:
+        logger.exception("Failed to warm GPS preview cache for %s", filename)
 
     if background_tasks:
         background_tasks.add_task(background_sync)

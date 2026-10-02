@@ -17,6 +17,7 @@ from libxrk.base import LogFile
 
 from . import aim_dll
 from .libxrk_fixup import normalize_libxrk_timestamps
+from .parse_gate import PARSE_GATE, PRIORITY_INTERACTIVE, PRIORITY_PREVIEW
 
 logger = logging.getLogger("quickscope")
 
@@ -46,17 +47,7 @@ def _parse_libxrk(path: Path) -> LogFile:
     return normalize_libxrk_timestamps(log)
 
 
-def parse_xrk(path: str | Path) -> LogFile:
-    """
-    Parse an XRK/XRZ file using the AiM DLL when available, else libxrk.
-
-    Env overrides:
-      QUICKSCOPE_PARSER=libxrk  — force libxrk
-      QUICKSCOPE_PARSER=aim_dll — force DLL (raises on failure)
-      AIM_XRK_DLL=<path>        — explicit DLL location
-    """
-    p = Path(path)
-
+def _parse_xrk_unlocked(p: Path) -> LogFile:
     if _parser_override() == "libxrk":
         log = _parse_libxrk(p)
         logger.info("parsed %s via libxrk (forced)", p.name)
@@ -79,3 +70,19 @@ def parse_xrk(path: str | Path) -> LogFile:
     log = _parse_libxrk(p)
     logger.info("parsed %s via libxrk (fallback)", p.name)
     return log
+
+
+def parse_xrk(path: str | Path, priority: int = PRIORITY_INTERACTIVE) -> LogFile:
+    """
+    Parse an XRK/XRZ file using the AiM DLL when available, else libxrk.
+
+    Env overrides:
+      QUICKSCOPE_PARSER=libxrk  — force libxrk
+      QUICKSCOPE_PARSER=aim_dll — force DLL (raises on failure)
+      AIM_XRK_DLL=<path>        — explicit DLL location
+
+    ``priority``: lower runs first when multiple parses are queued (see parse_gate).
+    """
+    p = Path(path)
+    with PARSE_GATE.hold(priority):
+        return _parse_xrk_unlocked(p)

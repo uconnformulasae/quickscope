@@ -75,7 +75,14 @@ export interface LocalSession {
 
 export interface AimStatus {
   connected: boolean;
-  device: { ip: string; ssid: string; device_name: string } | null;
+  device: {
+    ip: string;
+    ssid: string;
+    device_name: string;
+    model?: string;
+    serial?: string;
+    vehicle?: string;
+  } | null;
 }
 
 export interface AimSession {
@@ -432,10 +439,29 @@ export async function fetchLiveStatus(): Promise<LiveStatus> {
   return res.json();
 }
 
+export type LiveSnapshotMessage = {
+  type: 'snapshot';
+  /** Monotonic per-connection snapshot counter; a jump means data was skipped. */
+  seq?: number;
+  ts: number;
+  subsystem: string;
+  /** Opt-in only (connect with `?raw=1`) -- omitted by default to save ~1 KB/snapshot. */
+  raw?: string;
+  channels?: Record<string, number>;
+};
+
 export type LiveWSMessage =
   | { type: 'connected'; device: LiveDeviceInfo }
-  | { type: 'snapshot'; ts: number; subsystem: string; raw: string }
-  | { type: 'error'; message: string };
+  | LiveSnapshotMessage
+  | { type: 'error'; message: string }
+  // Device link cycling (routine ~30s AiM drop): 'reconnecting' until the
+  // stream resumes as 'live' (with the gap length in ms).
+  | { type: 'status'; state: 'reconnecting' | 'live'; gap_ms?: number; attempt?: number }
+  | { type: 'heartbeat' }
+  // Several snapshots sent in one WS frame when the sender falls behind the
+  // device pump (e.g. a busy tab) -- apply each in order, same as if they'd
+  // arrived one at a time.
+  | { type: 'batch'; messages: LiveWSMessage[] };
 
 export function liveWebSocketUrl(): string {
   // Replace http(s) with ws(s) for the live endpoint.
