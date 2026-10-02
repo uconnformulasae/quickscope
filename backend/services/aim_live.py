@@ -66,6 +66,8 @@ logger = logging.getLogger(__name__)
 # 103-channel legacy vs 113-channel UConn EVO5 (RS3-5-47 / live_pedal use Q:703 → 707 B).
 LIVE_FRAME_SIZE_LEGACY = 547
 LIVE_FRAME_SIZE_113CH = 707
+# Layout-parse bound only (a field wider/further than this is corrupt); effectively unlimited.
+LIVE_FRAME_LAYOUT_CAP = 1 << 16
 POLL_INTERVAL_S = 0.125  # RS3 steady poll step (RS3-5-47.pcapng)
 # RS3 sends its next steady-poll STNC every 150-190 ms without waiting for a
 # snapshot (RS3-5-47.pcapng). The pump task below reproduces that instead of
@@ -241,9 +243,31 @@ def _stcp_date_followup(now: datetime | None = None) -> bytes:
     return bytes(buf)
 
 
-def _is_live_snapshot_payload(payload: bytes) -> bool:
-    """547 / 691 / 707 B telemetry (113ch EVO5 steady state is often 707 B ``Syst``)."""
-    if len(payload) not in (LIVE_FRAME_SIZE_LEGACY, 691, LIVE_FRAME_SIZE_113CH):
+# Live telemetry is recognised by its header and a minimum length, not by an
+# exact size, so a config with a different channel count (547 / 595 / 691 /
+# 707 B ...) needs no code change and there is no upper bound.
+# Known non-live decoys: 12 B `kkk` heartbeat, 64 B control, 68 B `Fuel`,
+# 324 B `Syst`. Real telemetry is always larger than all of them.
+LIVE_FRAME_MIN_DECOY_CEIL = 324
+# Floor used before the channel layout has been parsed (smallest known live
+# frame is 547 B).
+LIVE_FRAME_MIN_NO_LAYOUT = 500
+# Hint predictor only: blobs announced via Q-ack at or above this size are the
+# 3462 B enum / 15 KB layout frames, never live telemetry.
+_Q_HINT_BLOB_MIN = _ENUM_BLOB_MIN_LEN
+
+
+def _live_min_len(fields: list[ChannelField] | None = None) -> int:
+    """Smallest payload that can be a live frame: the layout's extent, else a fixed floor."""
+    if fields:
+        layout_end = max(f.live_offset + f.width for f in fields)
+        return max(layout_end, LIVE_FRAME_MIN_DECOY_CEIL + 1)
+    return LIVE_FRAME_MIN_NO_LAYOUT
+
+
+def _is_live_snapshot_payload(payload: bytes, fields: list[ChannelField] | None = None) -> bool:
+    """Live telemetry: zero prefix, non-layout tag, at least the layout's length."""
+    if len(payload) < _live_min_len(fields):
         return False
     if payload[:4] != b"\x00\x00\x00\x00":
         return False
@@ -253,10 +277,10 @@ def _is_live_snapshot_payload(payload: bytes) -> bool:
     return True
 
 
-def _q_hint_live_payload_size(hint: int) -> int | None:
+def _q_hint_live_payload_size(hint: int, fields: list[ChannelField] | None = None) -> int | None:
     """Next STCP payload length after Q-ack when the device will send a live snapshot."""
     next_len = hint + 4
-    if next_len in (LIVE_FRAME_SIZE_LEGACY, 691, LIVE_FRAME_SIZE_113CH):
+    if _live_min_len(fields) <= next_len < _Q_HINT_BLOB_MIN:
         return next_len
     return None
 
@@ -601,7 +625,7 @@ class AimLiveClient:
         if op in (_STCP_OP_Q, _STCP_OP_E, _STCP_OP_I):
             if op == _STCP_OP_Q:
                 hint = struct.unpack("<I", payload[16:20])[0]
-                live_len = _q_hint_live_payload_size(hint)
+                live_len = _q_hint_live_payload_size(hint, self._channel_fields or None)
                 if live_len is not None:
                     self._pending_live_size = live_len
             await self._send_stcp(_STCP_4BYTE_ACK)
@@ -753,7 +777,7 @@ class AimLiveClient:
             op = pl[24]
             if op == _STCP_OP_Q:
                 hint = struct.unpack("<I", pl[16:20])[0]
-                live_len = _q_hint_live_payload_size(hint)
+                live_len = _q_hint_live_payload_size(hint, self._channel_fields or None)
                 if live_len is not None:
                     self._pending_live_size = live_len
                 return True
@@ -915,7 +939,7 @@ class AimLiveClient:
                 op = pl[24]
                 if op == _STCP_OP_Q:
                     hint = struct.unpack("<I", pl[16:20])[0]
-                    live_len = _q_hint_live_payload_size(hint)
+                    live_len = _q_hint_live_payload_size(hint, self._channel_fields or None)
                     if live_len is not None:
                         self._pending_live_size = live_len
                     await self._pay_micro_if_owed()
@@ -934,7 +958,7 @@ class AimLiveClient:
                 continue
             if len(pl) in (12, 324, 68):
                 continue
-            if _is_live_snapshot_payload(pl):
+            if _is_live_snapshot_payload(pl, self._channel_fields or None):
                 snap = parse_live_snapshot(pl, self._channel_fields or None)
                 queue.put_nowait(snap)
                 continue
@@ -1088,7 +1112,7 @@ class AimLiveClient:
         # field against the actual payload length per frame, so using the widest
         # cap here is a safe superset: fields beyond a shorter frame just decode
         # to None instead of being silently dropped at layout-parse time.
-        fields = parse_channel_layout(blob, live_frame_len=LIVE_FRAME_SIZE_113CH)
+        fields = parse_channel_layout(blob, live_frame_len=LIVE_FRAME_LAYOUT_CAP)
         if not fields:
             logger.warning("AiM live: channel layout parse returned 0 fields (%s)", phase)
             return

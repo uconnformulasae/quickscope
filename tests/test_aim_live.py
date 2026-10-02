@@ -267,3 +267,55 @@ def test_reconnect_is_fast_and_reader_never_blocks() -> None:
 
     asyncio.run(run())
     assert calls == [aim_live.RECONNECT_HELLO_TIMEOUT_S] * 3
+
+
+def test_live_frame_accepted_at_any_size_above_floor() -> None:
+    """595 B (Oct-1 EVO5 config) and sizes beyond 707 B are live; no whitelist."""
+    for size in (547, 595, 691, 707, 900, 4000):
+        payload = bytearray(size)
+        payload[4:8] = b"kkk\x01"
+        assert _is_live_snapshot_payload(bytes(payload)), size
+        assert _q_hint_live_payload_size(size - 4) == (size if size < 3400 else None)
+
+
+def test_decoys_and_blobs_not_live() -> None:
+    for size in (12, 64, 68, 324):
+        payload = bytearray(size)
+        payload[4:8] = b"kkk\x01"
+        assert not _is_live_snapshot_payload(bytes(payload)), size
+    hhh = bytearray(595)
+    hhh[4:8] = b"hhh\x01"
+    assert not _is_live_snapshot_payload(bytes(hhh))
+    enum_blob = bytearray(3462)
+    enum_blob[0:4] = b"<hiM"
+    assert not _is_live_snapshot_payload(bytes(enum_blob))
+    assert _q_hint_live_payload_size(3458) is None
+
+
+def test_oct1_capture_595_frames_decode_with_layout() -> None:
+    import sys
+    from pathlib import Path
+
+    from services.aim_live_layout import parse_channel_layout
+
+    cap = Path.home() / "Downloads" / "oct1livetest1.pcapng"
+    if not cap.exists():
+        pytest.skip("oct1livetest1.pcapng not available")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.aim_pcapng import tcp_streams
+
+    buf = tcp_streams(cap)[0].reassemble(client_to_server=False)
+    off, blob, live = 0, None, []
+    while off < len(buf):
+        f, n = decode_frame(buf, off)
+        if f is None:
+            off += n or 1
+            continue
+        off += n
+        if len(f.payload) == 15588:
+            blob = f.payload
+        elif f.payload[4:8] == b"kkk\x01" and len(f.payload) == 595:
+            live.append(f.payload)
+    fields = parse_channel_layout(blob, live_frame_len=1 << 16)
+    assert live and all(_is_live_snapshot_payload(p, fields) for p in live)
+    assert any(parse_live_snapshot(p, fields).channels for p in live)
