@@ -319,3 +319,83 @@ def test_oct1_capture_595_frames_decode_with_layout() -> None:
     fields = parse_channel_layout(blob, live_frame_len=1 << 16)
     assert live and all(_is_live_snapshot_payload(p, fields) for p in live)
     assert any(parse_live_snapshot(p, fields).channels for p in live)
+
+
+def test_ic_capture_494_frames_decode_ic_channels() -> None:
+    """UConn-IC: 494 B live frames + 85-channel layout; IMU/brake-temp channels decode."""
+    import sys
+    from pathlib import Path
+
+    from services.aim_live_layout import parse_channel_layout
+
+    cap = Path.home() / "Downloads" / "IC_RS3_live.pcapng"
+    if not cap.exists():
+        pytest.skip("IC_RS3_live.pcapng not available")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.aim_pcapng import tcp_streams
+
+    buf = tcp_streams(cap)[0].reassemble(client_to_server=False)
+    off, blob, live = 0, None, []
+    while off < len(buf):
+        f, n = decode_frame(buf, off)
+        if f is None:
+            off += n or 1
+            continue
+        off += n
+        if len(f.payload) == 11232:
+            blob = f.payload
+        elif len(f.payload) == 494 and f.payload[4:8] == b"kkk\x01":
+            live.append(f.payload)
+    fields = parse_channel_layout(blob, live_frame_len=1 << 16)
+    assert len(fields) == 85
+    assert all(_is_live_snapshot_payload(p, fields) for p in live)
+    assert all(_is_live_snapshot_payload(p) for p in live)  # even before layout loads
+    ch = parse_live_snapshot(live[10], fields).channels
+    assert "LateralAcc" in ch and "LF_BRKTempCH1" in ch
+    assert "S8_RPM" not in ch  # ECU sentinel => absent, not a bogus number
+
+
+def test_ic_layout_blob_recognised_by_tag_not_size() -> None:
+    """Regression: the 11232 B UConn-IC layout was missed (size list + >=12000 rule),
+    so no layout loaded and every snapshot decoded with channel_count=0."""
+    from services.aim_live_layout import is_layout_blob
+
+    layout = bytearray(11232)
+    layout[4:8] = b"hhh\x01"
+    assert is_layout_blob(bytes(layout))
+    small_hhh = bytearray(494)  # the 494 B `hhh` frame seen during setup is not a layout
+    small_hhh[4:8] = b"hhh\x01"
+    assert not is_layout_blob(bytes(small_hhh))
+    enum = bytearray(3490)
+    enum[0:4] = b"<hiM"
+    assert not is_layout_blob(bytes(enum))
+
+
+def test_ictestoct1_capture_layout_detected_and_decoded() -> None:
+    import sys
+    from pathlib import Path
+
+    from services.aim_live_layout import is_layout_blob, parse_channel_layout
+
+    cap = Path.home() / "Downloads" / "ictestoct1.pcapng"
+    if not cap.exists():
+        pytest.skip("ictestoct1.pcapng not available")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from scripts.aim_pcapng import tcp_streams
+
+    buf = tcp_streams(cap)[0].reassemble(client_to_server=False)
+    off, layouts, live = 0, [], []
+    while off < len(buf):
+        f, n = decode_frame(buf, off)
+        if f is None:
+            off += n or 1
+            continue
+        off += n
+        if is_layout_blob(f.payload):
+            layouts.append(f.payload)
+        elif len(f.payload) == 494 and f.payload[4:8] == b"kkk\x01":
+            live.append(f.payload)
+    assert layouts, "layout frame must be recognised"
+    fields = parse_channel_layout(layouts[0], live_frame_len=1 << 16)
+    assert len(fields) == 85
+    assert parse_live_snapshot(live[5], fields).channels

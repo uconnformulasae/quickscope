@@ -249,9 +249,9 @@ def _stcp_date_followup(now: datetime | None = None) -> bytes:
 # Known non-live decoys: 12 B `kkk` heartbeat, 64 B control, 68 B `Fuel`,
 # 324 B `Syst`. Real telemetry is always larger than all of them.
 LIVE_FRAME_MIN_DECOY_CEIL = 324
-# Floor used before the channel layout has been parsed (smallest known live
-# frame is 547 B).
-LIVE_FRAME_MIN_NO_LAYOUT = 500
+# Floor used before the channel layout has been parsed. Smallest known live
+# frame is the 494 B UConn-IC frame; stay above the 324 B decoy.
+LIVE_FRAME_MIN_NO_LAYOUT = 400
 # Hint predictor only: blobs announced via Q-ack at or above this size are the
 # 3462 B enum / 15 KB layout frames, never live telemetry.
 _Q_HINT_BLOB_MIN = _ENUM_BLOB_MIN_LEN

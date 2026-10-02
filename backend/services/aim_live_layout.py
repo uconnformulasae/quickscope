@@ -193,5 +193,17 @@ def decode_live_channels(payload: bytes, fields: list[ChannelField]) -> dict[str
     return out
 
 
+# Smaller than any real layout (the 85-channel UConn-IC layout is 11232 B) but
+# larger than the 494 B `hhh` frame the device also sends during setup.
+LAYOUT_MIN_LEN = 2000
+
+
 def is_layout_blob(payload: bytes) -> bool:
-    return len(payload) in LAYOUT_SIZES or len(payload) >= 12000
+    """Channel-layout frame: `\\0\\0\\0\\0hhh` header, any size above LAYOUT_MIN_LEN.
+
+    The layout size depends on the channel count (EV 13608/15060/15588 B, IC
+    11232 B), so identify it by its tag rather than a size list.
+    """
+    if len(payload) in LAYOUT_SIZES or len(payload) >= 12000:
+        return True
+    return len(payload) >= LAYOUT_MIN_LEN and payload[:4] == b"\x00\x00\x00\x00" and payload[4:7] == b"hhh"
