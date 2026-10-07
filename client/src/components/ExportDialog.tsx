@@ -1,14 +1,11 @@
 import { useState, useMemo, useCallback } from 'react';
 import { X, Download, Search, CheckSquare, Square } from 'lucide-react';
-import type { XRKSession, ChannelSample } from '../lib/xrk-parser';
-import type { DerivedChannel } from '../lib/useXRKStore';
+import type { XRKSession } from '../lib/xrk-parser';
 import { exportCSV } from '../lib/api';
 
 interface ExportDialogProps {
   session: XRKSession;
   fileName: string | null;
-  derivedChannels?: DerivedChannel[];
-  derivedSamplesMap?: Map<number, ChannelSample[]>;
   onClose: () => void;
 }
 
@@ -17,14 +14,11 @@ interface ExportChannel {
   name: string;
   units: string;
   sampleCount: number;
-  isDerived: boolean;
 }
 
 export function ExportDialog({
   session,
   fileName,
-  derivedChannels,
-  derivedSamplesMap,
   onClose,
 }: ExportDialogProps) {
   const [search, setSearch] = useState('');
@@ -53,28 +47,15 @@ export function ExportDialog({
         name: ch.shortName,
         units: ch.units,
         sampleCount: count,
-        isDerived: false,
       });
     });
 
-    if (derivedChannels && derivedSamplesMap) {
-      for (const dc of derivedChannels) {
-        const count = (derivedSamplesMap.get(dc.id) || []).length;
-        if (count === 0) continue;
-        list.push({
-          id: dc.id,
-          name: dc.name,
-          units: dc.units,
-          sampleCount: count,
-          isDerived: true,
-        });
-      }
-    }
+    // Derived channels are not listed: the backend export only knows session channels.
 
     // Sort alphabetically
     list.sort((a, b) => a.name.localeCompare(b.name));
     return list;
-  }, [session, derivedChannels, derivedSamplesMap]);
+  }, [session]);
 
   const filteredChannels = useMemo(() => {
     if (!search) return allChannels;
@@ -120,8 +101,8 @@ export function ExportDialog({
     setIsExporting(true);
 
     try {
-      // Get selected channel names (only session channels for backend export)
-      const selectedChannels = allChannels.filter(c => selectedIds.has(c.id) && !c.isDerived);
+      // Get selected channel names 
+      const selectedChannels = allChannels.filter(c => selectedIds.has(c.id));
       const channelNames = selectedChannels.map(c => c.name);
 
       if (channelNames.length === 0) {
@@ -220,7 +201,6 @@ export function ExportDialog({
                   <span className={`text-xs font-medium ${isSelected ? 'text-foreground' : 'text-muted-foreground'}`}>
                     {ch.name}
                     {ch.units && <span className="ml-1 text-muted-foreground/50">{ch.units}</span>}
-                    {ch.isDerived && <span className="ml-1.5 text-xs text-primary/60">derived</span>}
                   </span>
                 </div>
                 <span className="text-xs text-muted-foreground/40 tabular flex-shrink-0">

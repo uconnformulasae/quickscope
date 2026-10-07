@@ -29,7 +29,6 @@ def pull_env(tmp_path, monkeypatch, fake_keepalive):
         "routes.sessions.aim_connector.discover_device",
         lambda: {"ip": "10.0.0.1", "ssid": "AiM-TEST", "device_name": ""},
     )
-    monkeypatch.setattr("routes.sessions.sync_service.is_railway_configured", lambda: False)
     monkeypatch.setattr(
         "routes.sessions.extract_session_info",
         lambda log, filename: {"metadata": {}, "durationMs": 0, "lapCount": 0},

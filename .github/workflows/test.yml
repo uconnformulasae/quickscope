@@ -50,3 +50,6 @@ jobs:
 
       - name: TypeScript check
         run: npm run check
+
+      - name: Frontend unit tests
+        run: npm run test:client

@@ -3,7 +3,7 @@
  * Manages parsed XRK session data and UI state
  */
 import { useState, useCallback } from 'react';
-import type { XRKSession, ChannelDef, ChannelSample, ParseProgress } from './xrk-parser';
+import type { XRKSession, ChannelSample, ParseProgress } from './xrk-parser';
 import { evaluateFormula, extractChannelNames } from './formula-engine';
 import { fetchChannelData } from './api';
 

@@ -114,7 +114,8 @@ class AimPrimaryHub:
         try:
             self._live_active = True
             return await self.ensure_primary(host, trace=trace)
-        except Exception:
+        except BaseException:
+            # BaseException so a cancelled websocket (CancelledError) also releases the lock
             self._live_active = False
             self._lock.release()
             raise

@@ -58,8 +58,13 @@ function MiniPreviewChart({
 
     const minT = timestamps[0];
     const maxT = timestamps[timestamps.length - 1];
-    const minV = Math.min(...values);
-    const maxV = Math.max(...values);
+    // Loop instead of Math.min(...values): spreading large arrays overflows the call stack
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (const v of values) {
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
     const rangeV = maxV - minV || 1;
     const rangeT = maxT - minT || 1;
 

@@ -80,9 +80,8 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
           const summaries = (result.results || [])
             .filter(r => result.downloaded?.includes(r.filename))
             .map(r => {
-              const railwayNote = r.railway_queued ? 'Railway sync queued' : 'Railway sync skipped';
               const parseNote = r.parse_ok ? 'indexed' : 'parse warning';
-              return `${r.filename} · ${formatSize(r.bytes)} · ${parseNote} · ${railwayNote}`;
+              return `${r.filename} · ${formatSize(r.bytes)} · ${parseNote}`;
             });
           setDownloadResult(
             summaries.length > 0

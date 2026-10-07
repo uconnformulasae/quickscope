@@ -32,7 +32,7 @@ Without UDP keep-alive, EVO5 firmware closes the primary TCP roughly 30 s after 
 3. **Pull from AiM** — list and download sessions (primary TCP for list; download TCP per file).
 4. **Live view** — WebSocket at `/api/live/ws` drives `AimLiveClient.stream()` on the primary TCP.
 
-Downloaded files land in `backend/data/sessions/` and are indexed in `sessions.json`. With Railway configured, uploads run through `sync_service.py`.
+Downloaded files land in `backend/data/sessions/` and are indexed in `sessions.json`.
 
 ## Steady-state live poll (summary)
 

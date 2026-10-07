@@ -12,17 +12,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from services.aim_live import decode_frame
+from services.trace_file import open_unique
 
 _LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_download"
 
 
 class AimDownloadTrace:
     def __init__(self, filename: str, expected_size: int = 0) -> None:
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in filename)
-        self.path = _LOG_DIR / f"{stamp}_{safe}.log"
-        self._fh = self.path.open("w", encoding="utf-8")
+        self.path, self._fh = open_unique(_LOG_DIR, f"{stamp}_{safe}.log")
         self._unflushed = 0
         self.log(
             "session_start",

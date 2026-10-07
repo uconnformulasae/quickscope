@@ -39,6 +39,8 @@ export interface SessionInfo {
   totalSamples: number;
   lapCount: number;
   recordedAt?: string | null;
+  /** Set by the upload endpoint: id of the stored session. */
+  sessionId?: string;
 }
 
 export interface ChannelDataResponse {
@@ -57,7 +59,6 @@ export interface GPSData {
 
 export interface LocalSession {
   id: string;
-  remote_id: number | null;
   aim_session_id: string;
   filename: string;
   local_path: string | null;
@@ -67,8 +68,7 @@ export interface LocalSession {
   recorded_at: string | null;
   duration_s: number;
   lap_count: number;
-  sync_status: 'local_only' | 'remote_only' | 'synced' | 'uploading' | 'downloading';
-  source: 'manual_upload' | 'aim_device' | 'railway';
+  source: 'manual_upload' | 'aim_device';
   created_at: string;
   updated_at: string;
 }
@@ -97,17 +97,9 @@ export interface AimSession {
 }
 
 export interface Settings {
-  railway_url: string;
   aim_wifi_ssid: string;
   aim_device_ip: string;
   aim_device_port: number;
-}
-
-export interface SyncResult {
-  ok: boolean;
-  pulled: number;
-  pushed: number;
-  errors: string[];
 }
 
 // ─── Session Management ─────────────────────────────────────────────────────
@@ -123,24 +115,6 @@ export async function loadSession(sessionId: string): Promise<SessionInfo> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || `Load failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-export async function syncSessions(): Promise<SyncResult> {
-  const res = await fetch(`${API_BASE}/api/sessions/sync`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Sync failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-export async function pullSession(sessionId: string): Promise<{ ok: boolean; local_path?: string; error?: string }> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/pull`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Pull failed: ${res.status}`);
   }
   return res.json();
 }
@@ -197,7 +171,6 @@ export interface AimPullResult {
   session_id: string;
   parse_ok: boolean;
   local_path: string;
-  railway_queued: boolean;
 }
 
 export interface AimPullResponse {
@@ -218,7 +191,6 @@ export interface AimPullLogEntry {
   duration_s: number;
   session_id?: string;
   session_count?: number;
-  railway_queued: boolean;
   error?: string;
 }
 

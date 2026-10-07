@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,13 +13,28 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from services.aim_live import decode_frame, _is_live_snapshot_payload  # noqa: E402
 
-TSHARK = r"C:\Program Files\Wireshark\tshark.exe"
+_DEFAULT_TSHARK_WIN = r"C:\Program Files\Wireshark\tshark.exe"
+
+
+def _tshark_path() -> str:
+    """tshark on PATH, else the default Windows Wireshark install."""
+    found = shutil.which("tshark")
+    if found:
+        return found
+    if Path(_DEFAULT_TSHARK_WIN).exists():
+        return _DEFAULT_TSHARK_WIN
+    raise SystemExit("tshark not found on PATH or at the default Windows install location")
+
+
+def _captures_dir() -> Path:
+    """Folder holding the default captures: $QUICKSCOPE_AIM_CAPTURES or ~/Downloads."""
+    return Path(os.environ.get("QUICKSCOPE_AIM_CAPTURES") or Path.home() / "Downloads")
 
 
 def merged_events(pcap: Path, stream: int) -> list[tuple[float, str, str]]:
     out = subprocess.check_output(
         [
-            TSHARK,
+            _tshark_path(),
             "-r",
             str(pcap),
             "-Y",
@@ -86,9 +103,10 @@ def first_poll_idx(ev: list) -> int:
 
 
 def main() -> None:
+    captures = _captures_dir()
     cases = [
-        ("RS3 1min", Path(r"c:\Users\jesse\Downloads\RS3_live_1min.pcapng"), 36),
-        ("QS new_dropped", Path(r"c:\Users\jesse\Downloads\new_dropped.pcapng"), 90),
+        ("RS3 1min", captures / "RS3_live_1min.pcapng", 36),
+        ("QS new_dropped", captures / "new_dropped.pcapng", 90),
     ]
     for label, pcap, stream in cases:
         ev = merged_events(pcap, stream)

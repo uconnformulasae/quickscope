@@ -135,7 +135,6 @@ class AimDll:
             fn.argtypes = [c_int]
             fn.restype = c_char_p
 
-        from ctypes import Structure
 
         d.get_date_and_time.argtypes = [c_int]
         d.get_date_and_time.restype = POINTER(_TimeStruct)

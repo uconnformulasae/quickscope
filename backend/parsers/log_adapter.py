@@ -55,12 +55,11 @@ def _make_channel_table(
     times_already_ms: bool = False,
 ) -> pa.Table:
     timecodes = _to_timecodes_ms(times, already_ms=times_already_ms)
-    clean_values = []
-    for v in values:
-        if isinstance(v, (int, float)) and math.isfinite(v):
-            clean_values.append(float(v))
-        else:
-            clean_values.append(0.0)
+    # Dropouts stay NaN: a made-up 0.0 would read as a real measurement.
+    clean_values = [
+        float(v) if isinstance(v, (int, float)) and math.isfinite(v) else float("nan")
+        for v in values
+    ]
 
     meta = ChannelMetadata(
         units=units,

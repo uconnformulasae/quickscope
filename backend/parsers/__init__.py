@@ -17,7 +17,7 @@ from libxrk.base import LogFile
 
 from . import aim_dll
 from .libxrk_fixup import normalize_libxrk_timestamps
-from .parse_gate import PARSE_GATE, PRIORITY_INTERACTIVE, PRIORITY_PREVIEW
+from .parse_gate import PARSE_GATE, PRIORITY_INTERACTIVE
 
 logger = logging.getLogger("quickscope")
 

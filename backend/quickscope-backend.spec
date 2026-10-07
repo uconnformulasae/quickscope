@@ -28,6 +28,7 @@ routes_hidden = [
     "routes.sessions",
     "routes.analysis",
     "routes.settings",
+    "routes.live",
     "parsers",
     "parsers.aim_dll",
     "parsers.log_adapter",

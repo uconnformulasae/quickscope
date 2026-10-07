@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import re
+import os
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -20,38 +21,30 @@ from services.aim_live import (  # noqa: E402
     decode_frame,
 )
 
-TSHARK = Path(r"C:\Program Files\Wireshark\tshark.exe")
+_DEFAULT_TSHARK_WIN = r"C:\Program Files\Wireshark\tshark.exe"
+
+
+def _tshark_path() -> str:
+    """tshark on PATH, else the default Windows Wireshark install."""
+    found = shutil.which("tshark")
+    if found:
+        return found
+    if Path(_DEFAULT_TSHARK_WIN).exists():
+        return _DEFAULT_TSHARK_WIN
+    raise SystemExit("tshark not found on PATH or at the default Windows install location")
+
+
+def _captures_dir() -> Path:
+    """Folder holding the default captures: $QUICKSCOPE_AIM_CAPTURES or ~/Downloads."""
+    return Path(os.environ.get("QUICKSCOPE_AIM_CAPTURES") or Path.home() / "Downloads")
 
 
 def pick_stream(pcap: Path) -> int:
     """Longest tcp.port==2000 conversation by payload bytes."""
-    raw = subprocess.check_output(
-        [
-            str(TSHARK),
-            "-r",
-            str(pcap),
-            "-q",
-            "-z",
-            "conv,tcp",
-        ],
-        text=True,
-        errors="replace",
-    )
-    best_stream: int | None = None
-    best_bytes = -1
-    for line in raw.splitlines():
-        if ":2000" not in line or "<->" not in line:
-            continue
-        m = re.search(r"(\d+)\s+k?B\s+\d+\s+\S+\s+\d+\s+\S+\s+\d+\s+(\d+)\s+k?B", line)
-        if not m:
-            continue
-        total_kb = m.group(2)
-        total = int(total_kb) * 1000 if "kB" in line else int(total_kb)
-        # Map to stream index via tshark fields on matching endpoint
-    # Fallback: count packets per stream
+    # Pick the stream with the most tcp:2000 payload packets
     out = subprocess.check_output(
         [
-            str(TSHARK),
+            _tshark_path(),
             "-r",
             str(pcap),
             "-Y",
@@ -72,7 +65,7 @@ def pick_stream(pcap: Path) -> int:
 
 def load_follow(pcap: Path, stream: int) -> tuple[bytearray, bytearray]:
     raw = subprocess.check_output(
-        [str(TSHARK), "-r", str(pcap), "-q", "-z", f"follow,tcp,raw,{stream}"],
+        [_tshark_path(), "-r", str(pcap), "-q", "-z", f"follow,tcp,raw,{stream}"],
         text=True,
         errors="replace",
     )
@@ -239,7 +232,7 @@ def tcp_close_detail(pcap: Path, stream: int) -> dict:
     """FIN/RST sources on the tcp.stream (device is usually 10.0.0.1)."""
     out = subprocess.check_output(
         [
-            str(TSHARK),
+            _tshark_path(),
             "-r",
             str(pcap),
             "-Y",
@@ -378,13 +371,14 @@ def main() -> None:
     ap.add_argument("--label", action="append", default=[], help="label per pcap")
     args = ap.parse_args()
 
+    captures = _captures_dir()
     defaults = [
-        (r"c:\Users\jesse\Downloads\RS3_live_1min.pcapng", 36, "RS3 1min (ground truth)"),
-        (r"c:\Users\jesse\Downloads\Live.pcapng", 1, "RS3 Live.pcapng short"),
-        (r"c:\Users\jesse\Downloads\new_dropped.pcapng", 90, "QS new_dropped"),
-        (r"c:\Users\jesse\Downloads\working_qs_live.pcapng", 39, "QS working_qs_live"),
-        (r"c:\Users\jesse\Downloads\connected_Qs_live.pcapng", 25, "QS connected_Qs_live"),
-        (r"c:\Users\jesse\Downloads\QuickScope_live.pcapng", 0, "QS QuickScope_live (early)"),
+        (str(captures / "RS3_live_1min.pcapng"), 36, "RS3 1min (ground truth)"),
+        (str(captures / "Live.pcapng"), 1, "RS3 Live.pcapng short"),
+        (str(captures / "new_dropped.pcapng"), 90, "QS new_dropped"),
+        (str(captures / "working_qs_live.pcapng"), 39, "QS working_qs_live"),
+        (str(captures / "connected_Qs_live.pcapng"), 25, "QS connected_Qs_live"),
+        (str(captures / "QuickScope_live.pcapng"), 0, "QS QuickScope_live (early)"),
     ]
     if args.pcaps:
         items = []

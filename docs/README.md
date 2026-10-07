@@ -15,15 +15,13 @@ Historical feature design notes from agent sessions live under [archive/planning
 backend/
   main.py                 # FastAPI app, AiM primary hub on startup
   routes/
-    sessions.py           # Local session CRUD, Railway sync hooks
+    sessions.py           # Local session CRUD, AiM pull
     analysis.py           # Chart data, laps, export
     settings.py           # settings.json
     live.py               # WebSocket live telemetry (/api/live/ws)
   services/
     session_store.py      # sessions.json + file cache
     settings_store.py
-    railway_client.py     # Data-Development API
-    sync_service.py
     aim_discovery.py      # UDP 36002 probe + identity parse
     aim_keepalive.py      # Periodic UDP aim-ka while primary TCP is open
     aim_primary_hub.py    # One primary TCP: live + session list

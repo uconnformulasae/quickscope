@@ -87,7 +87,7 @@ stop_listener_on_port() {
 }
 
 stop_listener_on_port 8000
-stop_listener_on_port 5000
+stop_listener_on_port 5173
 
 # Start backend
 echo "Starting QuickScope backend on :8000 (parser: $PARSER_MODE)..."
@@ -97,7 +97,7 @@ BACKEND_PID=$!
 # Start frontend dev server
 echo "Starting QuickScope frontend on :5173..."
 npm run dev &
-@@FRONTEND_PID=$!
+FRONTEND_PID=$!
 
 # Cleanup on exit
 trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit" INT TERM EXIT

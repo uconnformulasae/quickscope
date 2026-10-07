@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from services.trace_file import open_unique
+
 logger = logging.getLogger(__name__)
+
+_FRAME_FLUSH_INTERVAL_S = 1.0
 
 _SESSION_DIR = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_live" / "sessions"
 
@@ -23,11 +28,10 @@ class AimLiveTrace:
     """Append-only JSONL log for one live-view attempt."""
 
     def __init__(self, *, configured_host: str) -> None:
-        _SESSION_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        self.path = _SESSION_DIR / f"{stamp}_live.jsonl"
-        self._fh = self.path.open("w", encoding="utf-8")
+        self.path, self._fh = open_unique(_SESSION_DIR, f"{stamp}_live.jsonl")
         self._closed = False
+        self._last_flush = time.monotonic()
         self.log("session_start", configured_host=configured_host, trace_file=str(self.path))
         logger.info("AiM live trace: writing session log to %s", self.path)
 
@@ -49,7 +53,12 @@ class AimLiveTrace:
         line = json.dumps(entry, default=str)
         try:
             self._fh.write(line + "\n")
-            self._fh.flush()
+            # Frames arrive many times a second; flushing each one blocks the event
+            # loop on a syscall. Batch them (<= 1 s stale) but flush other events at once.
+            now = time.monotonic()
+            if event != "frame" or now - self._last_flush >= _FRAME_FLUSH_INTERVAL_S:
+                self._fh.flush()
+                self._last_flush = now
         except ValueError:
             # "I/O operation on closed file" -- file closed out from under
             # us rather than through our own `_closed` flag. Same policy:

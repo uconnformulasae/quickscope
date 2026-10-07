@@ -16,7 +16,7 @@ from typing import Any
 _DEFAULT_MAX_AGE_S = 120.0
 
 _lock = threading.Lock()
-_cached: "_CachedDevice | None" = None
+_cached: "CachedDevice | None" = None
 
 
 @dataclass(frozen=True)
