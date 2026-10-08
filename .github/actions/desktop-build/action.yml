@@ -26,16 +26,30 @@ runs:
       run: |
         set -euo pipefail
         ARCH="${{ inputs.arch }}"
-        # package.json lists arm64+x64 targets; without this override electron-builder
-        # builds both arches in one job and hdiutil DMG detach fails on the runner.
-        MAC_TARGETS="[{\"target\":\"dmg\",\"arch\":[\"${ARCH}\"]},{\"target\":\"zip\",\"arch\":[\"${ARCH}\"]}]"
-        NOTARIZE_FLAG="--config.mac.notarize=false"
+        NOTARIZE=false
         if [ "${{ inputs.notarize }}" = "true" ]; then
-          NOTARIZE_FLAG="--config.mac.notarize=true"
+          NOTARIZE=true
         fi
-        npx electron-builder --mac --"${ARCH}" --publish never \
-          ${NOTARIZE_FLAG} \
-          --config.mac.target="${MAC_TARGETS}"
+        VERSION="$(node -p "require('./package.json').version")"
+        # package.json lists arm64+x64 targets; a merged JSON config limits this job to
+        # one arch (CLI --config.mac.target=... is not valid in electron-builder 25).
+        CFG="$(mktemp)"
+        cat > "${CFG}" <<EOF
+        {
+          "mac": {
+            "target": [
+              { "target": "dmg", "arch": ["${ARCH}"] },
+              { "target": "zip", "arch": ["${ARCH}"] }
+            ],
+            "notarize": ${NOTARIZE}
+          },
+          "dmg": {
+            "title": "QuickScope ${VERSION} ${ARCH}"
+          }
+        }
+        EOF
+        npx electron-builder --mac --"${ARCH}" --publish never --config "${CFG}"
+        rm -f "${CFG}"
 
     - name: Build Windows installer
       if: inputs.platform == 'win'
