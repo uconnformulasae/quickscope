@@ -117,6 +117,11 @@ async function startBackend() {
     QUICKSCOPE_ALLOW_NULL_ORIGIN: '1',
   };
 
+  if (!isDev) {
+    // Installers ship libxrk only; MatLabXRK DLL is dev / CI-test tooling on Windows.
+    env.QUICKSCOPE_PARSER = 'libxrk';
+  }
+
   backendProcess = spawn(exe, [], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],

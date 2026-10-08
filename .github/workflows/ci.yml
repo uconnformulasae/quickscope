@@ -169,12 +169,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt pyinstaller
 
-      - name: Bundle AiM XRK DLL (Windows)
-        if: matrix.platform == 'win'
-        uses: ./.github/actions/setup-parser-assets
-        with:
-          download-fixtures: 'false'
-
       - name: Freeze Python backend
         working-directory: backend
         run: pyinstaller quickscope-backend.spec --noconfirm

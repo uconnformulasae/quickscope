@@ -24,6 +24,25 @@ def _dummy_log() -> LogFile:
     )
 
 
+def test_packaged_backend_uses_libxrk_only(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("QUICKSCOPE_PARSER", raising=False)
+    monkeypatch.setattr("parsers.sys.frozen", True, raising=False)
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        aim_dll,
+        "dll_available",
+        lambda: (_ for _ in ()).throw(AssertionError("dll_available called")),
+    )
+    monkeypatch.setattr(
+        "parsers._parse_libxrk",
+        lambda path: calls.append(str(path)) or _dummy_log(),
+    )
+
+    parse_xrk(Path("packaged.xrk"))
+    assert calls == [str(Path("packaged.xrk"))]
+
+
 def test_forced_libxrk_skips_dll(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("QUICKSCOPE_PARSER", "libxrk")
     calls: list[str] = []

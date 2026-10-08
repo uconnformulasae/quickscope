@@ -33,8 +33,7 @@ QuickScope.app / QuickScope.exe
 ├─ quickscope-backend                (PyInstaller-frozen FastAPI + parsers)
 │    binds to 127.0.0.1:<free-port>
 │    reads/writes to user data dir
-│    Windows: ships MatLabXRK DLL (primary) + libxrk (fallback)
-│    macOS: libxrk only
+│    All platforms: libxrk only (no MatLabXRK DLL in installers)
 │
 └─ User data directory               (persists across reinstalls)
      macOS:    ~/Library/Application Support/QuickScope/data/
@@ -51,10 +50,10 @@ A preload script injects `window.__QUICKSCOPE_BACKEND__` so the renderer's
 
 Prerequisites: Python 3.12, Node 20.
 
-**Windows only:** place `MatLabXRK-2017-64-ReleaseU.dll` in `backend/vendor/` before building
-(see [AiM RS3 DLL docs](https://www.aim-sportline.com/docs/racestudio3/manual/html/xrk-dll.html)).
-The DLL is proprietary AiM software and is gitignored; CI release builds fetch it from the
-[laz-/xrk](https://github.com/laz-/xrk) mirror at freeze time.
+Desktop installers **do not** bundle the MatLabXRK DLL. End users on every platform parse
+with **libxrk** (same as macOS/Linux today). For local dev on Windows you may still place
+`MatLabXRK-2017-64-ReleaseU.dll` in `backend/vendor/` and use `./start.ps1 -Dll` — that
+does not affect `npm run dist:*` output.
 
 ```bash
 npm ci
