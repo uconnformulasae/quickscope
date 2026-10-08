@@ -89,3 +89,5 @@ npm run check         # TypeScript only
 | Frontend | `client/src/lib/*.test.ts` | Vitest |
 
 Skip slow tests while iterating: `pytest -m "not dll and not libxrk and not slow"`.
+
+**macOS desktop:** `desktop-build` passes a single-arch `mac.target` override so CI matrix jobs do not build both arm64 and x64 in one step (that breaks `hdiutil` on Apple Silicon runners). **Linux desktop:** Ubuntu 24.04 runners need `libasound2t64` (not `libasound2`).
