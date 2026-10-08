@@ -1,0 +1,48 @@
+name: Desktop build (electron-builder)
+description: Run electron-builder after PyInstaller + Vite build. Caller must set up toolchain and freeze backend first.
+
+inputs:
+  platform:
+    description: Target OS (win, mac, linux)
+    required: true
+  arch:
+    description: CPU arch for win/mac (x64 or arm64); ignored for linux
+    required: false
+    default: x64
+  notarize:
+    description: macOS notarization when secrets are configured (release only)
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Build macOS installer
+      if: inputs.platform == 'mac'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        NOTARYTOOL_TIMEOUT: '1200'
+      run: |
+        set -euo pipefail
+        if [ "${{ inputs.notarize }}" = "true" ]; then
+          npx electron-builder --mac --${{ inputs.arch }} --publish never \
+            --config.mac.notarize=true
+        else
+          npx electron-builder --mac --${{ inputs.arch }} --publish never \
+            --config.mac.notarize=false
+        fi
+
+    - name: Build Windows installer
+      if: inputs.platform == 'win'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: npx electron-builder --win --${{ inputs.arch }} --publish never
+
+    - name: Build Linux installer
+      if: inputs.platform == 'linux'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: npx electron-builder --linux --publish never

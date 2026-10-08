@@ -1,7 +1,7 @@
 name: Release
 
-# Builds QuickScope installers for macOS (arm64 + x64) and Windows (x64) and
-# attaches them to a GitHub Release.
+# Builds QuickScope installers for Windows, macOS (arm64 + x64), and Linux;
+# attaches them to a GitHub Release on version tags.
 
 on:
   push:
@@ -18,21 +18,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - runs-on: macos-latest
+            platform: mac
             arch: arm64
             label: mac-arm64
-          - os: macos-13
+          - runs-on: macos-latest
+            platform: mac
             arch: x64
             label: mac-x64
-          - os: windows-latest
+          - runs-on: windows-latest
+            platform: win
             arch: x64
             label: win-x64
+          - runs-on: ubuntu-latest
+            platform: linux
+            arch: x64
+            label: linux-x64
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Linux desktop dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils \
+            libatspi2.0-0 libdrm2 libgbm1 libasound2
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -51,7 +67,7 @@ jobs:
           pip install -r backend/requirements.txt pyinstaller
 
       - name: Bundle AiM XRK DLL (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.platform == 'win'
         uses: ./.github/actions/setup-parser-assets
         with:
           download-fixtures: 'false'
@@ -67,11 +83,11 @@ jobs:
         run: npm run build
 
       - name: Probe macOS signing/notarize secrets
-        if: runner.os == 'macOS'
+        if: matrix.platform == 'mac'
         env:
           APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
           MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
@@ -93,33 +109,33 @@ jobs:
             echo "QS_NOTARIZE=0" >> $GITHUB_ENV
           fi
 
-      - name: Build macOS installer
-        if: runner.os == 'macOS'
-        timeout-minutes: 25
+      - name: Build desktop installer (notarized macOS)
+        if: matrix.platform == 'mac' && env.QS_NOTARIZE == '1'
+        uses: ./.github/actions/desktop-build
         env:
           CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_KEY_ISSUER }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NOTARYTOOL_TIMEOUT: '1200'
-        shell: bash
-        run: |
-          if [ "${QS_NOTARIZE:-0}" = "1" ]; then
-            npx electron-builder --mac --${{ matrix.arch }} --publish never \
-              --config.mac.notarize=true
-          else
-            npx electron-builder --mac --${{ matrix.arch }} --publish never \
-              --config.mac.notarize=false
-          fi
+        with:
+          platform: mac
+          arch: ${{ matrix.arch }}
+          notarize: 'true'
 
-      - name: Build Windows installer
-        if: runner.os == 'Windows'
-        timeout-minutes: 20
+      - name: Build desktop installer
+        if: matrix.platform != 'mac' || env.QS_NOTARIZE != '1'
+        uses: ./.github/actions/desktop-build
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --x64 --publish never
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          platform: ${{ matrix.platform }}
+          arch: ${{ matrix.arch }}
+          notarize: 'false'
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -129,6 +145,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.exe
+            release/*.AppImage
             release/*.blockmap
             release/latest*.yml
           if-no-files-found: warn

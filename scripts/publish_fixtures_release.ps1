@@ -26,7 +26,7 @@ if ($LASTEXITCODE -eq 0) {
 } else {
     gh release create fixtures-v1 $xrk $csv --repo $repo `
         --title "Parser regression fixtures v1" `
-        --notes "Pinned XRK + Race Studio CSV for dll-regression.yml CI."
+        --notes "Pinned XRK + Race Studio CSV for CI parser tests (pytest -m dll / libxrk)."
 }
 
 Write-Host "Done. Verify: gh release view fixtures-v1 --repo $repo"
