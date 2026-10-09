@@ -17,13 +17,18 @@ from libxrk.base import LogFile
 
 from . import aim_dll
 from .libxrk_fixup import normalize_libxrk_timestamps
-from .parse_gate import PARSE_GATE, PRIORITY_INTERACTIVE, PRIORITY_PREVIEW
+from .parse_gate import PARSE_GATE, PRIORITY_INTERACTIVE
 
 logger = logging.getLogger("quickscope")
 
 
 def _parser_override() -> str:
     return os.environ.get("QUICKSCOPE_PARSER", "").strip().lower()
+
+
+def _packaged_backend() -> bool:
+    """PyInstaller-frozen backend shipped inside Electron installers (all platforms)."""
+    return bool(getattr(sys, "frozen", False))
 
 
 @contextmanager
@@ -48,6 +53,11 @@ def _parse_libxrk(path: Path) -> LogFile:
 
 
 def _parse_xrk_unlocked(p: Path) -> LogFile:
+    if _packaged_backend():
+        log = _parse_libxrk(p)
+        logger.info("parsed %s via libxrk (packaged)", p.name)
+        return log
+
     if _parser_override() == "libxrk":
         log = _parse_libxrk(p)
         logger.info("parsed %s via libxrk (forced)", p.name)
@@ -74,7 +84,9 @@ def _parse_xrk_unlocked(p: Path) -> LogFile:
 
 def parse_xrk(path: str | Path, priority: int = PRIORITY_INTERACTIVE) -> LogFile:
     """
-    Parse an XRK/XRZ file using the AiM DLL when available, else libxrk.
+    Parse an XRK/XRZ file using the AiM DLL when available (dev Windows), else libxrk.
+
+    PyInstaller-frozen backends (desktop installers) always use libxrk.
 
     Env overrides:
       QUICKSCOPE_PARSER=libxrk  — force libxrk

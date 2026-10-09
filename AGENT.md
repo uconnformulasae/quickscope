@@ -172,8 +172,6 @@ npm run build
 - GPS data quality depends on GPS fix; primary DLL path uses AiM's GPS computations, fallback libxrk derives lat/lon from ECEF
 - Derived channels recompute from scratch each time (no incremental updates)
 - Export CSV interpolates all channels to the highest-rate channel's timebase, which can produce very large files
-- The Express server in `server/` is vestigial scaffolding that only serves the Vite dev build — all API logic is in the Python backend
-- `components/ui/` directory contains ~40 shadcn/ui components, most of which are unused by the app but harmless to keep
 
 ## Style conventions
 

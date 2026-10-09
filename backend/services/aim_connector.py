@@ -20,7 +20,6 @@ from pathlib import Path
 
 from services.aim_discovery import (
     DATA_PORT,
-    DEFAULT_DEVICE_IP,
     candidate_device_ips,
     configured_device_ip,
     parse_discovery_text,
@@ -165,9 +164,9 @@ def _send_and_recv(sock: socket.socket, msg: bytes, label: str, read_timeout: fl
                         break
                     buf += more
                 except socket.timeout:
-                    break
+                    break  # idle window elapsed: the reply is complete
     except socket.timeout:
-        pass
+        logger.warning("No reply from AiM device within %.1fs for %s", read_timeout, label)
 
     logger.debug("Received %d bytes for %s", len(buf), label)
     return buf
@@ -198,7 +197,10 @@ def _send_and_await_frame(
             if frame is not None:
                 break
     except socket.timeout:
-        pass
+        logger.warning(
+            "AiM device sent no complete frame within %.1fs for %s (%d bytes received)",
+            timeout, label, len(buf),
+        )
     logger.debug("Received %d bytes for %s", len(buf), label)
     return buf
 
@@ -307,7 +309,7 @@ def _list_aim_sessions_legacy_tcp() -> list[dict]:
                 all_data += chunk
                 s.settimeout(3)
         except (socket.timeout, OSError):
-            pass
+            pass  # end of CSV: the device stops sending without closing the socket
 
         try:
             s.shutdown(socket.SHUT_RDWR)

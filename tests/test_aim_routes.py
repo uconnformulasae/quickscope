@@ -1,8 +1,6 @@
-"""Tests for AiM / Railway decoupling."""
+"""AiM device routes: session list, pull, and the pull log."""
 
 from __future__ import annotations
-
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +8,6 @@ from fastapi.testclient import TestClient
 from conftest import FakePullHub
 from main import app
 from services import aim_pull_log, session_store
-from state import background_sync
 
 client = TestClient(app)
 
@@ -66,9 +63,7 @@ def test_aim_sessions_succeeds_without_udp_probe(monkeypatch: pytest.MonkeyPatch
         lambda: _FakeHub(),
     )
 
-    with patch("routes.sessions.railway_client.list_remote_sessions", new_callable=AsyncMock) as mock_railway:
-        res = client.get("/api/aim/sessions")
-        mock_railway.assert_not_called()
+    res = client.get("/api/aim/sessions")
 
     assert res.status_code == 200
     body = res.json()
@@ -108,18 +103,13 @@ def test_aim_sessions_returns_error_on_connection_failure(monkeypatch: pytest.Mo
     assert log[0]["status"] == "list_failed"
 
 
-def test_aim_pull_does_not_require_railway(
+def test_aim_pull_downloads_indexes_and_logs(
     monkeypatch: pytest.MonkeyPatch, isolated_session_data, fake_keepalive
 ):
     monkeypatch.setattr(
         "routes.sessions.aim_connector.discover_device",
         lambda: {"ip": "10.0.0.1", "ssid": "AiM-TEST", "device_name": ""},
     )
-    monkeypatch.setattr(
-        "routes.sessions.sync_service.is_railway_configured",
-        lambda: False,
-    )
-
     dest_parent = None
 
     def _fake_download(filename: str, dest_dir, expected_size: int = 0):
@@ -157,38 +147,27 @@ def test_aim_pull_does_not_require_railway(
         },
     )
 
-    with patch("routes.sessions.railway_client.list_remote_sessions", new_callable=AsyncMock) as mock_railway:
-        res = client.post(
-            "/api/aim/pull",
-            json={"filenames": ["pull_test.xrk"]},
-        )
-        mock_railway.assert_not_called()
+    res = client.post(
+        "/api/aim/pull",
+        json={"filenames": ["pull_test.xrk"]},
+    )
 
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] is True
     assert body["downloaded"] == ["pull_test.xrk"]
     assert body["results"][0]["bytes"] == 500
-    assert body["results"][0]["railway_queued"] is False
+    assert "railway_queued" not in body["results"][0]
+    stored = session_store.list_sessions()
+    assert [s["filename"] for s in stored] == ["pull_test.xrk"]
+    assert stored[0]["source"] == "aim_device"
+    assert "sync_status" not in stored[0] and "remote_id" not in stored[0]
     assert body["results"][0]["parse_ok"] is True
 
     log = aim_pull_log.list_recent()
     assert log[0]["action"] == "pull"
     assert log[0]["status"] == "ok"
-    assert log[0]["railway_queued"] is False
-
-
-def test_background_sync_skips_when_railway_unconfigured(monkeypatch: pytest.MonkeyPatch):
-    import asyncio
-
-    monkeypatch.setattr(
-        "state.sync_service.is_railway_configured",
-        lambda: False,
-    )
-
-    with patch("state.sync_service.sync_with_railway", new_callable=AsyncMock) as mock_sync:
-        asyncio.run(background_sync())
-        mock_sync.assert_not_called()
+    assert "railway_queued" not in log[0]
 
 
 def test_aim_pull_log_endpoint():
@@ -200,7 +179,6 @@ def test_aim_pull_log_endpoint():
         size=100,
         duration_s=1.5,
         session_id="abc-123",
-        railway_queued=False,
     )
 
     res = client.get("/api/aim/pull/log")
@@ -208,4 +186,4 @@ def test_aim_pull_log_endpoint():
     entries = res.json()["entries"]
     assert len(entries) == 1
     assert entries[0]["filename"] == "sample.xrk"
-    assert entries[0]["railway_queued"] is False
+    assert "railway_queued" not in entries[0]

@@ -13,6 +13,7 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
   theme?: 'dark' | 'light';
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
+  const plottedEl = useRef<HTMLDivElement | null>(null);
 
   const activeChannelIdsWithData = activeChannels
     .filter(ac => resolveSamples(ac.channelId, session, derivedSamplesMap).length > 0)
@@ -71,10 +72,17 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
       Plotly.react(chartRef.current, [trace], layout, {
         responsive: true, displayModeBar: false, displaylogo: false,
       });
+      plottedEl.current = chartRef.current;
     };
 
     ensurePlotly(render);
   }, [session, chan, activeChan, theme]);
+
+  // Release the chart's WebGL/DOM resources when the tab unmounts.
+  useEffect(() => () => {
+    const Plotly = (window as any).Plotly;
+    if (Plotly && plottedEl.current) Plotly.purge(plottedEl.current);
+  }, []);
 
   return (
     <div className="p-2 flex flex-col gap-2 h-full">

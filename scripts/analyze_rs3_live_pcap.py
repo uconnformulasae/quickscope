@@ -21,11 +21,6 @@ sys.path.insert(0, str(ROOT / "docs" / "protocol" / "captures"))
 from services.aim_live import (  # noqa: E402
     STNC_LIVE_POLL_A,
     STNC_LIVE_POLL_B,
-    _STCP_OP_A,
-    _STCP_OP_E,
-    _STCP_OP_H,
-    _STCP_OP_I,
-    _STCP_OP_Q,
     _is_live_snapshot_payload,
     decode_frame,
 )

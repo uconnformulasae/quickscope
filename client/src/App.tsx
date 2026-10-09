@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
-import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
+import type { DerivedChannel } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
 import { resolveLogStartMs } from './lib/time-format';
 import { resolveChartColor } from './lib/chart-utils';
@@ -191,6 +191,7 @@ export default function App() {
         });
       });
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
+      setLoadedSessionId(info.sessionId ?? null);
       await buildAndSetSession(info, file.name);
     } catch (err) {
       setError(`Failed to upload XRK file: ${err instanceof Error ? err.message : String(err)}`);
@@ -516,8 +517,6 @@ export default function App() {
         <ExportDialog
           session={session}
           fileName={state.fileName}
-          derivedChannels={state.derivedChannels}
-          derivedSamplesMap={derivedSamplesMap}
           onClose={() => setExportDialogOpen(false)}
         />
       )}

@@ -13,7 +13,6 @@ Built for UConn Formula SAE Electric.
 - Lap analysis, histograms, XY scatter plots, GPS track map
 - CSV export with cross-channel interpolation
 - Session management with local persistence
-- Sync with [Data-Development](https://github.com/uconnformulasae/Data-Development) (Railway deployment) for shared session storage
 - Direct AiM device connectivity over WiFi (macOS and Windows)
 
 ## Architecture
@@ -23,7 +22,7 @@ Built for UConn Formula SAE Electric.
 
 The backend parses `.xrk`/`.xrz` files using the official AiM MatLabXRK DLL when available (Windows), falling back to [libxrk](https://pypi.org/project/libxrk/) on other platforms or if the DLL is missing. See `backend/vendor/README.md` for Windows dev setup.
 
-Sessions are persisted locally in `backend/data/sessions.json` with raw files cached in `backend/data/sessions/`. When configured, sessions sync bidirectionally with the Data-Development Railway backend.
+Sessions are persisted locally in `backend/data/sessions.json` with raw files cached in `backend/data/sessions/`.
 
 ## Install (for end users)
 
@@ -84,7 +83,8 @@ CI uses the same backend image for libxrk regression. Parser fixture downloads r
 ### Testing
 
 ```powershell
-npm run test          # unit regression (no DLL, no libxrk fixtures)
+npm run test          # backend: unit + API + end-to-end (no DLL, no libxrk fixtures)
+npm run test:client   # frontend unit tests (vitest)
 npm run test:dll      # DLL vs Race Studio CSV (Windows + fixtures)
 npm run test:libxrk   # libxrk fallback parser on XRK fixtures
 npm run check         # TypeScript only
@@ -118,7 +118,6 @@ npm run dev
 
 Click the gear icon in the session browser to configure:
 
-- **Railway URL** -- Data-Development API endpoint (e.g. `https://your-app.up.railway.app/api/v1`)
 - **AiM WiFi SSID** -- your AiM device's hotspot name
 - **AiM Device IP** -- default `10.0.0.1`
 
@@ -139,7 +138,7 @@ When connected to the AiM device's WiFi hotspot:
 1. The green AiM indicator appears in the session browser header
 2. Click **Pull from AiM** to browse sessions on the device
 3. Select which sessions to download
-4. Downloaded `.xrz` files are saved locally and auto-uploaded to Railway (if configured)
+4. Downloaded `.xrz` files are saved locally and added to the session browser
 
 The connection uses the AiM binary TCP protocol (port 2000) with UDP discovery (port 36002). File downloads send **progress-encoded STCP micro-ACKs** (cumulative bytes received at each ~982 KB batch boundary), matching RaceStudio behavior captured in Wireshark. Live streaming still uses zero-byte micro-ACKs; see `docs/protocol/aim-live-protocol-deep-dive.md` vs download captures such as `116CaptureWireshark.pcapng`.
 
@@ -168,10 +167,8 @@ backend/
   services/
     session_store.py       # JSON-backed local session index
     settings_store.py      # Persistent settings
-    railway_client.py      # Data-Development API client
     aim_connector.py       # AiM device protocol (UDP discovery + TCP session list/download)
     aim_download_trace.py  # JSONL download traces for debugging truncated pulls
-    sync_service.py        # Bidirectional Railway sync
 
 docs/protocol/             # Reverse-engineered AiM WiFi protocol notes + Wireshark analysis
 
@@ -188,7 +185,7 @@ client/src/
     ChannelSidebar.tsx     # Channel picker
     AnalysisPanel.tsx      # Stats, laps, histogram, XY plot, GPS tabs
     AimSessionPicker.tsx   # AiM device session browser/downloader
-    SettingsDialog.tsx     # Railway + AiM configuration
+    SettingsDialog.tsx     # AiM device configuration
     SessionHeader.tsx      # Top bar with metadata and controls
     DerivedChannelDialog.tsx  # Formula/JS expression editor
     ExportDialog.tsx       # CSV export channel selector

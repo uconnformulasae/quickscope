@@ -1,8 +1,8 @@
 """Tests for AiM live protocol helpers and capture-derived fixtures.
 
 Ground-truth pcaps (Race Studio 3):
-  c:\\Users\\jesse\\Downloads\\Live.pcapng  (stream 1)
-  c:\\Users\\jesse\\Downloads\\live_pedal.pcapng  (stream 45)
+  Live.pcapng  (stream 1)
+  live_pedal.pcapng  (stream 45)
 """
 
 from __future__ import annotations

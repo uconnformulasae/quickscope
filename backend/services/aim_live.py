@@ -432,6 +432,7 @@ class AimLiveClient:
         self._writer: Optional[asyncio.StreamWriter] = None
         self._buf = bytearray()
         self._closed = False
+        self._stop_requested = False  # set by stop_streaming(); socket stays open
         self._pending_live_size: Optional[int] = None
         self._handshake_done = False
         self._poll_a_timeouts = 0
@@ -1032,8 +1033,9 @@ class AimLiveClient:
             "AiM live stream: event-driven pump starting (~%.0fms STNC period)",
             PUMP_PERIOD_S * 1000,
         )
+        self._stop_requested = False
         await self._autorespond_drain(idle_s=0.15, overall_timeout=1.0, label="pre-poll-sync")
-        while not self._closed:
+        while not self._should_stop:
             self._micro_owed = False
             # Unbounded on purpose: the reader must never block on a slow consumer,
             # or it stops paying micro-acks and the device stalls/drops us.
@@ -1042,7 +1044,7 @@ class AimLiveClient:
             pump_task = asyncio.create_task(self._pump_loop(), name="aim-live-pump")
             device_error: BaseException | None = None
             try:
-                while not self._closed:
+                while not self._should_stop:
                     get_task = asyncio.ensure_future(queue.get())
                     done, _pending = await asyncio.wait(
                         {get_task, reader_task, pump_task},
@@ -1105,7 +1107,7 @@ class AimLiveClient:
                 pump_task.cancel()
                 await asyncio.gather(reader_task, pump_task, return_exceptions=True)
 
-            if self._closed:
+            if self._should_stop:
                 return
             if isinstance(device_error, ConnectionError):
                 ka = self._keepalive
@@ -1221,7 +1223,7 @@ class AimLiveClient:
         deadline = loop.time() + budget_s
         last_exc: BaseException | None = None
         attempt = 0
-        while not self._closed and (attempt == 0 or loop.time() < deadline):
+        while not self._should_stop and (attempt == 0 or loop.time() < deadline):
             delay = RECONNECT_DELAYS_S[min(attempt, len(RECONNECT_DELAYS_S) - 1)]
             attempt += 1
             if delay:
@@ -1257,11 +1259,13 @@ class AimLiveClient:
             f"AiM device did not come back after {attempt} reconnect attempts ({budget_s:.0f}s)"
         ) from last_exc
 
+    @property
+    def _should_stop(self) -> bool:
+        return self._closed or self._stop_requested
+
     async def stop_streaming(self) -> None:
         """Stop the live poll loop but keep the TCP socket open (RS3 primary session)."""
-        self._closed = True
-        await asyncio.sleep(0)
-        self._closed = False
+        self._stop_requested = True
 
     async def fetch_session_list(self, *, timeout: float = 15.0) -> list[dict]:
         """Session CSV over the primary TCP after live handshake (connect.pcapng)."""

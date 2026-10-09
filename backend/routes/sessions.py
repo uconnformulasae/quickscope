@@ -1,17 +1,15 @@
-"""Session management routes — CRUD, rename, sync, AiM device integration."""
+"""Session management routes — CRUD, rename, AiM device integration."""
 
 import asyncio
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from services import (
     session_store,
-    sync_service,
     aim_connector,
-    railway_client,
     gps_preview,
     aim_pull_log,
 )
@@ -20,8 +18,8 @@ from services.aim_primary_hub import get_aim_primary_hub
 from parsers.parse_gate import PRIORITY_INTERACTIVE
 from services.session_cache import session_cache
 from state import (
-    state, logger, background_sync,
-    parse_file, extract_session_info, parse_recorded_at, sanitize_filename,
+    state, logger,
+    parse_file, extract_session_info, sanitize_filename,
     resolve_aim_recorded_at, apply_stored_recorded_at,
 )
 
@@ -68,26 +66,6 @@ async def load_session(session_id: str):
     return info
 
 
-@router.post("/sessions/sync")
-async def sync_sessions():
-    try:
-        result = await sync_service.sync_with_railway()
-        return {"ok": True, **result}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception:
-        logger.exception("Sync failed")
-        raise HTTPException(500, "Sync failed")
-
-
-@router.post("/sessions/{session_id}/pull")
-async def pull_session(session_id: str):
-    result = await sync_service.pull_session(session_id)
-    if not result.get("ok"):
-        raise HTTPException(400, result.get("error", "Pull failed"))
-    return result
-
-
 class RenameRequest(BaseModel):
     filename: str
 
@@ -119,18 +97,6 @@ async def rename_session(session_id: str, body: RenameRequest):
     if old_path and old_path.exists():
         new_path = str(session_store.session_file_path(new_filename))
         old_path.rename(new_path)
-
-    # Rename on Railway if synced
-    remote_id = entry.get("remote_id")
-    if remote_id:
-        try:
-            await railway_client.rename_session(remote_id, Path(new_filename).stem)
-        except Exception as exc:
-            # Roll back local file rename
-            if new_path and Path(new_path).exists():
-                Path(new_path).rename(old_path)
-            logger.warning("Failed to rename session on Railway: %s", exc)
-            raise HTTPException(502, "Failed to update remote: " + str(exc))
 
     updated = session_store.update_session(
         session_id,
@@ -272,14 +238,13 @@ class AimPullRequest(BaseModel):
 
 
 @router.post("/aim/pull")
-async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks):
+async def pull_from_aim(body: AimPullRequest):
     if not body.filenames:
         return {"ok": False, "error": "No files selected", "downloaded": [], "results": []}
 
     device = await asyncio.to_thread(aim_connector.discover_device)
     device_ip = device["ip"] if device else ""
 
-    will_queue_railway = sync_service.is_railway_configured()
     logger.info("AiM pull: downloading %d selected sessions...", len(body.filenames))
 
     hub = get_aim_primary_hub()
@@ -311,14 +276,10 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
             body.filenames,
             device_meta_by_file=device_meta_by_file,
             device_ip=device_ip,
-            will_queue_railway=will_queue_railway,
         )
     finally:
         if keepalive is not None:
             await keepalive.stop()
-
-    if downloaded and will_queue_railway:
-        background_tasks.add_task(background_sync)
 
     return {"ok": True, "downloaded": downloaded, "errors": errors, "results": results}
 
@@ -340,7 +301,6 @@ async def _download_selected(
     *,
     device_meta_by_file: dict[str, dict],
     device_ip: str,
-    will_queue_railway: bool,
 ) -> tuple[list[str], list[str], list[dict]]:
     downloaded = []
     errors = []
@@ -416,7 +376,6 @@ async def _download_selected(
             entry = session_store.add_session(
                 filename=filename,
                 source="aim_device",
-                sync_status="local_only",
                 local_path=str(dest),
                 track_name=meta.get("venue", ""),
                 driver_name=meta.get("driver", ""),
@@ -441,7 +400,6 @@ async def _download_selected(
                     size=file_bytes,
                     duration_s=duration_s,
                     session_id=entry["id"],
-                    railway_queued=will_queue_railway,
                 )
 
             results.append({
@@ -451,7 +409,6 @@ async def _download_selected(
                 "session_id": entry["id"],
                 "parse_ok": parse_ok,
                 "local_path": str(dest),
-                "railway_queued": will_queue_railway,
             })
         except Exception as e:
             duration_s = time.monotonic() - started

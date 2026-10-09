@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Iterable, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +71,13 @@ def from_gps(
 
     `timestamps_ms` should be session-relative milliseconds (i.e. already
     offset so the first sample is ~0). Lats/lons are in degrees.
-    Invalid fixes (lat≈0 and lon≈0, or non-finite) are dropped before
+    Invalid fixes (lat≈0 and lon≈0, missing, or non-finite) are dropped before
     detection.
     """
     valid: list[tuple[float, float, float]] = []
     for t, la, lo in zip(timestamps_ms, lats, lons):
+        if la is None or lo is None:
+            continue  # dropout
         if abs(la) > 0.1 and abs(lo) > 0.1 and math.isfinite(la) and math.isfinite(lo):
             valid.append((t, la, lo))
     if len(valid) < 10:
@@ -205,7 +207,8 @@ def detect_laps(log, channel_data_fn) -> tuple[list[dict], str]:
             logger.exception("Beacon channel read failed during lap detection")
             bd = None
         if bd and bd["timestamps"]:
-            beacon_laps = from_beacon(bd["timestamps"], bd["values"])
+            pairs = [(t, v) for t, v in zip(bd["timestamps"], bd["values"]) if v is not None]
+            beacon_laps = from_beacon([t for t, _ in pairs], [v for _, v in pairs])
             if beacon_laps:
                 return beacon_laps, "beacon_auto"
 

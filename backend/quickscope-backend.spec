@@ -28,6 +28,7 @@ routes_hidden = [
     "routes.sessions",
     "routes.analysis",
     "routes.settings",
+    "routes.live",
     "parsers",
     "parsers.aim_dll",
     "parsers.log_adapter",
@@ -41,20 +42,13 @@ hiddenimports = (
     + routes_hidden
 )
 
-# AiM DLL (Windows primary parser) — bundled when present at build time.
-import os
-from pathlib import Path as _Path
-
-_vendor_dll = _Path(__file__).resolve().parent / "vendor" / "MatLabXRK-2017-64-ReleaseU.dll"
-_aim_dll_binaries = []
-if _vendor_dll.is_file():
-    _aim_dll_binaries = [(str(_vendor_dll), ".")]
-
+# Packaged desktop builds use libxrk only. The MatLabXRK DLL is for local dev /
+# Windows CI tests (backend/vendor); do not ship it in PyInstaller output.
 
 a = Analysis(
     ["entry.py"],
     pathex=[],
-    binaries=libxrk_binaries + pandas_binaries + pyarrow_binaries + _aim_dll_binaries,
+    binaries=libxrk_binaries + pandas_binaries + pyarrow_binaries,
     datas=libxrk_datas + pandas_datas + pyarrow_datas,
     hiddenimports=hiddenimports,
     hookspath=[],

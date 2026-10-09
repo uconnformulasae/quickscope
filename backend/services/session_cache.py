@@ -97,6 +97,13 @@ class SessionCache:
                 if evicted_id == self._active_id:
                     self._active_id = None
 
+    def rename(self, session_id: str, filename: str) -> None:
+        """Change an entry's filename, keeping its log and on-disk fingerprint."""
+        with self._lock:
+            entry = self._entries.get(session_id)
+            if entry is not None:
+                self._entries[session_id] = (entry[0], filename, entry[2])
+
     def rebind_file(self, session_id: str, local_path: Path, filename: str | None = None) -> None:
         """Attach a real on-disk fingerprint to an entry (e.g. after upload)."""
         with self._lock:

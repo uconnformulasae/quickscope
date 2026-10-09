@@ -12,7 +12,7 @@
 	<true/>
 	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
 	<true/>
-	<!-- Railway sync + AiM device connectivity -->
+	<!-- AiM device connectivity -->
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<!-- Local FastAPI backend binds to 127.0.0.1 -->

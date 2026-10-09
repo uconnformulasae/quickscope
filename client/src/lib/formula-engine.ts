@@ -114,8 +114,8 @@ function applyDelay(ch: ChannelData, samples: number): ChannelData {
   if (s === 0 || s >= ch.timestamps.length) return ch;
   // Delay shifts values forward: value at timestamp[i+s] gets value[i]
   return {
-    timestamps: ch.timestamps.slice(s),
-    values: ch.values.slice(s),
+    timestamps: ch.timestamps.slice(0, -s),
+    values: ch.values.slice(0, -s),
   };
 }
 
@@ -160,7 +160,7 @@ function tokenize(expr: string): Token[] {
         (expr[j] >= 'a' && expr[j] <= 'z') ||
         (expr[j] >= 'A' && expr[j] <= 'Z') ||
         (expr[j] >= '0' && expr[j] <= '9') ||
-        expr[j] === '_' || expr[j] === '-'
+        expr[j] === '_'
       )) j++;
       tokens.push({ type: 'ident', value: expr.slice(i, j), pos: i });
       i = j;

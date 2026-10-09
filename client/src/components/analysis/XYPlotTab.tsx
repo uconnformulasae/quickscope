@@ -14,6 +14,7 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
   theme?: 'dark' | 'light';
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
+  const plottedEl = useRef<HTMLDivElement | null>(null);
 
   const activeChannelIdsWithData = activeChannels
     .filter(ac => resolveSamples(ac.channelId, session, derivedSamplesMap).length > 0)
@@ -96,10 +97,17 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
       Plotly.react(chartRef.current, [trace], layout, {
         responsive: true, displayModeBar: false, displaylogo: false,
       });
+      plottedEl.current = chartRef.current;
     };
 
     ensurePlotly(render);
   }, [session, xChan, yChan, yAc, theme]);
+
+  // Release the chart's WebGL/DOM resources when the tab unmounts.
+  useEffect(() => () => {
+    const Plotly = (window as any).Plotly;
+    if (Plotly && plottedEl.current) Plotly.purge(plottedEl.current);
+  }, []);
 
   const chanOptions = activeChannels.map(ac => {
     const c = resolveChannel(ac.channelId, session, derivedChannels);

@@ -75,10 +75,13 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
   useEffect(() => {
     if (!gpsData || !mapContainerRef.current) return;
 
-    // Wait for Leaflet to load
+    // Wait for Leaflet to load (polling stops when this effect is cleaned up)
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
     const waitForLeaflet = () => {
+      if (cancelled) return;
       if (typeof L === 'undefined') {
-        setTimeout(waitForLeaflet, 100);
+        pollTimer = setTimeout(waitForLeaflet, 100);
         return;
       }
 
@@ -170,6 +173,8 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
     waitForLeaflet();
 
     return () => {
+      cancelled = true;
+      clearTimeout(pollTimer);
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;

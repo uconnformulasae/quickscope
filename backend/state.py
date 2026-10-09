@@ -4,7 +4,6 @@ Shared application state and utility functions.
 Used across route modules — import from here instead of duplicating.
 """
 
-import asyncio
 import logging
 import math
 import re
@@ -13,8 +12,6 @@ from pathlib import Path
 from typing import Optional
 
 from libxrk import ChannelMetadata
-
-from services import sync_service
 
 logger = logging.getLogger("quickscope")
 
@@ -54,9 +51,10 @@ class SessionState:
         if value is None:
             session_cache.clear_active()
             return
-        sid = session_cache.active_id or _PENDING_ID
-        session_cache.put(sid, value, self._filename or "")
-        session_cache.set_active(sid)
+        # A freshly parsed log is unbound until session_id is assigned. Never write
+        # it under the previously active session's key: that overwrites its cache entry.
+        session_cache.put(_PENDING_ID, value, self._filename or "")
+        session_cache.set_active(_PENDING_ID)
 
     @property
     def filename(self):
@@ -74,7 +72,7 @@ class SessionState:
         if sid is not None:
             entry = session_cache.get(sid)
             if entry is not None and entry[1] != value:
-                session_cache.put(sid, entry[0], value or "")
+                session_cache.rename(sid, value or "")
 
     @property
     def session_id(self):
@@ -91,6 +89,11 @@ class SessionState:
             session_cache.evict(_PENDING_ID)
             session_cache.put(value, log, fn)
         session_cache.set_active(value)
+
+    def discard_pending(self):
+        """Drop a log that was never bound to a session id (e.g. failed upload)."""
+        session_cache.evict(_PENDING_ID)
+        self._filename = None
 
     def clear(self):
         sid = session_cache.active_id
@@ -114,23 +117,6 @@ def get_log(session_id: Optional[str] = None):
     entry = session_cache.get(session_id)
     return entry[0] if entry else None
 
-# Guard against concurrent sync operations
-_sync_lock = asyncio.Lock()
-
-
-async def background_sync():
-    if not sync_service.is_railway_configured():
-        logger.debug("Background sync skipped: Railway URL not configured")
-        return
-    if _sync_lock.locked():
-        return
-    async with _sync_lock:
-        try:
-            await sync_service.sync_with_railway()
-        except Exception:
-            logger.exception("Background sync failed")
-
-
 # ─── Utility functions ───────────────────────────────────────────────────────
 
 def channel_meta(name: str, table) -> dict:
@@ -143,17 +129,25 @@ def channel_meta(name: str, table) -> dict:
     }
 
 
-def channel_data(name: str, table) -> dict:
+def channel_data(name: str, table, *, drop_gaps: bool = False) -> dict:
+    """Timestamps/values for a channel.
+
+    Non-finite samples (sensor dropouts) are never replaced with a made-up
+    number. By default they come back as ``None`` so callers can keep index
+    alignment with sibling channels; ``drop_gaps=True`` removes those samples
+    (timestamp and value together) for callers that need plain numeric arrays.
+    """
     df = table.to_pandas()
     timestamps = df['timecodes'].tolist()
-    values = df[name].tolist()
-    clean_vals = []
-    for v in values:
-        if isinstance(v, (int, float)) and math.isfinite(v):
-            clean_vals.append(float(v))
-        else:
-            clean_vals.append(0.0)
-    return {"timestamps": timestamps, "values": clean_vals}
+    values = [
+        float(v) if isinstance(v, (int, float)) and math.isfinite(v) else None
+        for v in df[name].tolist()
+    ]
+    if drop_gaps:
+        kept = [(t, v) for t, v in zip(timestamps, values) if v is not None]
+        timestamps = [t for t, _ in kept]
+        values = [v for _, v in kept]
+    return {"timestamps": timestamps, "values": values}
 
 
 def parse_file(file_path: str | Path, priority: int | None = None):

@@ -52,10 +52,6 @@ def _setup_pull_mocks(
         "routes.sessions.aim_connector.discover_device",
         lambda: {"ip": "10.0.0.1", "ssid": "AiM-TEST", "device_name": ""},
     )
-    monkeypatch.setattr(
-        "routes.sessions.sync_service.is_railway_configured",
-        lambda: False,
-    )
     hub = FakePullHub(device_sessions, list_error=list_error)
     monkeypatch.setattr("routes.sessions.get_aim_primary_hub", lambda: hub)
     monkeypatch.setattr("routes.sessions.AimKeepalive", FakeKeepalive)

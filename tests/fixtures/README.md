@@ -81,7 +81,7 @@ The script auto-finds `*_rs.csv` in the same directory when the names match.
 
 ## CI regression
 
-DLL regression runs on **`windows-latest`** (`dll-regression.yml`). libxrk regression runs on **`ubuntu-latest`** (`libxrk-regression.yml`). Both download fixtures from the **`fixtures-v1`** release; DLL jobs also fetch the MatLabXRK DLL from [laz-/xrk](https://github.com/laz-/xrk).
+DLL tests run in CI on **`windows-latest`** (`pytest -m dll` in `ci.yml`). libxrk tests run on **`ubuntu-latest`** (`pytest -m libxrk` via `pytest -m "not dll"`). The Windows job can download fixtures from the **`fixtures-v1`** release when they are not in the checkout; it also fetches the MatLabXRK DLL from [laz-/xrk](https://github.com/laz-/xrk).
 
 Force libxrk locally with `QUICKSCOPE_PARSER=libxrk` or `npm run test:libxrk`.
 
