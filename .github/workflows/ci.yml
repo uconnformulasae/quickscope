@@ -195,5 +195,6 @@ jobs:
             release/*.zip
             release/*.exe
             release/*.AppImage
+            release/*.blockmap
           if-no-files-found: error
           retention-days: 7

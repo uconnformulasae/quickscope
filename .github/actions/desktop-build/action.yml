@@ -25,31 +25,43 @@ runs:
         NOTARYTOOL_TIMEOUT: '1200'
       run: |
         set -euo pipefail
-        ARCH="${{ inputs.arch }}"
-        NOTARIZE=false
-        if [ "${{ inputs.notarize }}" = "true" ]; then
-          NOTARIZE=true
-        fi
-        VERSION="$(node -p "require('./package.json').version")"
-        # package.json lists arm64+x64 targets; a merged JSON config limits this job to
-        # one arch (CLI --config.mac.target=... is not valid in electron-builder 25).
-        CFG="$(mktemp)"
-        cat > "${CFG}" <<EOF
-        {
-          "mac": {
-            "target": [
-              { "target": "dmg", "arch": ["${ARCH}"] },
-              { "target": "zip", "arch": ["${ARCH}"] }
-            ],
-            "notarize": ${NOTARIZE}
-          },
-          "dmg": {
-            "title": "QuickScope ${VERSION} ${ARCH}"
-          }
-        }
-        EOF
+        export ARCH="${{ inputs.arch }}"
+        export NOTARIZE="${{ inputs.notarize }}"
+        # package.json lists arm64+x64 targets; this overlay limits the job to one arch.
+        CFG="${RUNNER_TEMP}/electron-builder-mac-${ARCH}.json"
+        export CFG
+        node -e "
+          const fs = require('fs');
+          const arch = process.env.ARCH;
+          const notarize = process.env.NOTARIZE === 'true';
+          const version = require('./package.json').version;
+          fs.writeFileSync(
+            process.env.CFG,
+            JSON.stringify(
+              {
+                directories: { output: 'release' },
+                mac: {
+                  target: [
+                    { target: 'dmg', arch: [arch] },
+                    { target: 'zip', arch: [arch] },
+                  ],
+                  notarize,
+                },
+                dmg: { title: 'QuickScope ' + version + ' ' + arch },
+              },
+              null,
+              2,
+            ),
+          );
+        "
         npx electron-builder --mac --"${ARCH}" --publish never --config "${CFG}"
         rm -f "${CFG}"
+        echo "release/ contents:"
+        ls -la release/ || true
+        if ! compgen -G 'release/*.dmg' > /dev/null && ! compgen -G 'release/*.zip' > /dev/null; then
+          echo "::error::No .dmg or .zip under release/ after electron-builder"
+          exit 1
+        fi
 
     - name: Build Windows installer
       if: inputs.platform == 'win'
