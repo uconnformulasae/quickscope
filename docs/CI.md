@@ -6,7 +6,7 @@ QuickScope uses **GitHub-hosted runners** for all CI.
 
 | Workflow | When | Purpose |
 |----------|------|---------|
-| [ci.yml](../.github/workflows/ci.yml) | PR, push `main`/`Dev`, `workflow_dispatch` | Tests, Docker smoke, unsigned desktop builds (all platforms) |
+| [ci.yml](../.github/workflows/ci.yml) | PRs targeting `main`, `workflow_dispatch` | Tests, Docker smoke, unsigned desktop builds (all platforms) |
 | [release.yml](../.github/workflows/release.yml) | Tags `v*.*.*`, `workflow_dispatch` | Signed/notarized (when secrets exist) installers + GitHub Release |
 
 ### CI jobs (`ci.yml`)
@@ -22,7 +22,7 @@ QuickScope uses **GitHub-hosted runners** for all CI.
 | `desktop / linux-x64` | `ubuntu-latest` | AppImage x64 (libxrk backend) |
 | `desktop / linux-arm64` | `ubuntu-24.04-arm` | AppImage arm64 (libxrk backend) |
 
-**Full desktop matrix runs on every PR** (five parallel installer jobs). Use `workflow_dispatch` inputs `skip_desktop` or `skip_docker` to debug faster.
+**Full desktop matrix runs on every PR to `main`** (five parallel installer jobs). Use `workflow_dispatch` inputs `skip_desktop` or `skip_docker` to debug faster.
 
 Parser coverage uses pytest markers (`dll`, `libxrk`) — there are no separate “regression” workflow files.
 
@@ -48,7 +48,7 @@ DLL jobs clone the MatLabXRK DLL from [laz-/xrk](https://github.com/laz-/xrk) on
 
 ## Branch protection
 
-On `main` (and optionally `Dev`), enable required status checks:
+On `main`, enable required status checks:
 
 - `test / ubuntu`
 - `test / windows`
