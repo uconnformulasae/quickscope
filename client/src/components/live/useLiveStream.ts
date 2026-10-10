@@ -20,6 +20,17 @@ function aimStatusToLiveDevice(device: NonNullable<AimStatus['device']>): LiveDe
   };
 }
 
+/** Close the live WS; `send('stop')` only when OPEN (throws while CONNECTING). */
+function closeLiveWebSocket(ws: WebSocket | null | undefined) {
+  if (!ws) return;
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send('stop');
+  }
+  if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    ws.close();
+  }
+}
+
 /** WebSocket connection, GPS trail and stream controls for the live view. */
 export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   const [status, setStatus] = useState<Status>('idle');
@@ -115,14 +126,13 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     setStatus('connecting');
     connect();
     return () => {
-      wsRef.current?.close();
+      closeLiveWebSocket(wsRef.current);
       wsRef.current = null;
     };
   }, [aimDevice, connect]);
 
   const disconnect = () => {
-    wsRef.current?.send('stop');
-    wsRef.current?.close();
+    closeLiveWebSocket(wsRef.current);
     wsRef.current = null;
     gpsTrailRef.current = [];
     snapshotTickRef.current = 0;
