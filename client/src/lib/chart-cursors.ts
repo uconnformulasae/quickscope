@@ -2,7 +2,6 @@
  * Cursor and delta panel drawing for the telemetry chart.
  * Handles cursor lines, value readout pills, hover crosshair, and delta comparison panel.
  */
-import type { ChannelSample } from './xrk-parser';
 import type { DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT,

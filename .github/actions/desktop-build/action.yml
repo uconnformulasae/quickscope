@@ -1,0 +1,78 @@
+name: Desktop build (electron-builder)
+description: Run electron-builder after PyInstaller + Vite build. Caller must set up toolchain and freeze backend first.
+
+inputs:
+  platform:
+    description: Target OS (win, mac, linux)
+    required: true
+  arch:
+    description: CPU arch (x64 or arm64) for win, mac, and linux AppImage jobs
+    required: false
+    default: x64
+  notarize:
+    description: macOS notarization when secrets are configured (release only)
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Build macOS installer
+      if: inputs.platform == 'mac'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        NOTARYTOOL_TIMEOUT: '1200'
+      run: |
+        set -euo pipefail
+        export ARCH="${{ inputs.arch }}"
+        export NOTARIZE="${{ inputs.notarize }}"
+        # package.json lists arm64+x64 targets; this overlay limits the job to one arch.
+        CFG="${RUNNER_TEMP}/electron-builder-mac-${ARCH}.json"
+        export CFG
+        node -e "
+          const fs = require('fs');
+          const arch = process.env.ARCH;
+          const notarize = process.env.NOTARIZE === 'true';
+          const version = require('./package.json').version;
+          fs.writeFileSync(
+            process.env.CFG,
+            JSON.stringify(
+              {
+                directories: { output: 'release' },
+                mac: {
+                  target: [
+                    { target: 'dmg', arch: [arch] },
+                    { target: 'zip', arch: [arch] },
+                  ],
+                  notarize,
+                },
+                dmg: { title: 'QuickScope ' + version + ' ' + arch },
+              },
+              null,
+              2,
+            ),
+          );
+        "
+        npx electron-builder --mac --"${ARCH}" --publish never --config "${CFG}"
+        rm -f "${CFG}"
+        echo "release/ contents:"
+        ls -la release/ || true
+        if ! compgen -G 'release/*.dmg' > /dev/null && ! compgen -G 'release/*.zip' > /dev/null; then
+          echo "::error::No .dmg or .zip under release/ after electron-builder"
+          exit 1
+        fi
+
+    - name: Build Windows installer
+      if: inputs.platform == 'win'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: npx electron-builder --win --${{ inputs.arch }} --publish never
+
+    - name: Build Linux installer
+      if: inputs.platform == 'linux'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: npx electron-builder --linux --${{ inputs.arch }} --publish never

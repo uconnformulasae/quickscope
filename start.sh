@@ -87,7 +87,7 @@ stop_listener_on_port() {
 }
 
 stop_listener_on_port 8000
-stop_listener_on_port 5000
+stop_listener_on_port 5173
 
 # Start backend
 echo "Starting QuickScope backend on :8000 (parser: $PARSER_MODE)..."

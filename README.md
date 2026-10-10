@@ -13,7 +13,6 @@ Built for UConn Formula SAE Electric.
 - Lap analysis, histograms, XY scatter plots, GPS track map
 - CSV export with cross-channel interpolation
 - Session management with local persistence
-- Sync with [Data-Development](https://github.com/uconnformulasae/Data-Development) (Railway deployment) for shared session storage
 - Direct AiM device connectivity over WiFi (macOS and Windows)
 
 ## Architecture
@@ -23,7 +22,7 @@ Built for UConn Formula SAE Electric.
 
 The backend parses `.xrk`/`.xrz` files using the official AiM MatLabXRK DLL when available (Windows), falling back to [libxrk](https://pypi.org/project/libxrk/) on other platforms or if the DLL is missing. See `backend/vendor/README.md` for Windows dev setup.
 
-Sessions are persisted locally in `backend/data/sessions.json` with raw files cached in `backend/data/sessions/`. When configured, sessions sync bidirectionally with the Data-Development Railway backend.
+Sessions are persisted locally in `backend/data/sessions.json` with raw files cached in `backend/data/sessions/`.
 
 ## Install (for end users)
 
@@ -84,7 +83,8 @@ CI uses the same backend image for libxrk regression. Parser fixture downloads r
 ### Testing
 
 ```powershell
-npm run test          # unit regression (no DLL, no libxrk fixtures)
+npm run test          # backend: unit + API + end-to-end (no DLL, no libxrk fixtures)
+npm run test:client   # frontend unit tests (vitest)
 npm run test:dll      # DLL vs Race Studio CSV (Windows + fixtures)
 npm run test:libxrk   # libxrk fallback parser on XRK fixtures
 npm run check         # TypeScript only
@@ -118,7 +118,6 @@ npm run dev
 
 Click the gear icon in the session browser to configure:
 
-- **Railway URL** -- Data-Development API endpoint (e.g. `https://your-app.up.railway.app/api/v1`)
 - **AiM WiFi SSID** -- your AiM device's hotspot name
 - **AiM Device IP** -- default `10.0.0.1`
 
@@ -139,15 +138,23 @@ When connected to the AiM device's WiFi hotspot:
 1. The green AiM indicator appears in the session browser header
 2. Click **Pull from AiM** to browse sessions on the device
 3. Select which sessions to download
-4. Downloaded `.xrz` files are saved locally and auto-uploaded to Railway (if configured)
+4. Downloaded `.xrz` files are saved locally and added to the session browser
 
 The connection uses the AiM binary TCP protocol (port 2000) with UDP discovery (port 36002). File downloads send **progress-encoded STCP micro-ACKs** (cumulative bytes received at each ~982 KB batch boundary), matching RaceStudio behavior captured in Wireshark. Live streaming still uses zero-byte micro-ACKs; see `docs/protocol/aim-live-protocol-deep-dive.md` vs download captures such as `116CaptureWireshark.pcapng`.
+
+**Live view debugging:** logs under [`backend/data/logs/aim_live/`](backend/data/logs/aim_live/). Session pull and live view use different TCP handshakes after the same hello; attach `sessions/*_live.jsonl` if live Connect fails while pull works.
+
+**macOS: UDP discovery times out with zero replies from every candidate IP** — you'll see `aim_discovery` log lines like `no reply from ['10.0.0.1', ...]` repeating forever with no other errors. Two independent causes produce this identical symptom, so check both:
+
+1. **macOS Local Network privacy permission** — macOS silently drops local-subnet traffic from apps that haven't been granted access (no exception is raised; it just looks like a timeout). Fix: **System Settings → Privacy & Security → Local Network**, and enable the toggle for whichever process opens the sockets — typically **Terminal**/**iTerm** (dev mode, parent of the Python backend), **Python**, and **Google Chrome** (the frontend tab); for the packaged Electron build, look for **QuickScope** instead. Toggles may only appear after a connection attempt has been made once while on the AiM WiFi. If the toggle already shows enabled but still doesn't work, the TCC grant may be stale (e.g. after a venv/interpreter path change) — run `tccutil reset LocalNetwork` and re-grant from scratch.
+2. **Wrong device IP guess** — discovery unicasts a probe to a short hardcoded list of common AiM hotspot IPs (`10.0.0.1`, `192.168.137.1`, `192.168.1.1`, `192.168.4.1`) before falling back to a real LAN broadcast. If your Mac's DHCP-assigned address/gateway on the AiM WiFi doesn't match one of the guesses, the unicast attempts always time out and only the broadcast fallback finds the device. Confirm with `ipconfig getifaddr en0` and `netstat -rn | grep default` while connected to the AiM hotspot — if the gateway isn't in the candidate list above, permission fixes alone won't help; the broadcast fallback (`services/aim_discovery.broadcast_probe`) is what saves you.
 
 **Download troubleshooting**
 
 - Each pull writes a JSONL trace to `backend/data/logs/aim_download/` (timestamp + filename). Use these logs to compare `extracted_bytes`, `batch_complete_ack`, and `ack_payload_bytes` against a known-good RaceStudio capture.
 - List traces via API: `GET /api/aim/download/trace` (and `/api/aim/download/trace/{name}` for a single log).
 - Run `pytest tests/test_aim_download.py` after protocol changes; includes a regression test against `116CaptureWireshark.pcapng` stream 38.
+- Blocks carry **absolute** file offsets and are placed by offset; the device is ACKed only at batch boundaries. A pause of a second or two is the device's own TCP retransmit after WiFi loss — ACKing during it makes the device replay from that offset (this corrupted `QS_Pull_242`: truncated data with garbage appended, so channels like RPM were missing). The download now fails with `Incomplete download` rather than saving a partial file; look for `resume_ack_sent` / `replay_conflicts` in the trace.
 - Device session list dates are preferred over embedded XRK metadata when indexing pulled sessions.
 
 **Validated:** QuickScope pulls of multi-minute sessions (e.g. `a_0141`) match RaceStudio exports on core EV channels (pack voltage/current, RPM, torque, phase currents, throttle, brakes) when compared sample-for-sample.
@@ -160,10 +167,8 @@ backend/
   services/
     session_store.py       # JSON-backed local session index
     settings_store.py      # Persistent settings
-    railway_client.py      # Data-Development API client
     aim_connector.py       # AiM device protocol (UDP discovery + TCP session list/download)
     aim_download_trace.py  # JSONL download traces for debugging truncated pulls
-    sync_service.py        # Bidirectional Railway sync
 
 docs/protocol/             # Reverse-engineered AiM WiFi protocol notes + Wireshark analysis
 
@@ -180,7 +185,7 @@ client/src/
     ChannelSidebar.tsx     # Channel picker
     AnalysisPanel.tsx      # Stats, laps, histogram, XY plot, GPS tabs
     AimSessionPicker.tsx   # AiM device session browser/downloader
-    SettingsDialog.tsx     # Railway + AiM configuration
+    SettingsDialog.tsx     # AiM device configuration
     SessionHeader.tsx      # Top bar with metadata and controls
     DerivedChannelDialog.tsx  # Formula/JS expression editor
     ExportDialog.tsx       # CSV export channel selector

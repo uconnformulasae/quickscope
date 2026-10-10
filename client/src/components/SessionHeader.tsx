@@ -219,7 +219,7 @@ export function SessionHeader({
   );
 }
 
-function MetaPill({ icon, value, label }: { icon: React.ReactNode; value: string; label?: string }) {
+function MetaPill({ icon, value }: { icon: React.ReactNode; value: string; label?: string }) {
   if (value === 'Unknown' || !value) return null;
   return (
     <div className="hidden lg:flex items-center gap-1 px-1.5 py-0.5 bg-muted border border-border/40 rounded text-xs text-foreground/70 whitespace-nowrap">

@@ -1,23 +1,25 @@
-"""Session management routes — CRUD, rename, sync, AiM device integration."""
+"""Session management routes — CRUD, rename, AiM device integration."""
 
 import asyncio
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from services import (
     session_store,
-    sync_service,
     aim_connector,
-    railway_client,
     gps_preview,
     aim_pull_log,
 )
+from services.aim_keepalive import AimKeepalive
+from services.aim_primary_hub import get_aim_primary_hub
+from parsers.parse_gate import PRIORITY_INTERACTIVE
+from services.session_cache import session_cache
 from state import (
-    state, logger, background_sync,
-    parse_file, extract_session_info, parse_recorded_at, sanitize_filename,
+    state, logger,
+    parse_file, extract_session_info, sanitize_filename,
     resolve_aim_recorded_at, apply_stored_recorded_at,
 )
 
@@ -41,40 +43,27 @@ async def load_session(session_id: str):
     if local_path is None:
         raise HTTPException(400, "Session file not available locally. Pull it first.")
 
-    try:
-        log = parse_file(local_path)
-        state.log = log
+    cached = session_cache.get_valid(session_id, local_path)
+    if cached is not None:
+        log, _ = cached
+        session_cache.set_active(session_id)
         state.filename = entry["filename"]
-        state.session_id = session_id
-    except Exception:
-        state.clear()
-        logger.exception("Failed to parse session file")
-        raise HTTPException(500, "Failed to parse session file")
+    else:
+        try:
+            log = await asyncio.to_thread(
+                parse_file, local_path, PRIORITY_INTERACTIVE,
+            )
+        except Exception:
+            logger.exception("Failed to parse session file")
+            raise HTTPException(500, "Failed to parse session file")
+        session_cache.put(session_id, log, entry["filename"], local_path)
+        session_cache.set_active(session_id)
+        state.filename = entry["filename"]
 
     info = extract_session_info(log, entry["filename"])
     if entry.get("source") == "aim_device" and entry.get("recorded_at"):
         info = apply_stored_recorded_at(info, entry["recorded_at"])
     return info
-
-
-@router.post("/sessions/sync")
-async def sync_sessions():
-    try:
-        result = await sync_service.sync_with_railway()
-        return {"ok": True, **result}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception:
-        logger.exception("Sync failed")
-        raise HTTPException(500, "Sync failed")
-
-
-@router.post("/sessions/{session_id}/pull")
-async def pull_session(session_id: str):
-    result = await sync_service.pull_session(session_id)
-    if not result.get("ok"):
-        raise HTTPException(400, result.get("error", "Pull failed"))
-    return result
 
 
 class RenameRequest(BaseModel):
@@ -109,18 +98,6 @@ async def rename_session(session_id: str, body: RenameRequest):
         new_path = str(session_store.session_file_path(new_filename))
         old_path.rename(new_path)
 
-    # Rename on Railway if synced
-    remote_id = entry.get("remote_id")
-    if remote_id:
-        try:
-            await railway_client.rename_session(remote_id, Path(new_filename).stem)
-        except Exception as exc:
-            # Roll back local file rename
-            if new_path and Path(new_path).exists():
-                Path(new_path).rename(old_path)
-            logger.warning("Failed to rename session on Railway: %s", exc)
-            raise HTTPException(502, "Failed to update remote: " + str(exc))
-
     updated = session_store.update_session(
         session_id,
         filename=new_filename,
@@ -144,7 +121,9 @@ async def get_gps_preview(session_id: str):
     local_path = session_store.resolve_session_path(entry)
     if local_path is None:
         return {"preview": None}
-    preview = await asyncio.to_thread(gps_preview.compute_preview, local_path)
+    preview = await asyncio.to_thread(
+        gps_preview.compute_preview, local_path, session_id,
+    )
     return {"preview": preview}
 
 
@@ -160,6 +139,7 @@ async def delete_session(session_id: str):
 
     if state.session_id == session_id:
         state.clear()
+    session_cache.evict(session_id)
 
     session_store.delete_session(session_id)
     return {"ok": True}
@@ -182,7 +162,8 @@ async def list_aim_sessions():
 
     sessions = []
     try:
-        sessions = await asyncio.to_thread(aim_connector.list_aim_sessions)
+        hub = get_aim_primary_hub()
+        sessions = await hub.list_sessions(device_ip or None)
     except ConnectionError as exc:
         aim_pull_log.record(
             action="list",
@@ -257,30 +238,75 @@ class AimPullRequest(BaseModel):
 
 
 @router.post("/aim/pull")
-async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks):
+async def pull_from_aim(body: AimPullRequest):
     if not body.filenames:
         return {"ok": False, "error": "No files selected", "downloaded": [], "results": []}
 
     device = await asyncio.to_thread(aim_connector.discover_device)
     device_ip = device["ip"] if device else ""
 
-    will_queue_railway = sync_service.is_railway_configured()
     logger.info("AiM pull: downloading %d selected sessions...", len(body.filenames))
 
+    hub = get_aim_primary_hub()
+    # Must run on the primary TCP *before* it is released: the device ignores a
+    # second port-2000 connection while the primary is open (QS_Pull_241/242).
     device_meta_by_file: dict[str, dict] = {}
     try:
-        aim_sessions = await asyncio.to_thread(aim_connector.list_aim_sessions)
+        aim_sessions = await hub.list_sessions(device_ip or None)
         device_meta_by_file = {
             s["filename"]: s for s in aim_sessions if s.get("filename")
         }
-    except ConnectionError as exc:
+    except (ConnectionError, TimeoutError, RuntimeError, OSError) as exc:
         logger.warning("AiM pull: could not fetch device session list for dates: %s", exc)
 
+    try:
+        await hub.release_for_download()
+    except ConnectionError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "downloaded": [],
+            "errors": [str(exc)],
+            "results": [],
+        }
+
+    keepalive = await _start_download_keepalive(hub.resolve_host(device_ip or None))
+    try:
+        downloaded, errors, results = await _download_selected(
+            body.filenames,
+            device_meta_by_file=device_meta_by_file,
+            device_ip=device_ip,
+        )
+    finally:
+        if keepalive is not None:
+            await keepalive.stop()
+
+    return {"ok": True, "downloaded": downloaded, "errors": errors, "results": results}
+
+
+async def _start_download_keepalive(host: str) -> AimKeepalive | None:
+    """Race Studio keeps ``aim-ka`` running during downloads (RS3_PULL_241/242);
+    without it the device drops port 2000 ~30 s after the last datagram."""
+    keepalive = AimKeepalive(host)
+    try:
+        await keepalive.start()
+    except OSError as exc:
+        logger.warning("AiM pull: keepalive could not start (%s); long downloads may drop", exc)
+        return None
+    return keepalive
+
+
+async def _download_selected(
+    filenames: list[str],
+    *,
+    device_meta_by_file: dict[str, dict],
+    device_ip: str,
+) -> tuple[list[str], list[str], list[dict]]:
     downloaded = []
     errors = []
     results = []
 
-    for raw_filename in body.filenames:
+    for raw_filename in filenames:
         try:
             filename = sanitize_filename(raw_filename)
         except ValueError:
@@ -350,7 +376,6 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
             entry = session_store.add_session(
                 filename=filename,
                 source="aim_device",
-                sync_status="local_only",
                 local_path=str(dest),
                 track_name=meta.get("venue", ""),
                 driver_name=meta.get("driver", ""),
@@ -362,6 +387,11 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
             downloaded.append(entry["filename"])
 
             if parse_ok:
+                session_cache.put(entry["id"], log, filename, dest)
+                try:
+                    gps_preview.warm_from_log(entry["id"], dest, log)
+                except Exception:
+                    logger.exception("Failed to warm GPS preview cache for %s", filename)
                 aim_pull_log.record(
                     action="pull",
                     status="ok",
@@ -370,7 +400,6 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
                     size=file_bytes,
                     duration_s=duration_s,
                     session_id=entry["id"],
-                    railway_queued=will_queue_railway,
                 )
 
             results.append({
@@ -380,7 +409,6 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
                 "session_id": entry["id"],
                 "parse_ok": parse_ok,
                 "local_path": str(dest),
-                "railway_queued": will_queue_railway,
             })
         except Exception as e:
             duration_s = time.monotonic() - started
@@ -395,7 +423,4 @@ async def pull_from_aim(body: AimPullRequest, background_tasks: BackgroundTasks)
                 error=str(e)[:200],
             )
 
-    if downloaded and will_queue_railway:
-        background_tasks.add_task(background_sync)
-
-    return {"ok": True, "downloaded": downloaded, "errors": errors, "results": results}
+    return downloaded, errors, results

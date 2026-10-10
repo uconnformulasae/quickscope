@@ -7,10 +7,10 @@ without digging through backend terminal logs.
 
 from __future__ import annotations
 
-import threading
-from collections import deque
 from datetime import datetime, timezone
 from typing import Literal
+
+from services.ring_log import RingLog
 
 AimPullStatus = Literal[
     "ok",
@@ -20,9 +20,7 @@ AimPullStatus = Literal[
     "list_ok",
 ]
 
-_MAX_ENTRIES = 100
-_lock = threading.Lock()
-_entries: deque[dict] = deque(maxlen=_MAX_ENTRIES)
+_log = RingLog(max_entries=100)
 
 
 def record(
@@ -34,7 +32,6 @@ def record(
     size: int = 0,
     duration_s: float = 0,
     session_id: str | None = None,
-    railway_queued: bool = False,
     session_count: int | None = None,
     error: str | None = None,
 ) -> None:
@@ -45,7 +42,6 @@ def record(
         "device_ip": device_ip,
         "size": size,
         "duration_s": round(duration_s, 3),
-        "railway_queued": railway_queued,
     }
     if filename:
         entry["filename"] = filename
@@ -55,15 +51,13 @@ def record(
         entry["session_count"] = session_count
     if error:
         entry["error"] = error
-    with _lock:
-        _entries.append(entry)
+    _log.append(entry)
 
 
 def list_recent() -> list[dict]:
-    with _lock:
-        return list(reversed(_entries))
+    """Newest first."""
+    return _log.list_recent()
 
 
 def clear() -> None:
-    with _lock:
-        _entries.clear()
+    _log.clear()

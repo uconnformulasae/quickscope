@@ -12,17 +12,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from services.aim_live import decode_frame
+from services.trace_file import open_unique
 
 _LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_download"
 
 
 class AimDownloadTrace:
     def __init__(self, filename: str, expected_size: int = 0) -> None:
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in filename)
-        self.path = _LOG_DIR / f"{stamp}_{safe}.log"
-        self._fh = self.path.open("w", encoding="utf-8")
+        self.path, self._fh = open_unique(_LOG_DIR, f"{stamp}_{safe}.log")
+        self._unflushed = 0
         self.log(
             "session_start",
             filename=filename,
@@ -36,7 +36,14 @@ class AimDownloadTrace:
             **fields,
         }
         self._fh.write(json.dumps(entry, default=str) + "\n")
-        self._fh.flush()
+        # A download logs ~100+ lines (one per recv/frame/progress event);
+        # flushing every single one is a syscall per line on the hot recv()
+        # path. Flushing every 20 lines keeps the log readable soon after
+        # writes without paying that cost per line; close() always flushes.
+        self._unflushed += 1
+        if self._unflushed >= 20:
+            self._fh.flush()
+            self._unflushed = 0
 
     def log_frame(self, frame, *, ack_sent: bool = False) -> None:
         fields: dict = {
@@ -80,4 +87,5 @@ class AimDownloadTrace:
 
     def close(self, *, status: str, **fields) -> None:
         self.log("session_end", status=status, **fields)
+        self._fh.flush()
         self._fh.close()

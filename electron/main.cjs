@@ -113,7 +113,14 @@ async function startBackend() {
     QUICKSCOPE_HOST: BACKEND_HOST,
     QUICKSCOPE_PORT: String(backendPort),
     QUICKSCOPE_DATA_DIR: dataDir,
+    // The packaged renderer loads from file://, which browsers send as Origin: null.
+    QUICKSCOPE_ALLOW_NULL_ORIGIN: '1',
   };
+
+  if (!isDev) {
+    // Installers ship libxrk only; MatLabXRK DLL is dev / CI-test tooling on Windows.
+    env.QUICKSCOPE_PARSER = 'libxrk';
+  }
 
   backendProcess = spawn(exe, [], {
     env,
@@ -160,6 +167,17 @@ function stopBackend() {
 
 // ─── Window ───────────────────────────────────────────────────────────────────
 
+const SAFE_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+
+/** Open a URL in the system browser, but only for web/mail links (never file:, smb:, javascript:, ...). */
+function openExternalSafely(url) {
+  try {
+    if (SAFE_EXTERNAL_PROTOCOLS.has(new URL(url).protocol)) shell.openExternal(url);
+  } catch {
+    // malformed URL: ignore
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -172,15 +190,32 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true, // preload only needs contextBridge + process.argv, both available when sandboxed
       additionalArguments: [`--quickscope-backend=http://${BACKEND_HOST}:${backendPort}`],
     },
   });
 
   // External links open in the system browser, not a new Electron window
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openExternalSafely(url);
     return { action: 'deny' };
+  });
+
+  // The renderer must never navigate away from the app (it keeps preload access);
+  // reloads and same-origin dev-server navigation are still allowed.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    try {
+      const target = new URL(url);
+      const current = new URL(mainWindow.webContents.getURL());
+      const sameApp = target.protocol === 'file:'
+        ? current.protocol === 'file:' && target.pathname === current.pathname
+        : target.origin === current.origin;
+      if (sameApp) return;
+    } catch {
+      // fall through and block
+    }
+    event.preventDefault();
+    openExternalSafely(url);
   });
 
   if (isDev && process.env.QUICKSCOPE_DEV_URL) {

@@ -27,18 +27,33 @@ def _ensure_dirs():
 _lock = threading.Lock()
 
 
+def _quarantine(path: Path) -> None:
+    try:
+        os.replace(path, path.with_suffix(path.suffix + ".corrupt"))
+    except OSError:
+        pass
+
+
 def _load() -> list[dict]:
     _ensure_dirs()
     if not SESSIONS_FILE.exists():
         return []
-    with open(SESSIONS_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(SESSIONS_FILE, "r") as f:
+            sessions = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        # Keep the unreadable file for recovery and start with an empty index.
+        _quarantine(SESSIONS_FILE)
+        return []
+    return sessions if isinstance(sessions, list) else []
 
 
 def _save(sessions: list[dict]):
     _ensure_dirs()
-    with open(SESSIONS_FILE, "w") as f:
+    tmp = SESSIONS_FILE.with_suffix(SESSIONS_FILE.suffix + ".tmp")
+    with open(tmp, "w") as f:
         json.dump(sessions, f, indent=2, default=str)
+    os.replace(tmp, SESSIONS_FILE)  # atomic: a crash mid-write can't leave a truncated file
 
 
 def list_sessions() -> list[dict]:
@@ -70,19 +85,9 @@ def find_by_aim_session_id(aim_session_id: str) -> Optional[dict]:
     return None
 
 
-def find_by_remote_id(remote_id: int) -> Optional[dict]:
-    with _lock:
-        for s in _load():
-            if s.get("remote_id") == remote_id:
-                return s
-    return None
-
-
 def add_session(
     filename: str,
     source: str,
-    sync_status: str = "local_only",
-    remote_id: Optional[int] = None,
     aim_session_id: Optional[str] = None,
     track_name: str = "",
     driver_name: str = "",
@@ -95,7 +100,6 @@ def add_session(
     now = datetime.now(timezone.utc).isoformat()
     entry = {
         "id": str(uuid.uuid4()),
-        "remote_id": remote_id,
         "aim_session_id": aim_session_id or Path(filename).stem,
         "filename": filename,
         "local_path": local_path,
@@ -105,7 +109,6 @@ def add_session(
         "recorded_at": recorded_at,
         "duration_s": duration_s,
         "lap_count": lap_count,
-        "sync_status": sync_status,
         "source": source,
         "created_at": now,
         "updated_at": now,
@@ -129,32 +132,42 @@ def update_session(session_id: str, **fields) -> Optional[dict]:
     return None
 
 
-def reset_stale_sync_states() -> int:
-    """Reset transient sync states (uploading/downloading) on startup.
+_LEGACY_KEYS = ("remote_id", "sync_status")
 
-    A crash mid-sync leaves sessions stuck in those states forever, which
-    presents to the user as "the upload from my phone never showed up" — the
-    file actually made it to local storage but the local index thinks it's
-    still in transit. Called once at backend startup.
 
-    Sessions with a local_path return to 'local_only'; without one they
-    return to 'remote_only'. Returns the number of sessions reset.
+def migrate_legacy_entries() -> dict[str, int]:
+    """Clean up sessions.json written by versions that synced with Railway.
+
+    * Entries that only existed remotely (no file on disk) can never be opened
+      now that cloud sync is gone, so they are dropped.
+    * ``remote_id`` / ``sync_status`` bookkeeping keys are removed.
+    * ``source: "railway"`` entries that do have a local file become
+      ``manual_upload``.
+
+    Idempotent; returns counts of what changed. Called once at startup.
     """
-    reset = 0
+    pruned = cleaned = 0
     with _lock:
         sessions = _load()
-        changed = False
+        kept: list[dict] = []
         for s in sessions:
-            status = s.get("sync_status")
-            if status not in ("uploading", "downloading"):
+            legacy = s.get("sync_status") == "remote_only" or s.get("source") == "railway"
+            if legacy and resolve_session_path(s) is None:
+                pruned += 1
                 continue
-            s["sync_status"] = "local_only" if s.get("local_path") else "remote_only"
-            s["updated_at"] = datetime.now(timezone.utc).isoformat()
-            reset += 1
-            changed = True
-        if changed:
-            _save(sessions)
-    return reset
+            touched = False
+            for key in _LEGACY_KEYS:
+                if key in s:
+                    del s[key]
+                    touched = True
+            if s.get("source") == "railway":
+                s["source"] = "manual_upload"
+                touched = True
+            cleaned += touched
+            kept.append(s)
+        if pruned or cleaned:
+            _save(kept)
+    return {"pruned": pruned, "cleaned": cleaned}
 
 
 def delete_session(session_id: str) -> bool:

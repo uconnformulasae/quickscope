@@ -6,18 +6,23 @@ import math
 import re
 import time
 
-from fastapi import APIRouter, UploadFile, File, Query, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, UploadFile, File, Query, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from services import session_store, lap_detection, upload_log
+from services import session_store, lap_detection, upload_log, gps_preview, derived_eval
+from services.session_cache import session_cache
 from state import (
-    state, logger, background_sync, CHART_COLORS,
+    state, logger, CHART_COLORS,
     parse_file, extract_session_info, parse_recorded_at,
     sanitize_filename, channel_meta, channel_data, interpolate,
 )
 
 router = APIRouter(prefix="/api")
+
+
+class _NotAnXrkFile(Exception):
+    pass
 
 
 # ─── Upload ──────────────────────────────────────────────────────────────────
@@ -26,7 +31,6 @@ router = APIRouter(prefix="/api")
 async def upload_file(
     request: Request,
     file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None,
 ):
     started = time.monotonic()
     client_ip = request.client.host if request.client else "?"
@@ -51,17 +55,22 @@ async def upload_file(
 
     try:
         log = parse_file(dest)
+        # libxrk returns an empty log for bytes that aren't an XRK file instead of raising.
+        if not log.channels:
+            raise _NotAnXrkFile("file contains no channels")
         state.log = log
         state.filename = filename
     except Exception as exc:
         dest.unlink(missing_ok=True)
-        state.clear()
+        state.discard_pending()
         logger.exception("Failed to parse uploaded file")
         upload_log.record(
             filename=filename, size=size, duration_s=time.monotonic() - started,
             client_ip=client_ip, user_agent=user_agent,
             status="parse_failed", error=str(exc)[:200],
         )
+        if isinstance(exc, _NotAnXrkFile):
+            raise HTTPException(400, "Not a valid XRK/XRZ file")
         raise HTTPException(500, "Failed to parse file")
 
     info = extract_session_info(log, filename)
@@ -71,18 +80,20 @@ async def upload_file(
     existing = session_store.find_by_filename(filename)
     if existing:
         state.session_id = existing["id"]
-        if background_tasks:
-            background_tasks.add_task(background_sync)
+        session_cache.rebind_file(existing["id"], dest, filename)
+        try:
+            gps_preview.warm_from_log(existing["id"], dest, log)
+        except Exception:
+            logger.exception("Failed to warm GPS preview cache for %s", filename)
         upload_log.record(
             filename=filename, size=size, duration_s=time.monotonic() - started,
             client_ip=client_ip, user_agent=user_agent, status="ok",
         )
-        return info
+        return {**info, "sessionId": existing["id"]}
 
     entry = session_store.add_session(
         filename=filename,
         source="manual_upload",
-        sync_status="local_only",
         local_path=str(dest),
         track_name=meta.get("venue", ""),
         driver_name=meta.get("driver", ""),
@@ -92,9 +103,12 @@ async def upload_file(
         lap_count=info["lapCount"],
     )
     state.session_id = entry["id"]
+    session_cache.rebind_file(entry["id"], dest, filename)
 
-    if background_tasks:
-        background_tasks.add_task(background_sync)
+    try:
+        gps_preview.warm_from_log(entry["id"], dest, log)
+    except Exception:
+        logger.exception("Failed to warm GPS preview cache for %s", filename)
 
     upload_log.record(
         filename=filename, size=size, duration_s=time.monotonic() - started,
@@ -104,7 +118,7 @@ async def upload_file(
         "upload ok: %s (%d bytes in %.2fs from %s)",
         filename, size, time.monotonic() - started, client_ip,
     )
-    return info
+    return {**info, "sessionId": entry["id"]}
 
 
 @router.get("/uploads/log")
@@ -141,7 +155,7 @@ async def get_channel_data(channels: str = Query(...)):
     result = {}
     for name in names:
         if name in state.log.channels:
-            result[name] = channel_data(name, state.log.channels[name])
+            result[name] = channel_data(name, state.log.channels[name], drop_gaps=True)
     return result
 
 
@@ -182,20 +196,24 @@ async def get_gps():
     ts = lat_data["timestamps"]
 
     filtered = {"timestamps": [], "lat": [], "lon": [], "speed": []}
-    speed_data = channel_data(speed_name, ch[speed_name]) if speed_name else None
+    speed_data = channel_data(speed_name, ch[speed_name], drop_gaps=True) if speed_name else None
 
     ts_offset = min(ts) if ts else 0
 
     for i in range(len(ts)):
         la, lo = lat[i], lon[i]
-        if abs(la) > 0.1 and abs(lo) > 0.1 and math.isfinite(la) and math.isfinite(lo):
+        if la is None or lo is None:
+            continue
+        if abs(la) > 0.1 and abs(lo) > 0.1:
             filtered["timestamps"].append(ts[i] - ts_offset)
             filtered["lat"].append(la)
             filtered["lon"].append(lo)
-            if speed_data and i < len(speed_data["values"]):
-                filtered["speed"].append(speed_data["values"][i])
-            else:
-                filtered["speed"].append(0.0)
+            # Match speed to the fix by time: the speed channel can run at a different rate.
+            speed = (
+                interpolate(speed_data["timestamps"], speed_data["values"], ts[i])
+                if speed_data else None
+            )
+            filtered["speed"].append(speed if speed is not None else 0.0)
 
     if not filtered["lat"]:
         return {"gps": None}
@@ -217,13 +235,13 @@ async def export_csv(channels: str = Query(...)):
     ch_data = {}
     for name in names:
         if name in state.log.channels:
-            ch_data[name] = channel_data(name, state.log.channels[name])
+            ch_data[name] = channel_data(name, state.log.channels[name], drop_gaps=True)
 
     if not ch_data:
         raise HTTPException(400, "None of the specified channels found")
 
-    timebase_name = max(ch_data, key=lambda n: len(ch_data[n]["timestamps"]))
-    timebase_ts = ch_data[timebase_name]["timestamps"]
+    # Union of every channel's timestamps so no channel's span is cut off.
+    timebase_ts = sorted(set().union(*(cd["timestamps"] for cd in ch_data.values())))
 
     units_map = {}
     for name in ch_data:
@@ -243,7 +261,9 @@ async def export_csv(channels: str = Query(...)):
         row = [f"{ts / 1000:.6f}"]
         for name in ch_data:
             cd = ch_data[name]
-            val = interpolate(cd["timestamps"], cd["values"], ts)
+            cts = cd["timestamps"]
+            # Blank outside the channel's own span instead of repeating its end values.
+            val = interpolate(cts, cd["values"], ts) if cts and cts[0] <= ts <= cts[-1] else None
             row.append(f"{val:.5f}" if val is not None else "")
         writer.writerow(row)
 
@@ -282,11 +302,12 @@ class DerivedChannelRequest(BaseModel):
 
 
 @router.post("/derived/evaluate")
-async def evaluate_derived_channel(body: DerivedChannelRequest):
+def evaluate_derived_channel(body: DerivedChannelRequest):
     """
     Evaluate a Python expression against channel data.
     The expression receives: channels (dict), np (numpy), math, interpolate(ch, t).
     Must assign result = { 'timestamps': [...], 'values': [...] }.
+    Scripts are restricted — see services/derived_eval.py.
     """
     if not _HAS_NUMPY:
         raise HTTPException(500, "numpy is not installed on the server")
@@ -294,58 +315,16 @@ async def evaluate_derived_channel(body: DerivedChannelRequest):
     if len(body.expression) > _MAX_EXPRESSION_LEN:
         raise HTTPException(400, f"Expression too long (max {_MAX_EXPRESSION_LEN} characters)")
 
-    local_vars: dict = {}
-    global_env = {
-        "__builtins__": {
-            "range": range,
-            "len": len,
-            "min": min,
-            "max": max,
-            "abs": abs,
-            "round": round,
-            "sum": sum,
-            "zip": zip,
-            "enumerate": enumerate,
-            "map": map,
-            "filter": filter,
-            "list": list,
-            "dict": dict,
-            "tuple": tuple,
-            "float": float,
-            "int": int,
-            "bool": bool,
-            "str": str,
-            "sorted": sorted,
-            "reversed": reversed,
-            "isinstance": isinstance,
-            "True": True,
-            "False": False,
-            "None": None,
-            "print": lambda *a, **kw: None,
-        },
-        "channels": body.channels,
-        "np": np,
-        "interpolate": _interp_helper,
-        "math": math,
-    }
-
-    import signal
-
-    def _timeout_handler(signum, frame):
-        raise TimeoutError("Script exceeded time limit")
-
     try:
-        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.alarm(_EVAL_TIMEOUT_SECONDS)
-        try:
-            exec(body.expression, global_env, local_vars)
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
+        local_vars = derived_eval.run(
+            body.expression, body.channels,
+            np=np, math_module=math, interpolate=_interp_helper,
+            timeout=_EVAL_TIMEOUT_SECONDS,
+        )
+    except derived_eval.ScriptRejected as e:
+        raise HTTPException(400, str(e))
     except TimeoutError:
         raise HTTPException(400, f"Script timed out after {_EVAL_TIMEOUT_SECONDS} seconds")
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(400, f"Execution error: {type(e).__name__}: {e}")
 

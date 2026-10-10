@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  listSessions, loadSession, syncSessions, pullSession, deleteSession,
+  listSessions, loadSession, deleteSession,
   renameSession, getAimStatus, uploadFile, fetchUploadLog, fetchAimPullLog,
   type LocalSession, type SessionInfo, type AimStatus, type UploadLogEntry,
   type AimPullLogEntry,
 } from '../lib/api';
 import {
-  RefreshCw, Cloud, Wifi, WifiOff, Upload, Trash2,
-  Download, CheckCircle, Loader2, HardDrive, Radio,
-  ChevronRight, Search, Settings, Pencil, Activity, FileClock, X,
+  RefreshCw, Wifi, WifiOff, Upload, Trash2,
+  Download, Loader2, Radio,
+  ChevronRight, Search, Settings, Pencil, Activity, FileClock,
 } from 'lucide-react';
 import { AimSessionPicker } from './AimSessionPicker';
 import { QuickScopeLogo } from './QuickScopeLogo';
@@ -18,7 +18,7 @@ import { GPSThumbnail } from './GPSThumbnail';
 interface SessionBrowserProps {
   onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
   onOpenSettings: () => void;
-  onOpenLive: () => void;
+  onOpenLive: (device: AimStatus['device']) => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
 }
@@ -72,27 +72,16 @@ function pathStem(filename: string): string {
   return dot > 0 ? filename.slice(0, dot) : filename;
 }
 
-const SYNC_STATUS_CONFIG = {
-  synced: { icon: CheckCircle, label: 'Synced', color: 'text-emerald-500 dark:text-emerald-400' },
-  local_only: { icon: HardDrive, label: 'Local only', color: 'text-amber-500 dark:text-amber-400' },
-  remote_only: { icon: Cloud, label: 'Remote', color: 'text-blue-500 dark:text-blue-400' },
-  uploading: { icon: Loader2, label: 'Uploading...', color: 'text-amber-500 dark:text-amber-400 animate-spin' },
-  downloading: { icon: Loader2, label: 'Downloading...', color: 'text-blue-500 dark:text-blue-400 animate-spin' },
-} as const;
-
 const SOURCE_CONFIG = {
   manual_upload: { icon: Upload, label: 'Uploaded' },
   aim_device: { icon: Radio, label: 'AiM' },
-  railway: { icon: Cloud, label: 'Railway' },
 } as const;
 
 export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, theme, onToggleTheme }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<LocalSession[]>([]);
   const [aimStatus, setAimStatus] = useState<AimStatus | null>(null);
-  const [syncing, setSyncing] = useState(false);
   const [aimPickerOpen, setAimPickerOpen] = useState(false);
   const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [pullingId, setPullingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -133,41 +122,11 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     return () => clearInterval(interval);
   }, [refreshSessions, checkAimStatus]);
 
-  const handleSync = useCallback(async () => {
-    setSyncing(true);
-    setError(null);
-    try {
-      const result = await syncSessions();
-      await refreshSessions();
-      if (result.errors?.length) {
-        setError(result.errors.join('; '));
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sync failed');
-    } finally {
-      setSyncing(false);
-    }
-  }, [refreshSessions]);
-
   const handleAimPickerDownloaded = useCallback(() => {
     refreshSessions();
   }, [refreshSessions]);
 
   const handleSessionClick = useCallback(async (session: LocalSession) => {
-    if (session.sync_status === 'remote_only') {
-      // Need to pull first
-      setPullingId(session.id);
-      try {
-        await pullSession(session.id);
-        await refreshSessions();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Pull failed');
-        setPullingId(null);
-        return;
-      }
-      setPullingId(null);
-    }
-
     setLoadingId(session.id);
     try {
       const info = await loadSession(session.id);
@@ -177,7 +136,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     } finally {
       setLoadingId(null);
     }
-  }, [onSessionLoaded, refreshSessions]);
+  }, [onSessionLoaded]);
 
   const handleDelete = useCallback(async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
@@ -326,16 +285,6 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         />
 
         <button
-          onClick={handleSync}
-          disabled={syncing}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-muted/50 text-foreground hover:bg-muted transition-colors disabled:opacity-50"
-          title="Sync sessions with Railway cloud storage"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
-          Cloud Sync
-        </button>
-
-        <button
           onClick={() => setAimPickerOpen(true)}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
             aimStatus?.connected
@@ -349,13 +298,11 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         </button>
 
         {/*
-         * Live button is always visible. The LiveView itself probes the
-         * device on mount and shows a friendly "device not reachable" state
-         * when offline, so users can find the feature without an AiM
-         * connected and developers can dev against the empty state.
+         * Live opens the dashboard and starts the live TCP session immediately
+         * (same idea as Race Studio’s first screen after selecting the logger).
          */}
         <button
-          onClick={onOpenLive}
+          onClick={() => onOpenLive(aimStatus?.connected ? aimStatus.device : null)}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
             aimStatus?.connected
               ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20'
@@ -533,7 +480,6 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                     <th className="text-right px-3 py-1.5 font-medium">Size</th>
                     <th className="text-right px-3 py-1.5 font-medium">Time</th>
                     <th className="text-left px-3 py-1.5 font-medium">Device</th>
-                    <th className="text-left px-3 py-1.5 font-medium">Railway</th>
                     <th className="text-left px-3 py-1.5 font-medium">Status</th>
                   </tr>
                 </thead>
@@ -548,7 +494,6 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                       <td className="px-3 py-1.5 text-right tabular">{e.size > 0 ? formatBytes(e.size) : '—'}</td>
                       <td className="px-3 py-1.5 text-right tabular">{e.duration_s > 0 ? `${e.duration_s.toFixed(2)}s` : '—'}</td>
                       <td className="px-3 py-1.5 font-mono text-muted-foreground">{e.device_ip || '—'}</td>
-                      <td className="px-3 py-1.5 text-muted-foreground">{e.railway_queued ? 'queued' : 'skipped'}</td>
                       <td className="px-3 py-1.5">
                         <span className={
                           e.status === 'ok' || e.status === 'list_ok'
@@ -568,7 +513,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       )}
 
       {/* Session list */}
-      <div className="flex-1 overflow-y-auto px-4 py-3">
+      <div id="session-list-scroll" className="flex-1 overflow-y-auto px-4 py-3">
         {sortedSessions.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/60">
             {sessions.length === 0 ? (
@@ -578,7 +523,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                 </div>
                 <p className="text-sm font-medium text-foreground/60">No sessions yet</p>
                 <p className="text-xs text-center max-w-xs">
-                  Upload a <span className="font-mono text-primary/80">.xrk</span> file, sync from Railway, or pull from an AiM device to get started.
+                  Upload a <span className="font-mono text-primary/80">.xrk</span> file or pull from an AiM device to get started.
                 </p>
               </>
             ) : (
@@ -589,24 +534,27 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
           <div className="space-y-1.5">
             {sortedSessions.map(session => {
               const isLoading = loadingId === session.id;
-              const isPulling = pullingId === session.id;
-              const statusCfg = SYNC_STATUS_CONFIG[session.sync_status];
               const sourceCfg = SOURCE_CONFIG[session.source];
-              const StatusIcon = statusCfg.icon;
               const SourceIcon = sourceCfg.icon;
 
               return (
-                <button
+                // A div, not a <button>: the row contains its own <input> and action buttons,
+                // and interactive content nested in a button is invalid HTML.
+                <div
                   key={session.id}
-                  onClick={() => handleSessionClick(session)}
-                  disabled={isLoading || isPulling}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 hover:bg-[hsl(225,35%,91%)] dark:hover:bg-muted hover:border-[hsl(225,30%,78%)] dark:hover:border-border transition-colors disabled:opacity-60 group"
+                  role="button"
+                  tabIndex={isLoading ? -1 : 0}
+                  aria-disabled={isLoading}
+                  onClick={() => { if (!isLoading) handleSessionClick(session); }}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget || isLoading) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleSessionClick(session);
+                    }
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 hover:bg-[hsl(225,35%,91%)] dark:hover:bg-muted hover:border-[hsl(225,30%,78%)] dark:hover:border-border transition-colors group ${isLoading ? 'opacity-60' : 'cursor-pointer'}`}
                 >
-                  {/* Status indicator */}
-                  <div className="flex-shrink-0">
-                    <StatusIcon className={`w-4 h-4 ${statusCfg.color}`} />
-                  </div>
-
                   {/* GPS thumbnail (only for sessions with a local file) */}
                   {session.local_path && (
                     <GPSThumbnail sessionId={session.id} size={36} />
@@ -639,11 +587,6 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                           {session.track_name}
                         </span>
                       )}
-                      {session.sync_status === 'remote_only' && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 dark:text-blue-400 flex-shrink-0">
-                          click to download
-                        </span>
-                      )}
                     </div>
                     <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
                       {session.driver_name && <span>{session.driver_name}</span>}
@@ -665,7 +608,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
                   {/* Actions */}
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    {(isLoading || isPulling) ? (
+                    {isLoading ? (
                       <Loader2 className="w-4 h-4 text-primary animate-spin" />
                     ) : (
                       <>
@@ -687,7 +630,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                       </>
                     )}
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>
@@ -715,8 +658,6 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       {/* Footer */}
       <div className="px-4 py-2 border-t border-border/50 bg-card/30 text-xs text-muted-foreground/50">
         {sessions.length} session{sessions.length !== 1 ? 's' : ''}
-        {sessions.filter(s => s.sync_status === 'synced').length > 0 &&
-          ` \u00b7 ${sessions.filter(s => s.sync_status === 'synced').length} synced`}
       </div>
     </div>
   );

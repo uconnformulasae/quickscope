@@ -39,6 +39,8 @@ export interface SessionInfo {
   totalSamples: number;
   lapCount: number;
   recordedAt?: string | null;
+  /** Set by the upload endpoint: id of the stored session. */
+  sessionId?: string;
 }
 
 export interface ChannelDataResponse {
@@ -57,7 +59,6 @@ export interface GPSData {
 
 export interface LocalSession {
   id: string;
-  remote_id: number | null;
   aim_session_id: string;
   filename: string;
   local_path: string | null;
@@ -67,15 +68,21 @@ export interface LocalSession {
   recorded_at: string | null;
   duration_s: number;
   lap_count: number;
-  sync_status: 'local_only' | 'remote_only' | 'synced' | 'uploading' | 'downloading';
-  source: 'manual_upload' | 'aim_device' | 'railway';
+  source: 'manual_upload' | 'aim_device';
   created_at: string;
   updated_at: string;
 }
 
 export interface AimStatus {
   connected: boolean;
-  device: { ip: string; ssid: string; device_name: string } | null;
+  device: {
+    ip: string;
+    ssid: string;
+    device_name: string;
+    model?: string;
+    serial?: string;
+    vehicle?: string;
+  } | null;
 }
 
 export interface AimSession {
@@ -90,17 +97,9 @@ export interface AimSession {
 }
 
 export interface Settings {
-  railway_url: string;
   aim_wifi_ssid: string;
   aim_device_ip: string;
   aim_device_port: number;
-}
-
-export interface SyncResult {
-  ok: boolean;
-  pulled: number;
-  pushed: number;
-  errors: string[];
 }
 
 // ─── Session Management ─────────────────────────────────────────────────────
@@ -116,24 +115,6 @@ export async function loadSession(sessionId: string): Promise<SessionInfo> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || `Load failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-export async function syncSessions(): Promise<SyncResult> {
-  const res = await fetch(`${API_BASE}/api/sessions/sync`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Sync failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-export async function pullSession(sessionId: string): Promise<{ ok: boolean; local_path?: string; error?: string }> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/pull`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Pull failed: ${res.status}`);
   }
   return res.json();
 }
@@ -190,7 +171,6 @@ export interface AimPullResult {
   session_id: string;
   parse_ok: boolean;
   local_path: string;
-  railway_queued: boolean;
 }
 
 export interface AimPullResponse {
@@ -211,7 +191,6 @@ export interface AimPullLogEntry {
   duration_s: number;
   session_id?: string;
   session_count?: number;
-  railway_queued: boolean;
   error?: string;
 }
 
@@ -432,10 +411,29 @@ export async function fetchLiveStatus(): Promise<LiveStatus> {
   return res.json();
 }
 
+export type LiveSnapshotMessage = {
+  type: 'snapshot';
+  /** Monotonic per-connection snapshot counter; a jump means data was skipped. */
+  seq?: number;
+  ts: number;
+  subsystem: string;
+  /** Opt-in only (connect with `?raw=1`) -- omitted by default to save ~1 KB/snapshot. */
+  raw?: string;
+  channels?: Record<string, number>;
+};
+
 export type LiveWSMessage =
   | { type: 'connected'; device: LiveDeviceInfo }
-  | { type: 'snapshot'; ts: number; subsystem: string; raw: string }
-  | { type: 'error'; message: string };
+  | LiveSnapshotMessage
+  | { type: 'error'; message: string }
+  // Device link cycling (routine ~30s AiM drop): 'reconnecting' until the
+  // stream resumes as 'live' (with the gap length in ms).
+  | { type: 'status'; state: 'reconnecting' | 'live'; gap_ms?: number; attempt?: number }
+  | { type: 'heartbeat' }
+  // Several snapshots sent in one WS frame when the sender falls behind the
+  // device pump (e.g. a busy tab) -- apply each in order, same as if they'd
+  // arrived one at a time.
+  | { type: 'batch'; messages: LiveWSMessage[] };
 
 export function liveWebSocketUrl(): string {
   // Replace http(s) with ws(s) for the live endpoint.
