@@ -80,6 +80,7 @@ npm run check         # TypeScript only
 |--------|------|
 | [setup-parser-assets](../.github/actions/setup-parser-assets/action.yml) | Fixtures + Windows DLL |
 | [desktop-build](../.github/actions/desktop-build/action.yml) | `electron-builder` after PyInstaller + Vite |
+| [install-python-backend](../.github/actions/install-python-backend/action.yml) | `pip` + PyInstaller deps; vcpkg Arrow on `win-arm64` |
 
 ## Test layers
 
@@ -94,4 +95,4 @@ npm run check         # TypeScript only
 
 Skip slow tests while iterating: `pytest -m "not dll and not libxrk and not slow"`.
 
-**macOS desktop:** `desktop-build` passes a single-arch `mac.target` override per job. arm64 builds on `macos-latest`; x64 builds on `macos-15-intel` (native Intel, not cross-compile). **Linux desktop:** x64 and arm64 use `ubuntu-latest` / `ubuntu-24.04-arm`; both need `libasound2t64` (not `libasound2`). **Windows arm64** uses `windows-11-arm` (AiM DLL is x64-only — arm64 installers use libxrk like Linux).
+**macOS desktop:** `desktop-build` passes a single-arch `mac.target` override per job. arm64 builds on `macos-latest`; x64 builds on `macos-15-intel` (native Intel, not cross-compile). **Linux desktop:** x64 and arm64 use `ubuntu-latest` / `ubuntu-24.04-arm`; both need `libasound2t64` (not `libasound2`). **Windows arm64** uses `windows-11-arm` (libxrk only; AiM DLL is x64). PyPI has no `pyarrow` `win_arm64` wheels ([apache/arrow#47195](https://github.com/apache/arrow/issues/47195)), so that job installs Arrow C++ via vcpkg (`backend/vcpkg-win-arm64/`) and builds `pyarrow` from source — first run is slow; vcpkg binary cache helps on later runs. Job timeout is 120 minutes.
