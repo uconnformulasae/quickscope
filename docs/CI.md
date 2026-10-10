@@ -17,13 +17,12 @@ QuickScope uses **GitHub-hosted runners** for all CI.
 | `test / windows` | `windows-latest` | `pytest -m dll` (MatLabXRK DLL + fixtures) |
 | `docker` | `ubuntu-latest` | `docker compose build` + backend `/docs` healthcheck |
 | `desktop / win-x64` | `windows-latest` | PyInstaller + Electron NSIS (x64) |
-| `desktop / win-arm64` | `windows-11-arm` | PyInstaller + Electron NSIS (arm64) |
 | `desktop / mac-arm64` | `macos-latest` | Unsigned `.dmg` / `.zip` (arm64) |
 | `desktop / mac-x64-intel` | `macos-15-intel` | Unsigned `.dmg` / `.zip` (x64, native Intel runner) |
 | `desktop / linux-x64` | `ubuntu-latest` | AppImage x64 (libxrk backend) |
 | `desktop / linux-arm64` | `ubuntu-24.04-arm` | AppImage arm64 (libxrk backend) |
 
-**Full desktop matrix runs on every PR** (six parallel installer jobs). Use `workflow_dispatch` inputs `skip_desktop` or `skip_docker` to debug faster.
+**Full desktop matrix runs on every PR** (five parallel installer jobs). Use `workflow_dispatch` inputs `skip_desktop` or `skip_docker` to debug faster.
 
 Parser coverage uses pytest markers (`dll`, `libxrk`) — there are no separate “regression” workflow files.
 
@@ -55,7 +54,6 @@ On `main` (and optionally `Dev`), enable required status checks:
 - `test / windows`
 - `docker`
 - `desktop / win-x64`
-- `desktop / win-arm64`
 - `desktop / mac-arm64`
 - `desktop / mac-x64-intel`
 - `desktop / linux-x64`
@@ -80,8 +78,6 @@ npm run check         # TypeScript only
 |--------|------|
 | [setup-parser-assets](../.github/actions/setup-parser-assets/action.yml) | Fixtures + Windows DLL |
 | [desktop-build](../.github/actions/desktop-build/action.yml) | `electron-builder` after PyInstaller + Vite |
-| [install-python-backend](../.github/actions/install-python-backend/action.yml) | `pip` + PyInstaller deps; vcpkg Arrow on `win-arm64` |
-
 ## Test layers
 
 | Layer | Files | What it proves |
@@ -95,4 +91,4 @@ npm run check         # TypeScript only
 
 Skip slow tests while iterating: `pytest -m "not dll and not libxrk and not slow"`.
 
-**macOS desktop:** `desktop-build` passes a single-arch `mac.target` override per job. arm64 builds on `macos-latest`; x64 builds on `macos-15-intel` (native Intel, not cross-compile). **Linux desktop:** x64 and arm64 use `ubuntu-latest` / `ubuntu-24.04-arm`; both need `libasound2t64` (not `libasound2`). **Windows arm64** uses `windows-11-arm` (libxrk only; AiM DLL is x64). PyPI has no `pyarrow` `win_arm64` wheels ([apache/arrow#47195](https://github.com/apache/arrow/issues/47195)), so that job clones vcpkg at a pinned release tag (`vcpkg-tag` input on `install-python-backend`), installs Arrow C++ from `backend/vcpkg-win-arm64/`, and builds `pyarrow` from source pinned to the Arrow version that tag ships (a source build must match Arrow C++ exactly). First run is slow; the vcpkg binary cache (`actions/cache`) makes later runs much faster. Job timeout is 120 minutes. To move to a newer Arrow, bump `vcpkg-tag` to a [vcpkg release](https://github.com/microsoft/vcpkg/tags).
+**macOS desktop:** `desktop-build` passes a single-arch `mac.target` override per job. arm64 builds on `macos-latest`; x64 builds on `macos-15-intel` (native Intel, not cross-compile). **Linux desktop:** x64 and arm64 use `ubuntu-latest` / `ubuntu-24.04-arm`; both need `libasound2t64` (not `libasound2`). **No Windows arm64 build:** PyPI has no `pyarrow` `win_arm64` wheels ([apache/arrow#47195](https://github.com/apache/arrow/issues/47195)), and compiling Arrow C++ in CI is too slow. Windows on ARM runs the `win-x64` installer under built-in x64 emulation. Revisit once official wheels ship.
