@@ -6,19 +6,14 @@ inputs:
     description: Set true on windows-11-arm desktop jobs (no pyarrow win_arm64 wheels on PyPI)
     required: false
     default: 'false'
+  vcpkg-tag:
+    description: microsoft/vcpkg release tag; pyarrow is pinned to the Arrow version this tag ships
+    required: false
+    default: '2026.07.29'
 
 runs:
   using: composite
   steps:
-    - name: Install Arrow C++ via vcpkg (win-arm64)
-      if: inputs.win-arm64 == 'true'
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgGitCommitId: 37e0e23462faa0af8d02023efa095165e171a457
-        runVcpkgInstall: true
-        vcpkgJsonGlob: backend/vcpkg-win-arm64/vcpkg.json
-        appendedCacheKey: win-arm64-arrow
-
     - name: pip install (default platforms)
       if: inputs.win-arm64 != 'true'
       shell: bash
@@ -26,18 +21,58 @@ runs:
         python -m pip install --upgrade pip
         pip install -r backend/requirements.txt pyinstaller
 
+    - name: Clone vcpkg (win-arm64)
+      if: inputs.win-arm64 == 'true'
+      shell: pwsh
+      run: |
+        $root = Join-Path $env:RUNNER_TEMP 'vcpkg'
+        git clone --depth 1 --branch '${{ inputs.vcpkg-tag }}' https://github.com/microsoft/vcpkg $root
+        if ($LASTEXITCODE -ne 0) { throw "vcpkg clone failed for tag ${{ inputs.vcpkg-tag }}" }
+        & (Join-Path $root 'bootstrap-vcpkg.bat') -disableMetrics
+        if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed' }
+        $arrowVersion = (Get-Content (Join-Path $root 'ports/arrow/vcpkg.json') -Raw | ConvertFrom-Json).version
+        $binCache = Join-Path $env:RUNNER_TEMP 'vcpkg-bincache'
+        New-Item -ItemType Directory -Force -Path $binCache | Out-Null
+        "VCPKG_ROOT=$root" >> $env:GITHUB_ENV
+        "VCPKG_DEFAULT_BINARY_CACHE=$binCache" >> $env:GITHUB_ENV
+        "QS_ARROW_VERSION=$arrowVersion" >> $env:GITHUB_ENV
+        Write-Host "vcpkg ${{ inputs.vcpkg-tag }} ships Arrow C++ $arrowVersion"
+
+    - name: Cache vcpkg binaries (win-arm64)
+      if: inputs.win-arm64 == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/vcpkg-bincache
+        key: vcpkg-arm64-windows-${{ inputs.vcpkg-tag }}-${{ hashFiles('backend/vcpkg-win-arm64/vcpkg.json') }}
+
+    - name: Install Arrow C++ via vcpkg (win-arm64)
+      if: inputs.win-arm64 == 'true'
+      shell: pwsh
+      run: |
+        $installRoot = Join-Path $env:RUNNER_TEMP 'vcpkg_installed'
+        & (Join-Path $env:VCPKG_ROOT 'vcpkg.exe') install `
+          --triplet arm64-windows `
+          --x-manifest-root=backend/vcpkg-win-arm64 `
+          --x-install-root=$installRoot `
+          --disable-metrics
+        if ($LASTEXITCODE -ne 0) { throw 'vcpkg install arrow failed' }
+        $prefix = Join-Path $installRoot 'arm64-windows'
+        "ARROW_HOME=$prefix" >> $env:GITHUB_ENV
+        "CMAKE_PREFIX_PATH=$prefix" >> $env:GITHUB_ENV
+        # PyInstaller resolves pyarrow's DLL dependencies (zstd, re2, ...) via PATH.
+        (Join-Path $prefix 'bin') >> $env:GITHUB_PATH
+
     - name: pip install (win-arm64 — build pyarrow from source)
       if: inputs.win-arm64 == 'true'
       shell: pwsh
       env:
-        ARROW_HOME: ${{ github.workspace }}/vcpkg/installed/arm64-windows
-        CMAKE_PREFIX_PATH: ${{ github.workspace }}/vcpkg/installed/arm64-windows
-        PYARROW_WITH_PARQUET: 'ON'
-        PYARROW_WITH_DATASET: 'OFF'
+        PYARROW_BUNDLE_ARROW_CPP: '1'
       run: |
-        python -m pip install --upgrade pip wheel setuptools cmake ninja cython numpy
-        $req = Get-Content backend/requirements.txt | Where-Object { $_ -notmatch '^\s*pyarrow' }
-        $reqFile = Join-Path $env:RUNNER_TEMP 'requirements-no-pyarrow.txt'
-        $req | Set-Content -Path $reqFile -Encoding utf8
-        pip install -r $reqFile pyinstaller
-        pip install "pyarrow>=14.0.0" --no-binary=pyarrow
+        python -m pip install --upgrade pip
+        # pyarrow first and pinned: a source build must match the Arrow C++ version exactly,
+        # and installing it before the rest stops a dependency from pulling a newer sdist.
+        pip install "pyarrow==$env:QS_ARROW_VERSION" --no-binary=pyarrow
+        if ($LASTEXITCODE -ne 0) { throw "pyarrow $env:QS_ARROW_VERSION source build failed" }
+        pip install -r backend/requirements.txt pyinstaller
+        if ($LASTEXITCODE -ne 0) { throw 'backend requirements install failed' }
+        python -c "import pyarrow, pyarrow.compute, pyarrow.parquet; print('pyarrow', pyarrow.__version__)"

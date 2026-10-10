@@ -7,7 +7,7 @@
     {
       "name": "arrow",
       "default-features": false,
-      "features": ["csv", "json", "parquet", "filesystem"]
+      "features": ["compute", "csv", "json", "parquet", "filesystem"]
     }
   ]
 }
