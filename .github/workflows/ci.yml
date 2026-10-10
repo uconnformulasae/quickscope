@@ -125,18 +125,26 @@ jobs:
             runs-on: windows-latest
             platform: win
             arch: x64
+          - label: win-arm64
+            runs-on: windows-11-arm
+            platform: win
+            arch: arm64
           - label: mac-arm64
             runs-on: macos-latest
             platform: mac
             arch: arm64
-          - label: mac-x64
-            runs-on: macos-latest
+          - label: mac-x64-intel
+            runs-on: macos-15-intel
             platform: mac
             arch: x64
           - label: linux-x64
             runs-on: ubuntu-latest
             platform: linux
             arch: x64
+          - label: linux-arm64
+            runs-on: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
 
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 30

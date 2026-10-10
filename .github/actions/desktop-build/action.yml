@@ -6,7 +6,7 @@ inputs:
     description: Target OS (win, mac, linux)
     required: true
   arch:
-    description: CPU arch for win/mac (x64 or arm64); ignored for linux
+    description: CPU arch (x64 or arm64) for win, mac, and linux AppImage jobs
     required: false
     default: x64
   notarize:
@@ -75,4 +75,4 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-      run: npx electron-builder --linux --publish never
+      run: npx electron-builder --linux --${{ inputs.arch }} --publish never

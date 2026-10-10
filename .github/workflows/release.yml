@@ -1,6 +1,6 @@
 name: Release
 
-# Builds QuickScope installers for Windows, macOS (arm64 + x64), and Linux;
+# Builds QuickScope installers for Windows (x64 + arm64), macOS (arm64 + Intel x64), and Linux (x64 + arm64);
 # attaches them to a GitHub Release on version tags.
 
 on:
@@ -22,18 +22,26 @@ jobs:
             platform: mac
             arch: arm64
             label: mac-arm64
-          - runs-on: macos-latest
+          - runs-on: macos-15-intel
             platform: mac
             arch: x64
-            label: mac-x64
+            label: mac-x64-intel
           - runs-on: windows-latest
             platform: win
             arch: x64
             label: win-x64
+          - runs-on: windows-11-arm
+            platform: win
+            arch: arm64
+            label: win-arm64
           - runs-on: ubuntu-latest
             platform: linux
             arch: x64
             label: linux-x64
+          - runs-on: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            label: linux-arm64
 
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 35

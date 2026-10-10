@@ -16,12 +16,14 @@ QuickScope uses **GitHub-hosted runners** for all CI.
 | `test / ubuntu` | `ubuntu-latest` | `pytest -m "not dll"`, TypeScript (`npm run check`), Vitest |
 | `test / windows` | `windows-latest` | `pytest -m dll` (MatLabXRK DLL + fixtures) |
 | `docker` | `ubuntu-latest` | `docker compose build` + backend `/docs` healthcheck |
-| `desktop / win-x64` | `windows-latest` | PyInstaller + Electron NSIS |
+| `desktop / win-x64` | `windows-latest` | PyInstaller + Electron NSIS (x64) |
+| `desktop / win-arm64` | `windows-11-arm` | PyInstaller + Electron NSIS (arm64) |
 | `desktop / mac-arm64` | `macos-latest` | Unsigned `.dmg` / `.zip` (arm64) |
-| `desktop / mac-x64` | `macos-latest` | Unsigned `.dmg` / `.zip` (x64) |
-| `desktop / linux-x64` | `ubuntu-latest` | AppImage (libxrk backend) |
+| `desktop / mac-x64-intel` | `macos-15-intel` | Unsigned `.dmg` / `.zip` (x64, native Intel runner) |
+| `desktop / linux-x64` | `ubuntu-latest` | AppImage x64 (libxrk backend) |
+| `desktop / linux-arm64` | `ubuntu-24.04-arm` | AppImage arm64 (libxrk backend) |
 
-**Full desktop matrix runs on every PR** (four parallel installer jobs). Use `workflow_dispatch` inputs `skip_desktop` or `skip_docker` to debug faster.
+**Full desktop matrix runs on every PR** (six parallel installer jobs). Use `workflow_dispatch` inputs `skip_desktop` or `skip_docker` to debug faster.
 
 Parser coverage uses pytest markers (`dll`, `libxrk`) — there are no separate “regression” workflow files.
 
@@ -53,9 +55,11 @@ On `main` (and optionally `Dev`), enable required status checks:
 - `test / windows`
 - `docker`
 - `desktop / win-x64`
+- `desktop / win-arm64`
 - `desktop / mac-arm64`
-- `desktop / mac-x64`
+- `desktop / mac-x64-intel`
 - `desktop / linux-x64`
+- `desktop / linux-arm64`
 
 Remove legacy names (`test`, `dll-regression`, `libxrk-regression`, `smoke / smoke`, etc.) if they are still listed.
 
@@ -90,4 +94,4 @@ npm run check         # TypeScript only
 
 Skip slow tests while iterating: `pytest -m "not dll and not libxrk and not slow"`.
 
-**macOS desktop:** `desktop-build` passes a single-arch `mac.target` override so CI matrix jobs do not build both arm64 and x64 in one step (that breaks `hdiutil` on Apple Silicon runners). **Linux desktop:** Ubuntu 24.04 runners need `libasound2t64` (not `libasound2`).
+**macOS desktop:** `desktop-build` passes a single-arch `mac.target` override per job. arm64 builds on `macos-latest`; x64 builds on `macos-15-intel` (native Intel, not cross-compile). **Linux desktop:** x64 and arm64 use `ubuntu-latest` / `ubuntu-24.04-arm`; both need `libasound2t64` (not `libasound2`). **Windows arm64** uses `windows-11-arm` (AiM DLL is x64-only — arm64 installers use libxrk like Linux).
