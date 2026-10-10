@@ -12,8 +12,6 @@ export interface ChannelMeta {
   precision: number;
 }
 
-export const RING_BUFFER_SIZE = 240; // 60 s at ~4 Hz
-
 // Channel metadata. Names match the EXACT names the AiM device publishes
 // in its channel-config frame (verified against
 // docs/protocol/captures/analysis/q6_full_records.py extraction of the

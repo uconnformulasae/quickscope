@@ -1,6 +1,6 @@
 import { type AimStatus } from '../lib/api';
 import { Activity, AlertCircle, ArrowLeft, Pause, Play, Wifi, WifiOff, Loader2 } from 'lucide-react';
-import { RING_BUFFER_SIZE, vehicleKind } from './live/live-channels';
+import { vehicleKind } from './live/live-channels';
 import { useLiveStream } from './live/useLiveStream';
 import { EVDashboard } from './live/EVDashboard';
 import { ICDashboard } from './live/ICDashboard';
@@ -13,7 +13,7 @@ interface Props {
 
 export function LiveView({ onBack, aimDevice = null }: Props) {
   const {
-    status, device, error, reconnecting, latest, count, totalReceived, bufferStats, gpsTrail,
+    status, device, error, reconnecting, latest, totalReceived, gpsTrail,
     connect, disconnect, togglePause, exportGpx,
   } = useLiveStream(aimDevice);
 
@@ -107,9 +107,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
         <div className="flex-1" />
 
         {isLive && (
-          <span className="text-xs text-muted-foreground tabular" title="Ring buffer holds the last 60s of snapshots (~4/s max); count stops at 240">
-            Buffer {count}/{RING_BUFFER_SIZE}
-            <span className="mx-1.5 text-muted-foreground/40">·</span>
+          <span className="text-xs text-muted-foreground tabular" title="Total snapshots received this session">
             Received {totalReceived}
           </span>
         )}
@@ -131,18 +129,11 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
         {isLive && (
           <div className="p-3 space-y-3">
             {vehicleKind(device?.vehicle) === 'ic' ? (
-              <ICDashboard
-                latest={latest}
-                count={count}
-                totalReceived={totalReceived}
-                bufferStats={bufferStats}
-              />
+              <ICDashboard latest={latest} totalReceived={totalReceived} />
             ) : (
               <EVDashboard
                 latest={latest}
-                count={count}
                 totalReceived={totalReceived}
-                bufferStats={bufferStats}
                 gpsTrail={gpsTrail}
                 onExportGpx={exportGpx}
               />

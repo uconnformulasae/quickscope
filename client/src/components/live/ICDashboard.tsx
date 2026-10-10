@@ -1,4 +1,4 @@
-import { type Snapshot, RING_BUFFER_SIZE, IC_ENGINE_STATS, IC_WHEEL_SPEEDS, IC_ENGINE_FLAGS, IC_BRAKE_TEMPS, IC_TIRE_TEMPS, IC_TC_DISCONNECTED, IC_PANEL_OWNED_CHANNELS } from './live-channels';
+import { type Snapshot, IC_ENGINE_STATS, IC_WHEEL_SPEEDS, IC_ENGINE_FLAGS, IC_BRAKE_TEMPS, IC_TIRE_TEMPS, IC_TC_DISCONNECTED, IC_PANEL_OWNED_CHANNELS } from './live-channels';
 import { fmt, Panel, BigStat, CoolStat, VehicleStat } from './widgets';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -11,14 +11,10 @@ import { fmt, Panel, BigStat, CoolStat, VehicleStat } from './widgets';
 
 export function ICDashboard({
   latest,
-  count,
   totalReceived,
-  bufferStats,
 }: {
   latest: Snapshot | null;
-  count: number;
   totalReceived: number;
-  bufferStats: { bySubsystem: Record<string, number> };
 }) {
   const ch = latest?.channels ?? {};
   const ecuAlive = IC_ENGINE_STATS.some((s) => ch[s.name] !== undefined);
@@ -155,10 +151,6 @@ export function ICDashboard({
       <Panel title="Stream health" className="lg:col-span-3">
         <div className="space-y-2 text-xs">
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">History buffer</span>
-            <span className="tabular font-semibold">{count} / {RING_BUFFER_SIZE}</span>
-          </div>
-          <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Snapshots received</span>
             <span className="tabular font-semibold">{totalReceived}</span>
           </div>
@@ -170,9 +162,6 @@ export function ICDashboard({
             <span className="text-muted-foreground">Subsystem</span>
             <span className="font-mono font-semibold">{latest?.subsystem || '—'}</span>
           </div>
-          {Object.entries(bufferStats.bySubsystem).length === 0 && (
-            <p className="text-[10px] text-muted-foreground/60">collecting…</p>
-          )}
         </div>
       </Panel>
     </div>

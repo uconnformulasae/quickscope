@@ -6,7 +6,7 @@ import {
   type LiveWSMessage,
   type AimStatus,
 } from '../../lib/api';
-import { RING_BUFFER_SIZE, type Snapshot } from './live-channels';
+import { type Snapshot } from './live-channels';
 import { downloadGpx } from './live-gpx';
 
 export type Status = 'idle' | 'connecting' | 'streaming' | 'paused' | 'error';
@@ -20,21 +20,19 @@ function aimStatusToLiveDevice(device: NonNullable<AimStatus['device']>): LiveDe
   };
 }
 
-/** WebSocket connection, ring buffer, GPS trail and stream controls for the live view. */
+/** WebSocket connection, GPS trail and stream controls for the live view. */
 export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   const [status, setStatus] = useState<Status>('idle');
   const [device, setDevice] = useState<LiveDeviceInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [latest, setLatest] = useState<Snapshot | null>(null);
-  const [count, setCount] = useState(0);
   const [totalReceived, setTotalReceived] = useState(0);
-  const [bufferStats, setBufferStats] = useState({ bySubsystem: {} as Record<string, number> });
   const [gpsTrail, setGpsTrail] = useState<{ lat: number; lon: number; speed: number }[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const ringRef = useRef<Snapshot[]>([]);
   const gpsTrailRef = useRef<{ lat: number; lon: number; speed: number }[]>([]);
+  const snapshotTickRef = useRef(0);
   const pausedRef = useRef(false);
 
   const connect = useCallback(() => {
@@ -46,8 +44,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
 
     // Applies one logical message. `batch` (sent when the WS sender fell
     // behind the device pump) unpacks into a call of this per snapshot, so
-    // the ring buffer / GPS trail / stats update exactly as if each had
-    // arrived on its own -- only the wire framing changed.
+    // the GPS trail updates exactly as if each had arrived on its own --
+    // only the wire framing changed.
     const applySnapshot = (msg: LiveSnapshotMessage) => {
       if (pausedRef.current) return;
       const snap: Snapshot = {
@@ -56,10 +54,6 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
         raw: msg.raw ?? '',
         channels: msg.channels,
       };
-      ringRef.current.push(snap);
-      if (ringRef.current.length > RING_BUFFER_SIZE) {
-        ringRef.current.shift();
-      }
       const lat = snap.channels?.['GPS_Lat'];
       const lon = snap.channels?.['GPS_Lon'];
       if (lat !== undefined && lon !== undefined && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1) {
@@ -69,14 +63,9 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
         }
       }
       setLatest(snap);
-      setCount(ringRef.current.length);
       setTotalReceived((n) => n + 1);
-      if (ringRef.current.length % 8 === 0) {
-        const bySubsystem: Record<string, number> = {};
-        for (const s of ringRef.current) {
-          bySubsystem[s.subsystem] = (bySubsystem[s.subsystem] || 0) + 1;
-        }
-        setBufferStats({ bySubsystem });
+      snapshotTickRef.current += 1;
+      if (snapshotTickRef.current % 8 === 0) {
         setGpsTrail([...gpsTrailRef.current]);
       }
     };
@@ -135,12 +124,10 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     wsRef.current?.send('stop');
     wsRef.current?.close();
     wsRef.current = null;
-    ringRef.current = [];
     gpsTrailRef.current = [];
-    setCount(0);
+    snapshotTickRef.current = 0;
     setTotalReceived(0);
     setLatest(null);
-    setBufferStats({ bySubsystem: {} });
     setGpsTrail([]);
     setStatus('idle');
   };
@@ -153,7 +140,7 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   };
 
   return {
-    status, device, error, reconnecting, latest, count, totalReceived, bufferStats, gpsTrail,
+    status, device, error, reconnecting, latest, totalReceived, gpsTrail,
     connect, disconnect, togglePause, exportGpx,
   };
 }

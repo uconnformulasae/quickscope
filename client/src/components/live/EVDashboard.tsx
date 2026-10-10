@@ -1,4 +1,4 @@
-import { type Snapshot, RING_BUFFER_SIZE, PACK_V_MAX, PACK_V_NOMINAL, PACK_TEMP_DERATE, CHANNEL_META, BOOL_CHANNELS, NUM_MODULES, PANEL_OWNED_CHANNELS } from './live-channels';
+import { type Snapshot, PACK_V_MAX, PACK_V_NOMINAL, PACK_TEMP_DERATE, CHANNEL_META, BOOL_CHANNELS, NUM_MODULES, PANEL_OWNED_CHANNELS } from './live-channels';
 import { fmt, directionLabel, Panel, BigStat, CoolStat, VehicleStat } from './widgets';
 import { TrackCanvas } from './TrackCanvas';
 
@@ -12,16 +12,12 @@ import { TrackCanvas } from './TrackCanvas';
 
 export function EVDashboard({
   latest,
-  count,
   totalReceived,
-  bufferStats,
   gpsTrail,
   onExportGpx,
 }: {
   latest: Snapshot | null;
-  count: number;
   totalReceived: number;
-  bufferStats: { bySubsystem: Record<string, number> };
   gpsTrail: { lat: number; lon: number; speed: number }[];
   onExportGpx: () => void;
 }) {
@@ -276,16 +272,9 @@ export function EVDashboard({
       <Panel title="Stream health" className="lg:col-span-3">
         <div className="space-y-2 text-xs">
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">History buffer</span>
-            <span className="tabular font-semibold">{count} / {RING_BUFFER_SIZE}</span>
-          </div>
-          <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Snapshots received</span>
             <span className="tabular font-semibold">{totalReceived}</span>
           </div>
-          <p className="text-[10px] text-muted-foreground/70 leading-snug">
-            Buffer fills as live data arrives (cap {RING_BUFFER_SIZE} ≈ 60s). It is not a TCP frame counter.
-          </p>
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Latest ts</span>
             <span className="tabular font-semibold">{latest ? `${(latest.ts / 1000).toFixed(2)}s` : '—'}</span>
@@ -293,26 +282,6 @@ export function EVDashboard({
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Subsystem</span>
             <span className="font-mono font-semibold">{latest?.subsystem || '—'}</span>
-          </div>
-          <div className="pt-1.5 border-t border-border/40 space-y-1">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">
-              Buffer by subsystem (counts in ring, max {RING_BUFFER_SIZE} total)
-            </p>
-            {Object.entries(bufferStats.bySubsystem).length === 0 && (
-              <p className="text-[10px] text-muted-foreground/60">collecting…</p>
-            )}
-            {Object.entries(bufferStats.bySubsystem).map(([subsystem, n]) => (
-              <div key={subsystem} className="flex items-center gap-2">
-                <span className="font-mono text-muted-foreground w-12 truncate">{subsystem}</span>
-                <div className="flex-1 h-1 bg-muted/50 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-primary rounded-full"
-                    style={{ width: `${(n / Math.max(1, count)) * 100}%` }}
-                  />
-                </div>
-                <span className="tabular text-muted-foreground w-7 text-right">{n}</span>
-              </div>
-            ))}
           </div>
         </div>
       </Panel>
