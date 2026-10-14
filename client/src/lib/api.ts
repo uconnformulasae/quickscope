@@ -11,9 +11,10 @@ declare global {
   }
 }
 
+const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
 const API_BASE =
   (typeof window !== 'undefined' && window.__QUICKSCOPE_BACKEND__) ||
-  `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+  `${isHttps ? 'https' : 'http'}://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -291,6 +292,7 @@ export async function uploadFile(
       }
     };
 
+    xhr.timeout = 120_000;
     xhr.onerror = () => reject(new Error('Network error during upload'));
     xhr.ontimeout = () => reject(new Error('Upload timed out'));
     xhr.onabort = () => reject(new Error('Upload aborted'));

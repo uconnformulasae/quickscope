@@ -127,20 +127,25 @@ def from_beacon(
     `threshold` is None). Each rising edge that occurs at least `min_lap_s`
     after the previous one is treated as a lap boundary.
     """
-    if len(values) < 10:
+    clean: list[tuple[float, float]] = []
+    for t, v in zip(timestamps_ms, values):
+        if t is not None and v is not None and math.isfinite(t) and math.isfinite(v):
+            clean.append((float(t), float(v)))
+    if len(clean) < 10:
         return []
     if threshold is None:
-        lo, hi = min(values), max(values)
+        c_vals = [v for _, v in clean]
+        lo, hi = min(c_vals), max(c_vals)
         if hi - lo < 1e-6:
             return []
         threshold = lo + (hi - lo) * 0.5
 
     laps: list[dict] = []
-    last_t = timestamps_ms[0]
+    last_t = clean[0][0]
     lap_num = 1
-    prev_high = values[0] >= threshold
+    prev_high = clean[0][1] >= threshold
 
-    for t, v in zip(timestamps_ms[1:], values[1:]):
+    for t, v in clean[1:]:
         is_high = v >= threshold
         if is_high and not prev_high:
             lap_time_s = (t - last_t) / 1000.0
@@ -187,13 +192,20 @@ def detect_laps(log, channel_data_fn) -> tuple[list[dict], str]:
         except Exception:
             logger.exception("GPS channel read failed during lap detection")
             lat_data = lon_data = None
-        if lat_data and lon_data and lat_data["timestamps"]:
-            ts = lat_data["timestamps"]
-            ts_offset = min(ts)
-            ts_rel = [t - ts_offset for t in ts]
-            gps_laps = from_gps(ts_rel, lat_data["values"], lon_data["values"])
-            if gps_laps:
-                return gps_laps, "gps_auto"
+        if lat_data and lon_data and lat_data.get("timestamps") and lon_data.get("timestamps"):
+            n = min(
+                len(lat_data["timestamps"]),
+                len(lat_data["values"]),
+                len(lon_data["timestamps"]),
+                len(lon_data["values"]),
+            )
+            if n >= 10:
+                ts = lat_data["timestamps"][:n]
+                ts_offset = min(ts)
+                ts_rel = [t - ts_offset for t in ts]
+                gps_laps = from_gps(ts_rel, lat_data["values"][:n], lon_data["values"][:n])
+                if gps_laps:
+                    return gps_laps, "gps_auto"
 
     # Beacon-channel fallback
     beacon_name = next(
@@ -206,9 +218,8 @@ def detect_laps(log, channel_data_fn) -> tuple[list[dict], str]:
         except Exception:
             logger.exception("Beacon channel read failed during lap detection")
             bd = None
-        if bd and bd["timestamps"]:
-            pairs = [(t, v) for t, v in zip(bd["timestamps"], bd["values"]) if v is not None]
-            beacon_laps = from_beacon([t for t, _ in pairs], [v for _, v in pairs])
+        if bd and bd.get("timestamps") and bd.get("values"):
+            beacon_laps = from_beacon(bd["timestamps"], bd["values"])
             if beacon_laps:
                 return beacon_laps, "beacon_auto"
 

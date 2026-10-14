@@ -76,6 +76,14 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
     };
 
     ensurePlotly(render);
+
+    return () => {
+      const Plotly = (window as any).Plotly;
+      if (Plotly && plottedEl.current) {
+        Plotly.purge(plottedEl.current);
+        plottedEl.current = null;
+      }
+    };
   }, [session, chan, activeChan, theme]);
 
   // Release the chart's WebGL/DOM resources when the tab unmounts.

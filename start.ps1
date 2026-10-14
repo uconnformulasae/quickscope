@@ -82,7 +82,7 @@ if ($Libxrk) {
 # Start backend
 Write-Host "Starting QuickScope backend on :8000 (parser: $parserMode)..."
 $backend = Start-Process -FilePath $venvPy `
-    -ArgumentList "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000" `
+    -ArgumentList "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000" `
     -WorkingDirectory (Join-Path $PSScriptRoot "backend") `
     -NoNewWindow -PassThru
 
@@ -96,8 +96,12 @@ $frontend = Start-Process -FilePath "cmd.exe" `
 # Cleanup on exit
 $cleanup = {
     Write-Host "`nShutting down..."
-    if ($backend -and -not $backend.HasExited)  { Stop-Process -Id $backend.Id  -Force -ErrorAction SilentlyContinue }
-    if ($frontend -and -not $frontend.HasExited) { Stop-Process -Id $frontend.Id -Force -ErrorAction SilentlyContinue }
+    if ($backend -and -not $backend.HasExited)  {
+        Start-Process taskkill -ArgumentList "/pid", $backend.Id, "/f", "/t" -NoNewWindow -Wait -ErrorAction SilentlyContinue
+    }
+    if ($frontend -and -not $frontend.HasExited) {
+        Start-Process taskkill -ArgumentList "/pid", $frontend.Id, "/f", "/t" -NoNewWindow -Wait -ErrorAction SilentlyContinue
+    }
 }
 Register-EngineEvent PowerShell.Exiting -Action $cleanup | Out-Null
 

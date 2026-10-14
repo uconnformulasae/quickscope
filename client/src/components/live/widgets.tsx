@@ -8,7 +8,7 @@ export function fmt(v: number | undefined, precision: number): string {
 // Direction channel: f32 1.0 = forward (docs/protocol/aim-live-protocol-deep-dive.md).
 export function directionLabel(v: number | undefined): string {
   if (v === undefined || !Number.isFinite(v)) return '—';
-  return v === 1 ? 'FWD' : 'REV';
+  return v >= 0.5 ? 'FWD' : 'REV';
 }
 
 export function Panel({

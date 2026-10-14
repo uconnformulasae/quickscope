@@ -12,10 +12,13 @@ restarts do not re-parse unchanged files.
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import math
 import os
+import threading
+import uuid
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 
@@ -37,7 +40,41 @@ class GPSPreview(TypedDict):
     pointCount: int             # original (pre-downsample) valid-fix count
 
 
-_cache: dict[tuple[str, float], Optional[GPSPreview]] = {}
+_MAX_CACHE_ENTRIES = 100
+_cache_lock = threading.Lock()
+_cache: collections.OrderedDict[tuple[str, float], Optional[GPSPreview]] = collections.OrderedDict()
+
+
+def _get_cache(key: tuple[str, float]) -> tuple[bool, Optional[GPSPreview]]:
+    with _cache_lock:
+        if key in _cache:
+            _cache.move_to_end(key)
+            return True, _cache[key]
+        return False, None
+
+
+def _set_cache(key: tuple[str, float], value: Optional[GPSPreview]) -> None:
+    with _cache_lock:
+        _cache[key] = value
+        _cache.move_to_end(key)
+        while len(_cache) > _MAX_CACHE_ENTRIES:
+            _cache.popitem(last=False)
+
+
+def evict(session_id: str | None = None, path: str | Path | None = None) -> None:
+    """Evict GPS preview from memory and disk caches."""
+    if path is not None:
+        p_str = str(path)
+        with _cache_lock:
+            to_del = [k for k in _cache if k[0] == p_str]
+            for k in to_del:
+                del _cache[k]
+    if session_id:
+        disk_path = _disk_cache_path(session_id)
+        try:
+            disk_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _disk_cache_dir() -> Path:
@@ -87,13 +124,16 @@ def _write_disk_cache(session_id: str | None, p: Path, preview: Optional[GPSPrev
         "preview": preview,
     }
     dest = _disk_cache_path(session_id)
-    tmp = dest.with_suffix(".json.tmp")
+    tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
     try:
         tmp.write_text(json.dumps(payload), encoding="utf-8")
         os.replace(tmp, dest)
     except OSError:
         logger.exception("Failed to write GPS preview cache for %s", session_id)
-        tmp.unlink(missing_ok=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _haversine_aspect(min_lat: float, max_lat: float, min_lon: float, max_lon: float) -> tuple[float, float]:
@@ -184,7 +224,7 @@ def warm_from_log(session_id: str, local_path: str | Path, log) -> None:
         return
     preview = _preview_from_log(log)
     key = (str(p), p.stat().st_mtime)
-    _cache[key] = preview
+    _set_cache(key, preview)
     _write_disk_cache(session_id, p, preview)
 
 
@@ -199,12 +239,13 @@ def compute_preview(
     hit, disk_preview = _try_read_disk_cache(session_id, p)
     if hit:
         key = (str(p), p.stat().st_mtime)
-        _cache[key] = disk_preview
+        _set_cache(key, disk_preview)
         return disk_preview
 
     key = (str(p), p.stat().st_mtime)
-    if key in _cache:
-        return _cache[key]
+    in_cache, cached_val = _get_cache(key)
+    if in_cache:
+        return cached_val
 
     try:
         log = None
@@ -222,11 +263,11 @@ def compute_preview(
             log = parse_file(p, priority=PRIORITY_PREVIEW)
     except Exception:
         logger.exception("Failed to parse %s for GPS preview", p)
-        _cache[key] = None
+        _set_cache(key, None)
         _write_disk_cache(session_id, p, None)
         return None
 
     preview = _preview_from_log(log)
-    _cache[key] = preview
+    _set_cache(key, preview)
     _write_disk_cache(session_id, p, preview)
     return preview

@@ -1,10 +1,13 @@
 """Analysis routes — upload, channel data, laps, GPS, export, derived channels."""
 
+import asyncio
 import io
 import csv
 import math
+import os
 import re
 import time
+import uuid
 
 from fastapi import APIRouter, UploadFile, File, Query, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -51,7 +54,9 @@ async def upload_file(
 
     dest = session_store.session_file_path(filename)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(content)
+    tmp_dest = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
+    tmp_dest.write_bytes(content)
+    os.replace(tmp_dest, dest)
 
     try:
         log = parse_file(dest)
@@ -249,26 +254,30 @@ async def export_csv(channels: str = Query(...)):
             cm = channel_meta(name, state.log.channels[name])
             units_map[name] = cm["units"]
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    headers = ["Time (s)"]
-    for name in ch_data:
-        u = units_map.get(name, "")
-        headers.append(f"{name} ({u})" if u else name)
-    writer.writerow(headers)
-
-    for ts in timebase_ts:
-        row = [f"{ts / 1000:.6f}"]
+    def _build_csv_bytes() -> bytes:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        headers = ["Time (s)"]
         for name in ch_data:
-            cd = ch_data[name]
-            cts = cd["timestamps"]
-            # Blank outside the channel's own span instead of repeating its end values.
-            val = interpolate(cts, cd["values"], ts) if cts and cts[0] <= ts <= cts[-1] else None
-            row.append(f"{val:.5f}" if val is not None else "")
-        writer.writerow(row)
+            u = units_map.get(name, "")
+            headers.append(f"{name} ({u})" if u else name)
+        writer.writerow(headers)
 
-    csv_bytes = output.getvalue().encode("utf-8")
-    output.close()
+        for ts in timebase_ts:
+            row = [f"{ts / 1000:.6f}"]
+            for name in ch_data:
+                cd = ch_data[name]
+                cts = cd["timestamps"]
+                # Blank outside the channel's own span instead of repeating its end values.
+                val = interpolate(cts, cd["values"], ts) if cts and cts[0] <= ts <= cts[-1] else None
+                row.append(f"{val:.5f}" if val is not None else "")
+            writer.writerow(row)
+
+        data = output.getvalue().encode("utf-8")
+        output.close()
+        return data
+
+    csv_bytes = await asyncio.to_thread(_build_csv_bytes)
     basename = re.sub(r'[^\w\-.]', '_', (state.filename or "export").rsplit(".", 1)[0])
 
     return StreamingResponse(

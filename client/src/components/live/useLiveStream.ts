@@ -95,6 +95,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
       } else if (msg.type === 'error') {
         setStatus('error');
         setError(msg.message);
+        closeLiveWebSocket(wsRef.current);
+        wsRef.current = null;
       }
       // 'heartbeat' needs no handling: it only proves the WS is alive.
     };
@@ -119,6 +121,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     };
   }, []);
 
+  const deviceKey = aimDevice ? `${aimDevice.ip}:${aimDevice.serial ?? ''}` : null;
+
   useEffect(() => {
     if (aimDevice) {
       setDevice(aimStatusToLiveDevice(aimDevice));
@@ -129,7 +133,7 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
       closeLiveWebSocket(wsRef.current);
       wsRef.current = null;
     };
-  }, [aimDevice, connect]);
+  }, [deviceKey, connect]);
 
   const disconnect = () => {
     closeLiveWebSocket(wsRef.current);

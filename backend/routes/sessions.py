@@ -140,6 +140,7 @@ async def delete_session(session_id: str):
     if state.session_id == session_id:
         state.clear()
     session_cache.evict(session_id)
+    gps_preview.evict(session_id, local_path)
 
     session_store.delete_session(session_id)
     return {"ok": True}

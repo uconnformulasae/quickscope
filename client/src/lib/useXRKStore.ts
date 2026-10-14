@@ -80,7 +80,7 @@ const DERIVED_CHART_COLORS = [
 let derivedIdCounter = 10000;
 
 /** Build channel data map for formula/python evaluation.
- *  Uses a lazy cache to avoid duplicating large sample arrays until accessed. */
+ *  Uses a lazy Proxy cache to avoid duplicating large sample arrays until accessed. */
 function buildChannelDataMap(
   session: XRKSession,
   existingDerived: DerivedChannel[],
@@ -88,9 +88,17 @@ function buildChannelDataMap(
   excludeId?: number,
   extraSamples?: Map<number, ChannelSample[]>,
 ): Record<string, { timestamps: number[]; values: number[] }> {
-  const channelData: Record<string, { timestamps: number[]; values: number[] }> = {};
+  const cache = new Map<string, { timestamps: number[]; values: number[] }>();
+  const resolvers = new Map<string, () => ChannelSample[] | undefined>();
 
-  // Helper: extract timestamps/values from ChannelSample[] only once per channel
+  for (const [id, chanDef] of session.channels) {
+    resolvers.set(chanDef.shortName, () => extraSamples?.get(id) ?? session.samples.get(id));
+  }
+  for (const dc of existingDerived) {
+    if (dc.id === excludeId) continue;
+    resolvers.set(dc.name, () => existingDerivedSamples.get(dc.id));
+  }
+
   function samplesTo(samps: ChannelSample[]): { timestamps: number[]; values: number[] } {
     const timestamps = new Array<number>(samps.length);
     const values = new Array<number>(samps.length);
@@ -101,19 +109,31 @@ function buildChannelDataMap(
     return { timestamps, values };
   }
 
-  for (const [id, chanDef] of session.channels) {
-    // extraSamples wins so just-fetched data is visible before React state catches up
-    const samps = extraSamples?.get(id) ?? session.samples.get(id);
-    if (!samps || samps.length === 0) continue; // skip empty channels entirely
-    channelData[chanDef.shortName] = samplesTo(samps);
-  }
-  for (const dc of existingDerived) {
-    if (dc.id === excludeId) continue;
-    const samps = existingDerivedSamples.get(dc.id);
-    if (!samps || samps.length === 0) continue;
-    channelData[dc.name] = samplesTo(samps);
-  }
-  return channelData;
+  return new Proxy({} as Record<string, { timestamps: number[]; values: number[] }>, {
+    get(_target, prop: string | symbol) {
+      if (typeof prop !== 'string') return undefined;
+      if (cache.has(prop)) return cache.get(prop);
+      const resolver = resolvers.get(prop);
+      if (!resolver) return undefined;
+      const samps = resolver();
+      if (!samps || samps.length === 0) return undefined;
+      const converted = samplesTo(samps);
+      cache.set(prop, converted);
+      return converted;
+    },
+    has(_target, prop: string | symbol) {
+      return typeof prop === 'string' && resolvers.has(prop);
+    },
+    ownKeys() {
+      return Array.from(resolvers.keys());
+    },
+    getOwnPropertyDescriptor(_target, prop: string | symbol) {
+      if (typeof prop === 'string' && resolvers.has(prop)) {
+        return { enumerable: true, configurable: true };
+      }
+      return undefined;
+    },
+  });
 }
 
 /** Fetch any of `needed` channel names that exist in the session but haven't
@@ -356,7 +376,7 @@ export function useAppState() {
     const fetched = await fetchMissingChannels(session, referenced);
     if (fetched.size > 0) {
       setState(prev => {
-        if (!prev.session) return prev;
+        if (!prev.session || prev.session.metadata !== session.metadata) return prev;
         const newSamples = new Map(prev.session.samples);
         for (const [id, samps] of fetched) newSamples.set(id, samps);
         return { ...prev, session: { ...prev.session, samples: newSamples } };
@@ -376,6 +396,9 @@ export function useAppState() {
     const newDef: DerivedChannel = { ...def, id, color };
 
     const extraSamples = await ensureExpressionChannelsLoaded(session, def);
+    if (state.session?.metadata !== session.metadata) {
+      return { error: 'Session changed during evaluation' };
+    }
     const result = await computeDerivedSamples(newDef, session, state.derivedChannels, derivedSamplesMap, extraSamples);
     if (typeof result === 'string') return { error: result };
 
@@ -419,6 +442,9 @@ export function useAppState() {
 
     const updated: DerivedChannel = { ...existing, ...def };
     const extraSamples = await ensureExpressionChannelsLoaded(session, def);
+    if (state.session?.metadata !== session.metadata) {
+      return { error: 'Session changed during evaluation' };
+    }
     const result = await computeDerivedSamples(updated, session, state.derivedChannels, derivedSamplesMap, extraSamples);
     if (typeof result === 'string') return { error: result };
 

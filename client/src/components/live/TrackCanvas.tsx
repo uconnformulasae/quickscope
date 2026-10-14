@@ -20,10 +20,17 @@ export function TrackCanvas({
   }
 
   // Bounds + aspect-correction (lon shrinks as lat moves away from equator).
-  const minLat = Math.min(...trail.map((p) => p.lat));
-  const maxLat = Math.max(...trail.map((p) => p.lat));
-  const minLon = Math.min(...trail.map((p) => p.lon));
-  const maxLon = Math.max(...trail.map((p) => p.lon));
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLon = Infinity;
+  let maxLon = -Infinity;
+  for (let i = 0; i < trail.length; i++) {
+    const p = trail[i];
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lon < minLon) minLon = p.lon;
+    if (p.lon > maxLon) maxLon = p.lon;
+  }
   const midLat = (minLat + maxLat) / 2;
   const lonM = (maxLon - minLon) * 111_320 * Math.cos((midLat * Math.PI) / 180);
   const latM = (maxLat - minLat) * 111_320;

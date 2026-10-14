@@ -32,7 +32,7 @@ export function buildTableData(
   // For each channel, build a pointer-based walk through its samples
   const channelPointers = channelIds.map(id => {
     const samples = samplesMap.get(id) || [];
-    return { samples, ptr: 0 };
+    return { samples, ptr: 0, hasEmitted: false };
   });
 
   const rows: TableRow[] = new Array(masterTimestamps.length);
@@ -63,8 +63,9 @@ export function buildTableData(
       const sample = samples[ch.ptr];
       if (sample.timestamp <= ts) {
         values[c] = sample.value;
-        // Held = pointer didn't move from the previous row (same sample repeated)
-        held[c] = (ch.ptr === prevPtr && i > 0);
+        // Held = pointer didn't move from the previous row AND a sample was already emitted
+        held[c] = ch.ptr === prevPtr && i > 0 && ch.hasEmitted;
+        ch.hasEmitted = true;
       } else {
         values[c] = null;
         held[c] = false;

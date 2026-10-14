@@ -130,7 +130,7 @@ export const PANEL_OWNED_CHANNELS = new Set<string>([
   // Accumulator (Orion-exposed)
   'Pack_Temp', 'Min_Cell_Voltage', 'BMS_Disch_Lim', 'BMS_Disch_Enable', 'BMS_LV_input',
   // Cooling
-  'Motor_Temp',
+  'Motor_Temp', 'Logger Temperature',
   // Vehicle dynamics
   'Throttle_Pos', 'TPS_1', 'TPS_2', 'BSE_Voltage', 'LFspeed', 'RPM', 'YawRate', 'RollRate', 'PitchRate',
   'LateralAcc', 'InlineAcc', 'VerticalAcc',

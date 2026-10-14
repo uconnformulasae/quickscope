@@ -58,13 +58,10 @@ function formatRelativeTime(iso: string): string {
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-      + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  } catch {
-    return dateStr;
-  }
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
 function pathStem(filename: string): string {
@@ -186,9 +183,13 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       });
       const updated = await listSessions();
       setSessions(updated);
-      const newest = updated.find(s => s.filename === file.name);
+      const newest = info.sessionId
+        ? updated.find(s => s.id === info.sessionId)
+        : updated.find(s => s.filename === file.name);
       if (newest) {
         onSessionLoaded(info, newest.id, file.name);
+      } else if (info.sessionId) {
+        onSessionLoaded(info, info.sessionId, file.name);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');

@@ -39,8 +39,9 @@ describe('scalar arithmetic', () => {
     expect(ok(expr).values).toEqual([expected]);
   });
 
-  it('division by zero never yields Infinity', () => {
-    expect(ok('1 / 0').values).not.toContain(Infinity);
+  it('division by zero never yields Infinity and reports error', () => {
+    const out = evaluateFormula('1 / 0', channels);
+    expect(typeof out === 'string' || !out.values.includes(Infinity)).toBe(true);
   });
 });
 
@@ -158,12 +159,20 @@ describe('extractChannelNames', () => {
 // `it.fails` passes while the bug exists and starts failing the moment it is
 // fixed, which tells you to flip it to a plain `it`.
 
-describe('known bugs', () => {
-  it('delay() shifts values later in time instead of truncating the start', () => {
+describe('signal and arithmetic fixes', () => {
+  it('delay() shifts values later in time', () => {
     const out = ok('delay(A, 1)');
-    // value[0]=1 should now appear at t=1000, and the series keeps its start time
-    expect(out.timestamps).toEqual([0, 1000]);
+    // Channel A is timestamps: [0, 1000, 2000], values: [1, 2, 3]
+    // Delayed by 1 sample: value 1 shifts to t=1000, value 2 shifts to t=2000
+    expect(out.timestamps).toEqual([1000, 2000]);
     expect(out.values).toEqual([1, 2]);
+  });
+
+  it('delay() supports negative samples as lead', () => {
+    const out = ok('delay(A, -1)');
+    // Lead by 1 sample: value 2 shifts to t=0, value 3 shifts to t=1000
+    expect(out.timestamps).toEqual([0, 1000]);
+    expect(out.values).toEqual([2, 3]);
   });
 
   it('subtraction without spaces is not read as one identifier (RPM-100)', () => {
@@ -174,17 +183,14 @@ describe('known bugs', () => {
     expect(ok('Speed-Throttle').values).toEqual([9, 18, 27]);
   });
 
-  it.fails('mavg() of a constant signal settles at that constant', () => {
-    // Window is inclusive of both ends (3 samples at 100 ms spacing for a 200 ms
-    // window) but the divisor counts 2, so a constant 4 settles at 6.
+  it('mavg() of a constant signal settles at that constant', () => {
     const flat: ChannelMap = { F: ch([0, 100, 200, 300, 400, 500], [4, 4, 4, 4, 4, 4]) };
     expect(ok('mavg(F, 200)', flat).values.at(-1)).toBeCloseTo(4);
   });
 
-  it.fails('a scalar divide-by-zero is reported, not returned as NaN', () => {
-    // Channel results drop non-finite samples; scalar results skip that filter.
+  it('a scalar divide-by-zero is reported, not returned as NaN', () => {
     const out = evaluateFormula('1 / 0', channels);
-    expect(typeof out === 'string' || out.values.every(v => Number.isFinite(v))).toBe(true);
+    expect(typeof out === 'string').toBe(true);
   });
 
   it('subtraction WITH spaces works today (workaround)', () => {

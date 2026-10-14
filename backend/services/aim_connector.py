@@ -12,10 +12,12 @@ via a custom binary protocol over raw TCP sockets.
 import csv
 import io
 import logging
+import os
 import re
 import socket
 import struct
 import time
+import uuid
 from pathlib import Path
 
 from services.aim_discovery import (
@@ -120,11 +122,6 @@ def _open_device_socket(timeout: float = 10) -> tuple[socket.socket, str]:
 
 
 # ── Discovery ───────────────────────────────────────────────────────────────
-
-def is_aim_connected() -> bool:
-    """Check if an AiM device is reachable via UDP discovery probe."""
-    return probe_device_ips() is not None
-
 
 def discover_device() -> dict | None:
     """Discover AiM device info via UDP broadcast.
@@ -898,5 +895,7 @@ def download_aim_session(filename: str, dest_dir: Path, expected_size: int = 0) 
         f" (expected {total_file_size})" if total_file_size else "",
     )
 
-    out_path.write_bytes(file_data)
+    tmp_path = out_path.with_name(f"{out_path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_bytes(file_data)
+    os.replace(tmp_path, out_path)
     return out_path

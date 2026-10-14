@@ -218,6 +218,10 @@ function createWindow() {
     openExternalSafely(url);
   });
 
+  mainWindow.webContents.on('will-frame-navigate', (event) => {
+    event.preventDefault();
+  });
+
   if (isDev && process.env.QUICKSCOPE_DEV_URL) {
     mainWindow.loadURL(process.env.QUICKSCOPE_DEV_URL);
   } else {

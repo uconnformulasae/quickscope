@@ -224,7 +224,7 @@ class AimDll:
         result = self._dll.get_channel_samples(idx, channel, times, values, count)
         if result <= 0:
             raise AimDllError(f"Failed to get samples for channel {channel}")
-        return list(times), list(values)
+        return list(times[:result]), list(values[:result])
 
     def get_vehicle_name(self, idx: int) -> str:
         return self._decode(self._dll.get_vehicle_name(idx))

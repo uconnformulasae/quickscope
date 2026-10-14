@@ -133,7 +133,7 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
     drawCursorLine(dc, hoverT, dc.colors.hoverLine, axisY, true);
   }
 
-  if (cursor.deltaMode && (cursor.cursorA !== null || cursor.cursorB !== null)) {
+  if (!cursor.deltaMode || cursor.cursorA !== null || cursor.cursorB !== null) {
     let hoverPillIndex = 0;
     for (const strip of strips) {
       const data = channelDataMap.get(strip.channelId);
@@ -167,9 +167,11 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
       ctx.beginPath();
       ctx.roundRect(pillX, pillY, pillW, pillH, 2);
       ctx.fill();
-      ctx.fillStyle = strip.color + 'aa';
+      ctx.fillStyle = strip.color;
+      ctx.globalAlpha = 0.85;
       ctx.textAlign = 'left';
       ctx.fillText(pillText, pillX + 3, pillY + 10);
+      ctx.globalAlpha = 1.0;
       hoverPillIndex++;
     }
   }

@@ -163,26 +163,29 @@ export function EVDashboard({
             <div className="grid grid-cols-3 sm:grid-cols-3 gap-1.5">
               {BOOL_CHANNELS.filter((b) => b.kind === 'state').map((b) => {
                 const v = ch[b.name];
-                const on = v === 1;
+                const hasValue = v !== undefined && Number.isFinite(v);
+                const on = hasValue && v >= 0.5;
                 return (
                   <div
                     key={b.name}
                     className={`flex items-center justify-between rounded-md px-2 py-1.5 border text-[11px] ${
-                      on
+                      !hasValue
+                        ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
+                        : on
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
                         : 'bg-muted/40 border-border/40 text-muted-foreground'
                     }`}
-                    title={`${b.name} = ${v ?? '—'} (1 = on, 0 = off)`}
+                    title={`${b.name} = ${hasValue ? v : '—'} (1 = on, 0 = off)`}
                   >
                     <span className="font-medium truncate">{b.label}</span>
-                    <span className="font-mono ml-2">{on ? 'ON' : 'OFF'}</span>
+                    <span className="font-mono ml-2">{!hasValue ? '—' : on ? 'ON' : 'OFF'}</span>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Fault row — green dot when 0, red when 1 */}
+          {/* Fault row — green dot when 0, red when 1, muted when undefined */}
           <div>
             <h4 className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5 flex items-center justify-between">
               <span>Faults</span>
@@ -193,20 +196,27 @@ export function EVDashboard({
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
               {BOOL_CHANNELS.filter((b) => b.kind === 'fault').map((b) => {
                 const v = ch[b.name];
-                const fault = v === 1;
+                const hasValue = v !== undefined && Number.isFinite(v);
+                const fault = hasValue && v >= 0.5;
                 return (
                   <div
                     key={b.name}
                     className={`flex items-center gap-1.5 rounded-md px-2 py-1 border text-[10px] ${
-                      fault
+                      !hasValue
+                        ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
+                        : fault
                         ? 'bg-red-500/10 border-red-500/40 text-red-600 dark:text-red-400'
                         : 'bg-emerald-500/5 border-emerald-500/20 text-muted-foreground'
                     }`}
-                    title={`${b.name} = ${v ?? '—'}`}
+                    title={`${b.name} = ${hasValue ? v : '—'}`}
                   >
                     <span
                       className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                        fault ? 'bg-red-500 animate-pulse' : 'bg-emerald-500/60'
+                        !hasValue
+                          ? 'bg-muted-foreground/30'
+                          : fault
+                          ? 'bg-red-500 animate-pulse'
+                          : 'bg-emerald-500/60'
                       }`}
                     />
                     <span className="truncate">{b.label}</span>
@@ -215,6 +225,27 @@ export function EVDashboard({
               })}
             </div>
           </div>
+        </div>
+      </Panel>
+
+      {/* Inverter & Motor (Cascadia CM200DX / Emrax 228) */}
+      <Panel title="Inverter & Motor · Cascadia CM200DX" className="lg:col-span-12">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-2">
+          <CoolStat label="Torque Cmd"   value={fmt(ch['Torque_Command'], 0)}    unit="Nm" borderClass="border-emerald-500/40" />
+          <CoolStat label="Torque Fdbk"  value={fmt(ch['Torque_Feedback'], 0)}   unit="Nm" borderClass="border-emerald-500/40" />
+          <CoolStat label="Torque Lim"   value={fmt(ch['MCU_Torque_Limit'], 0)}  unit="Nm" borderClass="border-muted-foreground/30" />
+          <CoolStat label="MCU DC Current" value={fmt(ch['MCU_DC_Current'], 1)} unit="A"  borderClass="border-amber-500/40" />
+          <CoolStat
+            label="Inverter State"
+            value={ch['InverterEnable'] !== undefined && Number.isFinite(ch['InverterEnable']) ? (ch['InverterEnable'] >= 0.5 ? 'ENABLED' : 'DISABLED') : '—'}
+            unit=""
+            borderClass={ch['InverterEnable'] !== undefined && ch['InverterEnable'] >= 0.5 ? 'border-emerald-500/50' : 'border-muted-foreground/30'}
+          />
+          <CoolStat label="Phase A"      value={fmt(ch['Phase_A_Current'], 0)}   unit="A"  borderClass="border-muted-foreground/30" />
+          <CoolStat label="Phase B"      value={fmt(ch['Phase_B_Current'], 0)}   unit="A"  borderClass="border-muted-foreground/30" />
+          <CoolStat label="Phase C"      value={fmt(ch['Phase_C_Current'], 0)}   unit="A"  borderClass="border-muted-foreground/30" />
+          <CoolStat label="Id Feedback"  value={fmt(ch['Id_Feeback'], 0)}        unit="A"  borderClass="border-muted-foreground/30" />
+          <CoolStat label="Iq Feedback"  value={fmt(ch['Iq_Feedback'], 0)}        unit="A"  borderClass="border-muted-foreground/30" />
         </div>
       </Panel>
 

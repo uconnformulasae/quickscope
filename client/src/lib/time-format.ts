@@ -32,8 +32,11 @@ function parseDateParts(dateStr: string): { year: number; month: number; day: nu
   }
   const dash = trimmed.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
   if (dash) {
-    const parts = { year: +dash[3], month: +dash[2], day: +dash[1] };
-    return isValidDate(parts.year, parts.month, parts.day) ? parts : null;
+    const dmy = { year: +dash[3], month: +dash[2], day: +dash[1] };
+    if (isValidDate(dmy.year, dmy.month, dmy.day)) return dmy;
+    const mdy = { year: +dash[3], month: +dash[1], day: +dash[2] };
+    if (isValidDate(mdy.year, mdy.month, mdy.day)) return mdy;
+    return null;
   }
   return null;
 }
@@ -100,13 +103,6 @@ export function formatChartAxisTime(
   }
 
   const d = new Date(logStartMs + elapsedSec * 1000);
-  if (tickStep !== undefined && tickStep >= 3600) {
-    const h = d.getHours();
-    const hour12 = h % 12 || 12;
-    const minute = d.getMinutes().toString().padStart(2, '0');
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    return `${hour12}:${minute} ${ampm}`;
-  }
   if (tickStep !== undefined && tickStep >= 60) {
     const h = d.getHours();
     const hour12 = h % 12 || 12;

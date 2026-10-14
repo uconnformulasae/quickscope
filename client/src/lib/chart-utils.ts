@@ -182,7 +182,10 @@ export function niceAxisTicks(min: number, max: number, maxTicks: number): numbe
   const range = max - min;
   if (range <= 0 || !isFinite(range)) return [min];
 
-  const roughStep = range / maxTicks;
+  const safeMaxTicks = Math.max(2, maxTicks);
+  const roughStep = range / safeMaxTicks;
+  if (!isFinite(roughStep) || roughStep <= 0) return [min];
+
   const mag = Math.pow(10, Math.floor(Math.log10(roughStep)));
   const residual = roughStep / mag;
   let niceStep: number;
@@ -219,12 +222,16 @@ export function formatTimeSec(sec: number, tickStep?: number): string {
     else if (tickStep < 0.95) decimals = 2;
   }
 
-  const mins = Math.floor(sec / 60);
-  const secs = sec % 60;
+  const sign = sec < 0 ? '-' : '';
+  const absSec = Math.abs(sec);
+  const factor = 10 ** decimals;
+  const roundedTotal = Math.round(absSec * factor) / factor;
+  const mins = Math.floor(roundedTotal / 60);
+  const secs = roundedTotal % 60;
   if (mins > 0) {
-    return `${mins}:${secs.toFixed(decimals).padStart(decimals + 3, '0')}`;
+    return `${sign}${mins}:${secs.toFixed(decimals).padStart(decimals + 3, '0')}`;
   }
-  return secs.toFixed(decimals) + 's';
+  return `${sign}${secs.toFixed(decimals)}s`;
 }
 
 /**
@@ -253,8 +260,11 @@ export function minMaxTrace(
     let j = i + 1;
 
     while (j < n && Math.round(timeToX(samples[j].timestamp / 1000)) === px) {
-      if (samples[j].value < samples[minIdx].value) minIdx = j;
-      if (samples[j].value > samples[maxIdx].value) maxIdx = j;
+      const val = samples[j].value;
+      if (Number.isFinite(val)) {
+        if (!Number.isFinite(samples[minIdx].value) || val < samples[minIdx].value) minIdx = j;
+        if (!Number.isFinite(samples[maxIdx].value) || val > samples[maxIdx].value) maxIdx = j;
+      }
       j++;
     }
 
