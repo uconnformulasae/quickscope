@@ -18,6 +18,7 @@ import socket
 import struct
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from services.aim_discovery import (
@@ -635,6 +636,7 @@ def _receive_file_data(
     sock: socket.socket,
     total_file_size: int,
     trace: AimDownloadTrace | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> bytes:
     """Read STCP file blocks until the whole file is covered.
 
@@ -769,6 +771,8 @@ def _receive_file_data(
         if extracted_size > last_progress_size:
             last_progress_size = extracted_size
             idle_deadline = last_rx + _PROGRESS_IDLE_S
+            if on_progress is not None and total_file_size > 0:
+                on_progress(extracted_size, total_file_size)
             if trace is not None:
                 trace.log(
                     "progress",
@@ -801,7 +805,12 @@ def _receive_file_data(
     return bytes(file_data)
 
 
-def download_aim_session(filename: str, dest_dir: Path, expected_size: int = 0) -> Path:
+def download_aim_session(
+    filename: str,
+    dest_dir: Path,
+    expected_size: int = 0,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> Path:
     """Download one log file over a **dedicated** TCP session (RS3 stream 38 in 116CaptureWireshark.pcapng).
 
     Session list and live view share the primary hub TCP; downloads do not.
@@ -822,6 +831,9 @@ def download_aim_session(filename: str, dest_dir: Path, expected_size: int = 0) 
             out_path.unlink()
         else:
             logger.debug("Session %s already exists locally, skipping.", filename)
+            if on_progress is not None:
+                total = expected_size if expected_size > 0 else local_size
+                on_progress(total, total if total > 0 else 1)
             return out_path
 
     filepath = f"1:/mem/{filename}"
@@ -874,7 +886,7 @@ def download_aim_session(filename: str, dest_dir: Path, expected_size: int = 0) 
         trace.log("initial_ack_sent")
 
         # Step 5: Receive data blocks
-        file_data = _receive_file_data(s, total_file_size, trace)
+        file_data = _receive_file_data(s, total_file_size, trace, on_progress=on_progress)
 
         try:
             s.shutdown(socket.SHUT_RDWR)

@@ -1,6 +1,5 @@
 import { type Snapshot, PACK_V_MAX, PACK_V_NOMINAL, PACK_TEMP_DERATE, CHANNEL_META, BOOL_CHANNELS, NUM_MODULES, PANEL_OWNED_CHANNELS } from './live-channels';
 import { fmt, directionLabel, Panel, BigStat, CoolStat, VehicleStat } from './widgets';
-import { TrackCanvas } from './TrackCanvas';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Dashboard — multi-panel telemetry layout. Modeled on Athena's pit-side
@@ -13,13 +12,9 @@ import { TrackCanvas } from './TrackCanvas';
 export function EVDashboard({
   latest,
   totalReceived,
-  gpsTrail,
-  onExportGpx,
 }: {
   latest: Snapshot | null;
   totalReceived: number;
-  gpsTrail: { lat: number; lon: number; speed: number }[];
-  onExportGpx: () => void;
 }) {
   const ch = latest?.channels ?? {};
   return (
@@ -116,46 +111,7 @@ export function EVDashboard({
         </div>
       </Panel>
 
-      {/* MID STRIP — Track (live GPS path) + Status & Faults */}
-      <Panel
-        title="Track"
-        className="lg:col-span-6"
-        rightSlot={
-          <button
-            onClick={onExportGpx}
-            disabled={gpsTrail.length === 0}
-            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-40 disabled:hover:bg-primary/10 transition-colors"
-            title={gpsTrail.length === 0 ? 'No GPS points yet' : `Download ${gpsTrail.length} points as GPX`}
-          >
-            Export GPX
-          </button>
-        }
-      >
-        <div className="grid grid-cols-2 gap-3">
-          <TrackCanvas trail={gpsTrail} latest={latest} />
-          <div className="space-y-2 text-xs">
-            <div className="grid grid-cols-2 gap-1.5">
-              <VehicleStat label="Lat"      value={fmt(ch['GPS_Lat'], 5)} unit="°" />
-              <VehicleStat label="Lon"      value={fmt(ch['GPS_Lon'], 5)} unit="°" />
-              <VehicleStat label="Speed"    value={fmt(ch['GPS_Speed'], 1)} unit="kph" />
-              <VehicleStat label="Heading"  value={fmt(ch['GPS_Heading'], 0)} unit="°" />
-              <VehicleStat label="Altitude" value={fmt(ch['GPS_Altitude'], 1)} unit="m" />
-              <VehicleStat label="Sats"     value={fmt(ch['GPS_Sats'], 0)} unit="" />
-            </div>
-            <div className="pt-1.5 border-t border-border/40 flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>Trail points</span>
-              <span className="tabular font-semibold text-foreground">{gpsTrail.length}</span>
-            </div>
-            <p className="text-[10px] text-muted-foreground/60 leading-snug">
-              Trail accumulates while connected (up to 2000 points / ~8 min at
-              4 Hz). Export drops a .gpx file you can drop into the session
-              browser later.
-            </p>
-          </div>
-        </div>
-      </Panel>
-
-      <Panel title="Status & Faults" className="lg:col-span-6">
+      <Panel title="Status & Faults" className="lg:col-span-12">
         <div className="space-y-3">
           {/* State row — colored ON/OFF pills */}
           <div>

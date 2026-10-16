@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatAimDeviceListDate,
   formatChartAxisTime,
   formatChartCursorTime,
   formatChartElapsed,
@@ -9,6 +10,19 @@ import {
 
 const local = (y: number, mo: number, d: number, h = 0, mi = 0, s = 0) =>
   new Date(y, mo - 1, d, h, mi, s).getTime();
+
+describe('formatAimDeviceListDate', () => {
+  it('converts AiM device day/month/year to mm/dd/yy', () => {
+    expect(formatAimDeviceListDate('26/08/2026')).toBe('08/26/26');
+    expect(formatAimDeviceListDate('26/08/26')).toBe('08/26/26');
+    expect(formatAimDeviceListDate('01/09/2026')).toBe('09/01/26');
+  });
+  it('returns the original string when parsing fails', () => {
+    expect(formatAimDeviceListDate('')).toBe('');
+    expect(formatAimDeviceListDate('not-a-date')).toBe('not-a-date');
+    expect(formatAimDeviceListDate('31/02/2026')).toBe('31/02/2026');
+  });
+});
 
 describe('parseLogStartMs', () => {
   it('parses AiM day/month/year dates with times', () => {

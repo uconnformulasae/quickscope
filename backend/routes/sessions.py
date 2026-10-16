@@ -14,6 +14,7 @@ from services import (
     aim_pull_log,
 )
 from services.aim_keepalive import AimKeepalive
+from services import aim_pull_progress
 from services.aim_primary_hub import get_aim_primary_hub
 from parsers.parse_gate import PRIORITY_INTERACTIVE
 from services.session_cache import session_cache
@@ -204,6 +205,12 @@ async def get_aim_pull_log():
     return {"entries": aim_pull_log.list_recent()}
 
 
+@router.get("/aim/pull/progress")
+async def get_aim_pull_progress():
+    """Byte progress for the pull currently running on this backend instance."""
+    return aim_pull_progress.snapshot()
+
+
 @router.get("/aim/download/trace")
 async def list_aim_download_traces():
     """List persisted AiM download trace logs (newest first)."""
@@ -248,6 +255,7 @@ async def pull_from_aim(body: AimPullRequest):
 
     logger.info("AiM pull: downloading %d selected sessions...", len(body.filenames))
 
+    aim_pull_progress.begin_pull(body.filenames)
     hub = get_aim_primary_hub()
     # Must run on the primary TCP *before* it is released: the device ignores a
     # second port-2000 connection while the primary is open (QS_Pull_241/242).
@@ -263,6 +271,7 @@ async def pull_from_aim(body: AimPullRequest):
     try:
         await hub.release_for_download()
     except ConnectionError as exc:
+        aim_pull_progress.end_pull()
         return {
             "ok": False,
             "error": str(exc),
@@ -281,6 +290,7 @@ async def pull_from_aim(body: AimPullRequest):
     finally:
         if keepalive is not None:
             await keepalive.stop()
+        aim_pull_progress.end_pull()
 
     return {"ok": True, "downloaded": downloaded, "errors": errors, "results": results}
 
@@ -307,7 +317,7 @@ async def _download_selected(
     errors = []
     results = []
 
-    for raw_filename in filenames:
+    for file_index, raw_filename in enumerate(filenames, start=1):
         try:
             filename = sanitize_filename(raw_filename)
         except ValueError:
@@ -327,11 +337,17 @@ async def _download_selected(
             dest = session_store.session_file_path(filename)
             device_meta = device_meta_by_file.get(filename, {})
             expected_size = int(device_meta.get("size", 0) or 0)
+            aim_pull_progress.start_file(file_index, filename, expected_size)
+
+            def on_download_progress(received: int, total: int) -> None:
+                aim_pull_progress.update_download(received, total)
+
             await asyncio.to_thread(
                 aim_connector.download_aim_session,
                 filename,
                 dest.parent,
                 expected_size,
+                on_download_progress,
             )
             file_bytes = dest.stat().st_size
             duration_s = time.monotonic() - started
@@ -346,6 +362,7 @@ async def _download_selected(
                 f", expected {expected_size}" if expected_size else "",
             )
 
+            aim_pull_progress.start_parse()
             parse_ok = True
             try:
                 log = parse_file(dest)

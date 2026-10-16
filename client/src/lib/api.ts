@@ -152,6 +152,23 @@ export async function listAimSessions(): Promise<{ ok: boolean; sessions: AimSes
   return res.json();
 }
 
+export interface AimPullProgress {
+  active: boolean;
+  filenames: string[];
+  file_index: number;
+  file_count: number;
+  filename: string;
+  bytes_received: number;
+  bytes_total: number;
+  phase: 'idle' | 'download' | 'parse';
+}
+
+export async function fetchAimPullProgress(): Promise<AimPullProgress> {
+  const res = await fetch(`${API_BASE}/api/aim/pull/progress`);
+  if (!res.ok) throw new Error(`Failed to fetch AiM pull progress: ${res.status}`);
+  return res.json();
+}
+
 export async function pullFromAim(filenames: string[]): Promise<AimPullResponse> {
   const res = await fetch(`${API_BASE}/api/aim/pull`, {
     method: 'POST',

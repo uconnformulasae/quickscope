@@ -76,6 +76,7 @@ const SOURCE_CONFIG = {
 
 export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, theme, onToggleTheme }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<LocalSession[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
   const [aimStatus, setAimStatus] = useState<AimStatus | null>(null);
   const [aimPickerOpen, setAimPickerOpen] = useState(false);
   const [loadingId, setLoadingId] = useState<string | null>(null);
@@ -100,6 +101,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       setSessions(list);
     } catch (e) {
       console.error('Failed to list sessions:', e);
+    } finally {
+      setSessionsLoading(false);
     }
   }, []);
 
@@ -515,7 +518,12 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
       {/* Session list */}
       <div id="session-list-scroll" className="flex-1 overflow-y-auto px-4 py-3">
-        {sortedSessions.length === 0 ? (
+        {sessionsLoading ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/60">
+            <Loader2 className="w-8 h-8 text-primary animate-spin" aria-hidden />
+            <p className="text-sm font-medium text-foreground/60">Loading sessions...</p>
+          </div>
+        ) : sortedSessions.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/60">
             {sessions.length === 0 ? (
               <>
@@ -658,7 +666,9 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
       {/* Footer */}
       <div className="px-4 py-2 border-t border-border/50 bg-card/30 text-xs text-muted-foreground/50">
-        {sessions.length} session{sessions.length !== 1 ? 's' : ''}
+        {sessionsLoading
+          ? 'Loading sessions…'
+          : `${sessions.length} session${sessions.length !== 1 ? 's' : ''}`}
       </div>
     </div>
   );
