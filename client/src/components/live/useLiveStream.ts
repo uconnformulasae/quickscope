@@ -7,7 +7,6 @@ import {
   type AimStatus,
 } from '../../lib/api';
 import { type Snapshot } from './live-channels';
-import { downloadGpx } from './live-gpx';
 
 export type Status = 'idle' | 'connecting' | 'streaming' | 'paused' | 'error';
 
@@ -31,7 +30,7 @@ function closeLiveWebSocket(ws: WebSocket | null | undefined) {
   }
 }
 
-/** WebSocket connection, GPS trail and stream controls for the live view. */
+/** WebSocket connection and stream controls for the live view. */
 export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   const [status, setStatus] = useState<Status>('idle');
   const [device, setDevice] = useState<LiveDeviceInfo | null>(null);
@@ -39,11 +38,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   const [reconnecting, setReconnecting] = useState(false);
   const [latest, setLatest] = useState<Snapshot | null>(null);
   const [totalReceived, setTotalReceived] = useState(0);
-  const [gpsTrail, setGpsTrail] = useState<{ lat: number; lon: number; speed: number }[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const gpsTrailRef = useRef<{ lat: number; lon: number; speed: number }[]>([]);
-  const snapshotTickRef = useRef(0);
   const pausedRef = useRef(false);
 
   const connect = useCallback(() => {
@@ -54,9 +50,7 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     wsRef.current = ws;
 
     // Applies one logical message. `batch` (sent when the WS sender fell
-    // behind the device pump) unpacks into a call of this per snapshot, so
-    // the GPS trail updates exactly as if each had arrived on its own --
-    // only the wire framing changed.
+    // behind the device pump) unpacks into a call of this per snapshot.
     const applySnapshot = (msg: LiveSnapshotMessage) => {
       if (pausedRef.current) return;
       const snap: Snapshot = {
@@ -65,20 +59,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
         raw: msg.raw ?? '',
         channels: msg.channels,
       };
-      const lat = snap.channels?.['GPS_Lat'];
-      const lon = snap.channels?.['GPS_Lon'];
-      if (lat !== undefined && lon !== undefined && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1) {
-        gpsTrailRef.current.push({ lat, lon, speed: snap.channels?.['GPS_Speed'] ?? 0 });
-        if (gpsTrailRef.current.length > 2000) {
-          gpsTrailRef.current.shift();
-        }
-      }
       setLatest(snap);
       setTotalReceived((n) => n + 1);
-      snapshotTickRef.current += 1;
-      if (snapshotTickRef.current % 8 === 0) {
-        setGpsTrail([...gpsTrailRef.current]);
-      }
     };
 
     const applyMessage = (msg: LiveWSMessage) => {
@@ -95,6 +77,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
       } else if (msg.type === 'error') {
         setStatus('error');
         setError(msg.message);
+        closeLiveWebSocket(wsRef.current);
+        wsRef.current = null;
       }
       // 'heartbeat' needs no handling: it only proves the WS is alive.
     };
@@ -119,6 +103,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     };
   }, []);
 
+  const deviceKey = aimDevice ? `${aimDevice.ip}:${aimDevice.serial ?? ''}` : null;
+
   useEffect(() => {
     if (aimDevice) {
       setDevice(aimStatusToLiveDevice(aimDevice));
@@ -129,20 +115,15 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
       closeLiveWebSocket(wsRef.current);
       wsRef.current = null;
     };
-  }, [aimDevice, connect]);
+  }, [deviceKey, connect]);
 
   const disconnect = () => {
     closeLiveWebSocket(wsRef.current);
     wsRef.current = null;
-    gpsTrailRef.current = [];
-    snapshotTickRef.current = 0;
     setTotalReceived(0);
     setLatest(null);
-    setGpsTrail([]);
     setStatus('idle');
   };
-
-  const exportGpx = () => downloadGpx(gpsTrailRef.current);
 
   const togglePause = () => {
     pausedRef.current = !pausedRef.current;
@@ -150,7 +131,7 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   };
 
   return {
-    status, device, error, reconnecting, latest, totalReceived, gpsTrail,
-    connect, disconnect, togglePause, exportGpx,
+    status, device, error, reconnecting, latest, totalReceived,
+    connect, disconnect, togglePause,
   };
 }

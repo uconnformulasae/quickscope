@@ -1,16 +1,13 @@
 /**
  * QuickScope Formula Engine
- * Evaluates math expressions and JS expressions against channel data.
+ * Evaluates math expressions against channel data.
  *
- * Formula mode supports:
+ * Supports:
  *   - Standard operators: +, -, *, /, ^, ()
  *   - Math functions: abs, sqrt, min, max, sin, cos, log, exp, pow
  *   - Signal functions: diff(ch), smooth(ch, window), mavg(ch, window_ms), delay(ch, samples)
  *   - Channel names (resolved to sample arrays)
- *   - Scalar constants
- *
- * JavaScript mode: user writes a function body that receives `channels`
- * and `interpolate` helpers and returns { timestamps, values }.
+ *   - Scalar constants (pi, e)
  */
 
 export interface ChannelData {
@@ -91,8 +88,10 @@ function applyMavg(ch: ChannelData, windowMs: number): ChannelData {
   // constant divisor so under-filled windows are zero-padded (FSAE EV.3.4.1.a:
   // before the session starts, power = 0, so MAVG should ramp from 0).
   const totalDuration = ch.timestamps[n - 1] - ch.timestamps[0];
-  const meanDt = totalDuration > 0 ? totalDuration / (n - 1) : windowMs;
-  const expectedCount = Math.max(1, Math.round(windowMs / meanDt));
+  const meanDt = n > 1 && totalDuration > 0 ? totalDuration / (n - 1) : windowMs;
+  const expectedCount = totalDuration > 0
+    ? Math.max(1, Math.round(windowMs / meanDt) + 1)
+    : 1;
 
   const values = new Array<number>(n);
   let sum = 0;
@@ -110,13 +109,23 @@ function applyMavg(ch: ChannelData, windowMs: number): ChannelData {
 }
 
 function applyDelay(ch: ChannelData, samples: number): ChannelData {
-  const s = Math.floor(Math.abs(samples));
-  if (s === 0 || s >= ch.timestamps.length) return ch;
-  // Delay shifts values forward: value at timestamp[i+s] gets value[i]
-  return {
-    timestamps: ch.timestamps.slice(0, -s),
-    values: ch.values.slice(0, -s),
-  };
+  const s = Math.floor(samples);
+  const n = ch.timestamps.length;
+  if (s === 0 || Math.abs(s) >= n) return ch;
+  if (s > 0) {
+    // Delay: value[i] shifts forward in time to timestamp[i + s]
+    return {
+      timestamps: ch.timestamps.slice(s),
+      values: ch.values.slice(0, n - s),
+    };
+  } else {
+    // Lead (negative delay): value[i] shifts backward in time to timestamp[i - |s|]
+    const absS = Math.abs(s);
+    return {
+      timestamps: ch.timestamps.slice(0, n - absS),
+      values: ch.values.slice(absS),
+    };
+  }
 }
 
 // ─── Tokenizer ────────────────────────────────────────────────────────────────
@@ -284,9 +293,7 @@ class Parser {
         this.expect('rparen');
         return { kind: 'call', name: t.value, args };
       }
-      // Channel name or bare number like 'e' constant
-      if (t.value === 'e') return { kind: 'number', value: Math.E };
-      if (t.value === 'pi' || t.value === 'PI') return { kind: 'number', value: Math.PI };
+      // Channel identifier (falls back to e/pi constant if channel not present)
       return { kind: 'channel', name: t.value };
     }
 
@@ -369,7 +376,11 @@ function evalNode(node: ASTNode, channels: ChannelMap): EvalResult {
 
     case 'channel': {
       const ch = channels[node.name];
-      if (!ch) throw new Error(`Unknown channel: '${node.name}'`);
+      if (!ch) {
+        if (node.name === 'e') return Math.E;
+        if (node.name === 'pi' || node.name === 'PI') return Math.PI;
+        throw new Error(`Unknown channel: '${node.name}'`);
+      }
       return ch;
     }
 
@@ -512,7 +523,9 @@ export function evaluateFormula(
     const ast = new Parser(tokens).parse();
     const result = evalNode(ast, channels);
     if (typeof result === 'number') {
-      // Scalar result — no timestamps
+      if (!Number.isFinite(result)) {
+        return 'Expression evaluated to non-finite result (division by zero)';
+      }
       return { timestamps: [0], values: [result] };
     }
     // Filter NaN values

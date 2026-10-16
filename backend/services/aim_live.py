@@ -163,6 +163,8 @@ def decode_frame(buf: bytes, offset: int = 0) -> tuple[Optional[Frame], int]:
     if not all(0x20 <= b < 0x7F for b in cmd):
         raise ValueError(f"non-ASCII cmd code at offset {offset}: {cmd!r}")
     length = int.from_bytes(buf[offset + 6 : offset + 10], "little")
+    if length > 65536:
+        raise ValueError(f"frame length {length} exceeds maximum allowed size (65536)")
     flag = buf[offset + 10]
     if buf[offset + 11 : offset + 12] != b">":
         raise ValueError(f"bad header end at offset {offset}")
@@ -177,6 +179,11 @@ def decode_frame(buf: bytes, offset: int = 0) -> tuple[Optional[Frame], int]:
     if cmd2 != cmd:
         raise ValueError(f"cmd mismatch: {cmd!r} != {cmd2!r}")
     trailer = int.from_bytes(buf[pe + 5 : pe + 7], "little")
+    expected_csum = _checksum(buf[ps:pe])
+    if trailer != expected_csum:
+        raise ValueError(
+            f"trailer checksum mismatch: got {trailer:#06x}, expected {expected_csum:#06x}"
+        )
     if buf[pe + 7 : pe + 8] != b">":
         raise ValueError(f"bad trailer end at offset {pe + 7}")
     return Frame(cmd=cmd, flag=flag, payload=buf[ps:pe], trailer=trailer), total

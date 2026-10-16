@@ -112,11 +112,13 @@ def test_aim_pull_downloads_indexes_and_logs(
     )
     dest_parent = None
 
-    def _fake_download(filename: str, dest_dir, expected_size: int = 0):
+    def _fake_download(filename: str, dest_dir, expected_size: int = 0, on_progress=None):
         nonlocal dest_parent
         dest_parent = dest_dir
         path = dest_dir / filename
         path.write_bytes(b"x" * 500)
+        if on_progress is not None:
+            on_progress(500, 500)
         return path
 
     monkeypatch.setattr(
@@ -168,6 +170,14 @@ def test_aim_pull_downloads_indexes_and_logs(
     assert log[0]["action"] == "pull"
     assert log[0]["status"] == "ok"
     assert "railway_queued" not in log[0]
+
+
+def test_aim_pull_progress_endpoint_idle():
+    res = client.get("/api/aim/pull/progress")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["active"] is False
+    assert body["phase"] == "idle"
 
 
 def test_aim_pull_log_endpoint():

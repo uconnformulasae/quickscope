@@ -28,12 +28,23 @@ class ParseGate:
             self._seq += 1
             ticket = (priority, self._seq)
             heapq.heappush(self._heap, ticket)
-            while True:
-                if not self._busy and self._heap and self._heap[0] == ticket:
-                    heapq.heappop(self._heap)
-                    self._busy = True
-                    return
-                self._cond.wait()
+            acquired = False
+            try:
+                while True:
+                    if not self._busy and self._heap and self._heap[0] == ticket:
+                        heapq.heappop(self._heap)
+                        self._busy = True
+                        acquired = True
+                        return
+                    self._cond.wait()
+            finally:
+                if not acquired:
+                    try:
+                        self._heap.remove(ticket)
+                        heapq.heapify(self._heap)
+                    except ValueError:
+                        pass
+                    self._cond.notify_all()
 
     def release(self) -> None:
         with self._cond:

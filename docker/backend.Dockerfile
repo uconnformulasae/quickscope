@@ -10,8 +10,13 @@ COPY backend/ .
 COPY docker/entrypoint-backend.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
+RUN groupadd -g 1000 quickscope && useradd -u 1000 -g quickscope -m -s /bin/bash quickscope \
+    && mkdir -p /data && chown -R quickscope:quickscope /data /app
+
 ENV QUICKSCOPE_DATA_DIR=/data
 ENV QUICKSCOPE_PARSER=libxrk
+
+USER quickscope
 
 EXPOSE 8000
 

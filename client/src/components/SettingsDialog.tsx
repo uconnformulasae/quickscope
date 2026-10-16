@@ -36,7 +36,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
     setError(null);
     setSaved(false);
     try {
-      await updateSettings(settings);
+      const payload = {
+        ...settings,
+        aim_device_port: settings.aim_device_port || 2000,
+      };
+      await updateSettings(payload);
+      setSettings(payload);
       setSaved(true);
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
@@ -93,8 +98,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                   <label className="block text-xs text-muted-foreground mb-1">Port</label>
                   <input
                     type="number"
-                    value={settings.aim_device_port}
-                    onChange={e => setSettings({ ...settings, aim_device_port: parseInt(e.target.value) || 2000 })}
+                    value={settings.aim_device_port === 0 ? '' : settings.aim_device_port}
+                    onChange={e => setSettings({ ...settings, aim_device_port: e.target.value === '' ? 0 : parseInt(e.target.value, 10) || 0 })}
+                    placeholder="2000"
                     className="w-full px-3 py-2 rounded-md text-sm bg-muted/30 border border-border text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50"
                   />
                 </div>

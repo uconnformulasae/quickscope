@@ -29,7 +29,8 @@ _lock = threading.Lock()
 
 def _quarantine(path: Path) -> None:
     try:
-        os.replace(path, path.with_suffix(path.suffix + ".corrupt"))
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        os.replace(path, path.with_name(f"{path.name}.{ts}.corrupt"))
     except OSError:
         pass
 
@@ -50,9 +51,11 @@ def _load() -> list[dict]:
 
 def _save(sessions: list[dict]):
     _ensure_dirs()
-    tmp = SESSIONS_FILE.with_suffix(SESSIONS_FILE.suffix + ".tmp")
+    tmp = SESSIONS_FILE.with_suffix(SESSIONS_FILE.suffix + f".{uuid.uuid4().hex}.tmp")
     with open(tmp, "w") as f:
         json.dump(sessions, f, indent=2, default=str)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, SESSIONS_FILE)  # atomic: a crash mid-write can't leave a truncated file
 
 

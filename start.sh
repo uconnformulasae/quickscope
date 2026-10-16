@@ -91,7 +91,7 @@ stop_listener_on_port 5173
 
 # Start backend
 echo "Starting QuickScope backend on :8000 (parser: $PARSER_MODE)..."
-(cd backend && "../$VENV_PY" -m uvicorn main:app --host 0.0.0.0 --port 8000) &
+(cd backend && exec "../$VENV_PY" -m uvicorn main:app --host 127.0.0.1 --port 8000) &
 BACKEND_PID=$!
 
 # Start frontend dev server

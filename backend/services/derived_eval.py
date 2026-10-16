@@ -28,7 +28,10 @@ _BLOCKED_ATTRS = frozenset({
 _BLOCKED_NODES = (
     ast.Import, ast.ImportFrom, ast.ClassDef, ast.Global, ast.Nonlocal,
     ast.AsyncFunctionDef, ast.Await, ast.AsyncFor, ast.AsyncWith,
+    ast.Try, ast.ExceptHandler,
 )
+if hasattr(ast, "TryStar"):
+    _BLOCKED_NODES = _BLOCKED_NODES + (ast.TryStar,)
 
 _SAFE_BUILTINS = {
     "range": range, "len": len, "min": min, "max": max, "abs": abs,
@@ -39,6 +42,21 @@ _SAFE_BUILTINS = {
     "True": True, "False": False, "None": None,
     "print": lambda *a, **kw: None,
 }
+
+_SAFE_NUMPY_ALLOWLIST = frozenset({
+    "array", "asarray", "asanyarray", "zeros", "ones", "empty", "full", "zeros_like",
+    "ones_like", "empty_like", "full_like", "arange", "linspace", "logspace", "geomspace",
+    "sin", "cos", "tan", "arcsin", "arccos", "arctan", "arctan2", "sinh", "cosh", "tanh",
+    "arcsinh", "arccosh", "arctanh", "exp", "exp2", "expm1", "log", "log2", "log10", "log1p",
+    "sqrt", "cbrt", "square", "absolute", "abs", "fabs", "sign", "copysign",
+    "floor", "ceil", "trunc", "round", "rint", "clip",
+    "maximum", "minimum", "fmax", "fmin", "nanmax", "nanmin", "nanmean", "nanstd", "nanvar",
+    "mean", "std", "var", "median", "sum", "cumsum", "prod", "cumprod", "diff", "gradient",
+    "interp", "convolve", "isnan", "isinf", "isfinite", "where", "select",
+    "pi", "e", "nan", "inf", "ndarray", "float32", "float64", "int32", "int64", "bool_",
+})
+
+_safe_np_cache = None
 
 
 class ScriptRejected(ValueError):
@@ -63,14 +81,17 @@ def validate(expression: str) -> ast.AST:
 
 
 def _safe_numpy(np) -> types.SimpleNamespace:
-    """numpy's public callables/constants, minus modules and file I/O."""
-    return types.SimpleNamespace(**{
-        name: getattr(np, name)
-        for name in dir(np)
-        if not _BLOCKED_ATTR_RE.match(name)
-        and name not in _BLOCKED_ATTRS
-        and not isinstance(getattr(np, name, None), types.ModuleType)
-    })
+    """numpy's public callables/constants, strictly limited to mathematical functions."""
+    global _safe_np_cache
+    if _safe_np_cache is None:
+        attrs = {}
+        for name in _SAFE_NUMPY_ALLOWLIST:
+            if hasattr(np, name):
+                val = getattr(np, name)
+                if not isinstance(val, types.ModuleType):
+                    attrs[name] = val
+        _safe_np_cache = types.SimpleNamespace(**attrs)
+    return _safe_np_cache
 
 
 def run(expression: str, channels: dict, *, np, math_module, interpolate, timeout: float) -> dict:

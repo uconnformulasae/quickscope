@@ -85,7 +85,11 @@ export function ExportDialog({
   }, []);
 
   const selectAll = useCallback(() => {
-    setSelectedIds(new Set(filteredChannels.map(c => c.id)));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      for (const c of filteredChannels) next.add(c.id);
+      return next;
+    });
   }, [filteredChannels]);
 
   const deselectAll = useCallback(() => {
@@ -113,7 +117,7 @@ export function ExportDialog({
       // Call backend export endpoint
       const blob = await exportCSV(channelNames);
       const url = URL.createObjectURL(blob);
-      const baseName = fileName ? fileName.replace(/\.xrk$/i, '') : 'export';
+      const baseName = fileName ? fileName.replace(/\.(xrk|xrz)$/i, '') : 'export';
       const a = document.createElement('a');
       a.href = url;
       a.download = `${baseName}_export.csv`;

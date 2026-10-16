@@ -13,8 +13,8 @@ interface Props {
 
 export function LiveView({ onBack, aimDevice = null }: Props) {
   const {
-    status, device, error, reconnecting, latest, totalReceived, gpsTrail,
-    connect, disconnect, togglePause, exportGpx,
+    status, device, error, reconnecting, latest, totalReceived,
+    connect, disconnect, togglePause,
   } = useLiveStream(aimDevice);
 
   const isLive = status === 'streaming' || status === 'paused';
@@ -131,12 +131,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
             {vehicleKind(device?.vehicle) === 'ic' ? (
               <ICDashboard latest={latest} totalReceived={totalReceived} />
             ) : (
-              <EVDashboard
-                latest={latest}
-                totalReceived={totalReceived}
-                gpsTrail={gpsTrail}
-                onExportGpx={exportGpx}
-              />
+              <EVDashboard latest={latest} totalReceived={totalReceived} />
             )}
           </div>
         )}

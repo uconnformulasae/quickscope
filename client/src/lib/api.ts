@@ -11,9 +11,10 @@ declare global {
   }
 }
 
+const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
 const API_BASE =
   (typeof window !== 'undefined' && window.__QUICKSCOPE_BACKEND__) ||
-  `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+  `${isHttps ? 'https' : 'http'}://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -148,6 +149,23 @@ export async function getAimStatus(): Promise<AimStatus> {
 export async function listAimSessions(): Promise<{ ok: boolean; sessions: AimSession[]; error?: string }> {
   const res = await fetch(`${API_BASE}/api/aim/sessions`);
   if (!res.ok) throw new Error(`Failed to list AiM sessions: ${res.status}`);
+  return res.json();
+}
+
+export interface AimPullProgress {
+  active: boolean;
+  filenames: string[];
+  file_index: number;
+  file_count: number;
+  filename: string;
+  bytes_received: number;
+  bytes_total: number;
+  phase: 'idle' | 'download' | 'parse';
+}
+
+export async function fetchAimPullProgress(): Promise<AimPullProgress> {
+  const res = await fetch(`${API_BASE}/api/aim/pull/progress`);
+  if (!res.ok) throw new Error(`Failed to fetch AiM pull progress: ${res.status}`);
   return res.json();
 }
 
@@ -291,6 +309,7 @@ export async function uploadFile(
       }
     };
 
+    xhr.timeout = 120_000;
     xhr.onerror = () => reject(new Error('Network error during upload'));
     xhr.ontimeout = () => reject(new Error('Upload timed out'));
     xhr.onabort = () => reject(new Error('Upload aborted'));

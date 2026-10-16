@@ -173,25 +173,35 @@ async def live_ws(websocket: WebSocket) -> None:
             logger.debug("Live WS: send failed (client likely disconnected)")
             raise
 
+    async def _receive_loop() -> None:
+        try:
+            while True:
+                msg = await websocket.receive_text()
+                if msg == "stop":
+                    break
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            logger.debug("Live WS: receive loop ended")
+
     pump_task = asyncio.create_task(_pump_device())
     send_task = asyncio.create_task(_send_loop())
     hb_task = asyncio.create_task(_heartbeat())
+    recv_task = asyncio.create_task(_receive_loop())
+
     try:
-        while True:
-            msg = await websocket.receive_text()
-            if msg == "stop":
-                break
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        logger.exception("live ws receive failed")
+        await asyncio.wait(
+            [recv_task, pump_task, send_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
     finally:
         stop.set()
         pump_task.cancel()
         send_task.cancel()
         hb_task.cancel()
+        recv_task.cancel()
         client.on_status = None
-        for task in (pump_task, send_task, hb_task):
+        for task in (pump_task, send_task, hb_task, recv_task):
             try:
                 await task
             except (asyncio.CancelledError, Exception):

@@ -56,7 +56,8 @@ def parse_inner_records(stream: bytes, start_at: int = LIVE_FRAME_HEADER) -> lis
         ps = idx + 12
         pe = ps + length
         if pe + 8 > n:
-            break
+            i = idx + 1
+            continue
         cmd = stream[idx + 2 : idx + 6]
         cmd2 = stream[pe + 1 : pe + 5]
         if stream[pe : pe + 1] != b"<" or cmd2 != cmd or stream[pe + 7 : pe + 8] != b">":

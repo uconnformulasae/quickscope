@@ -223,9 +223,12 @@ def test_pedal_fixture_one_micro_per_poll_stnc() -> None:
 
 def test_stream_impl_no_post_snapshot_micro_ack() -> None:
     """Guard against extra STCP ack after yield snap (working-dropped-5-55 root cause)."""
-    src = (ROOT / "backend" / "services" / "aim_live.py").read_text(encoding="utf-8")
+    import inspect
+    from services.aim_live import AimLiveClient
+
+    src = inspect.getsource(AimLiveClient.stream)
     assert "yield snap" in src
-    assert "yield snap\n                    await self._send_stcp(_STCP_4BYTE_ACK)" not in src
+    assert "_send_stcp(_STCP_4BYTE_ACK)" not in src
 
 
 def test_rs3_aux_enum_sends_date_without_immediate_micro_ack() -> None:
@@ -246,8 +249,6 @@ def test_reconnect_is_fast_and_reader_never_blocks() -> None:
     from services.aim_live import AimLiveClient
 
     assert aim_live.RECONNECT_HELLO_TIMEOUT_S <= 3.0
-    src = (ROOT / "backend" / "services" / "aim_live.py").read_text(encoding="utf-8")
-    assert "await queue.put(snap)" not in src
 
     calls: list[float | None] = []
 

@@ -40,7 +40,9 @@ def load() -> dict:
         except (ValueError, UnicodeDecodeError):  # JSONDecodeError is a ValueError
             # Keep the unreadable file for recovery and fall back to defaults.
             try:
-                os.replace(SETTINGS_FILE, SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + ".corrupt"))
+                import time
+                ts = int(time.time())
+                os.replace(SETTINGS_FILE, SETTINGS_FILE.with_name(f"{SETTINGS_FILE.name}.{ts}.corrupt"))
             except OSError:
                 pass
             _save_unlocked(DEFAULTS)
@@ -54,9 +56,11 @@ def load() -> dict:
 
 def _save_unlocked(settings: dict):
     _ensure_dir()
-    tmp = SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + ".tmp")
+    tmp = SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + f".{os.getpid()}.tmp")
     with open(tmp, "w") as f:
         json.dump(settings, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, SETTINGS_FILE)  # atomic: a crash mid-write can't leave a truncated file
 
 

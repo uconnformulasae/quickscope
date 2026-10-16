@@ -1,6 +1,5 @@
 import { type Snapshot, PACK_V_MAX, PACK_V_NOMINAL, PACK_TEMP_DERATE, CHANNEL_META, BOOL_CHANNELS, NUM_MODULES, PANEL_OWNED_CHANNELS } from './live-channels';
 import { fmt, directionLabel, Panel, BigStat, CoolStat, VehicleStat } from './widgets';
-import { TrackCanvas } from './TrackCanvas';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Dashboard — multi-panel telemetry layout. Modeled on Athena's pit-side
@@ -13,13 +12,9 @@ import { TrackCanvas } from './TrackCanvas';
 export function EVDashboard({
   latest,
   totalReceived,
-  gpsTrail,
-  onExportGpx,
 }: {
   latest: Snapshot | null;
   totalReceived: number;
-  gpsTrail: { lat: number; lon: number; speed: number }[];
-  onExportGpx: () => void;
 }) {
   const ch = latest?.channels ?? {};
   return (
@@ -116,46 +111,7 @@ export function EVDashboard({
         </div>
       </Panel>
 
-      {/* MID STRIP — Track (live GPS path) + Status & Faults */}
-      <Panel
-        title="Track"
-        className="lg:col-span-6"
-        rightSlot={
-          <button
-            onClick={onExportGpx}
-            disabled={gpsTrail.length === 0}
-            className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-40 disabled:hover:bg-primary/10 transition-colors"
-            title={gpsTrail.length === 0 ? 'No GPS points yet' : `Download ${gpsTrail.length} points as GPX`}
-          >
-            Export GPX
-          </button>
-        }
-      >
-        <div className="grid grid-cols-2 gap-3">
-          <TrackCanvas trail={gpsTrail} latest={latest} />
-          <div className="space-y-2 text-xs">
-            <div className="grid grid-cols-2 gap-1.5">
-              <VehicleStat label="Lat"      value={fmt(ch['GPS_Lat'], 5)} unit="°" />
-              <VehicleStat label="Lon"      value={fmt(ch['GPS_Lon'], 5)} unit="°" />
-              <VehicleStat label="Speed"    value={fmt(ch['GPS_Speed'], 1)} unit="kph" />
-              <VehicleStat label="Heading"  value={fmt(ch['GPS_Heading'], 0)} unit="°" />
-              <VehicleStat label="Altitude" value={fmt(ch['GPS_Altitude'], 1)} unit="m" />
-              <VehicleStat label="Sats"     value={fmt(ch['GPS_Sats'], 0)} unit="" />
-            </div>
-            <div className="pt-1.5 border-t border-border/40 flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>Trail points</span>
-              <span className="tabular font-semibold text-foreground">{gpsTrail.length}</span>
-            </div>
-            <p className="text-[10px] text-muted-foreground/60 leading-snug">
-              Trail accumulates while connected (up to 2000 points / ~8 min at
-              4 Hz). Export drops a .gpx file you can drop into the session
-              browser later.
-            </p>
-          </div>
-        </div>
-      </Panel>
-
-      <Panel title="Status & Faults" className="lg:col-span-6">
+      <Panel title="Status & Faults" className="lg:col-span-12">
         <div className="space-y-3">
           {/* State row — colored ON/OFF pills */}
           <div>
@@ -163,26 +119,29 @@ export function EVDashboard({
             <div className="grid grid-cols-3 sm:grid-cols-3 gap-1.5">
               {BOOL_CHANNELS.filter((b) => b.kind === 'state').map((b) => {
                 const v = ch[b.name];
-                const on = v === 1;
+                const hasValue = v !== undefined && Number.isFinite(v);
+                const on = hasValue && v >= 0.5;
                 return (
                   <div
                     key={b.name}
                     className={`flex items-center justify-between rounded-md px-2 py-1.5 border text-[11px] ${
-                      on
+                      !hasValue
+                        ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
+                        : on
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
                         : 'bg-muted/40 border-border/40 text-muted-foreground'
                     }`}
-                    title={`${b.name} = ${v ?? '—'} (1 = on, 0 = off)`}
+                    title={`${b.name} = ${hasValue ? v : '—'} (1 = on, 0 = off)`}
                   >
                     <span className="font-medium truncate">{b.label}</span>
-                    <span className="font-mono ml-2">{on ? 'ON' : 'OFF'}</span>
+                    <span className="font-mono ml-2">{!hasValue ? '—' : on ? 'ON' : 'OFF'}</span>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Fault row — green dot when 0, red when 1 */}
+          {/* Fault row — green dot when 0, red when 1, muted when undefined */}
           <div>
             <h4 className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5 flex items-center justify-between">
               <span>Faults</span>
@@ -193,20 +152,27 @@ export function EVDashboard({
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
               {BOOL_CHANNELS.filter((b) => b.kind === 'fault').map((b) => {
                 const v = ch[b.name];
-                const fault = v === 1;
+                const hasValue = v !== undefined && Number.isFinite(v);
+                const fault = hasValue && v >= 0.5;
                 return (
                   <div
                     key={b.name}
                     className={`flex items-center gap-1.5 rounded-md px-2 py-1 border text-[10px] ${
-                      fault
+                      !hasValue
+                        ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
+                        : fault
                         ? 'bg-red-500/10 border-red-500/40 text-red-600 dark:text-red-400'
                         : 'bg-emerald-500/5 border-emerald-500/20 text-muted-foreground'
                     }`}
-                    title={`${b.name} = ${v ?? '—'}`}
+                    title={`${b.name} = ${hasValue ? v : '—'}`}
                   >
                     <span
                       className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                        fault ? 'bg-red-500 animate-pulse' : 'bg-emerald-500/60'
+                        !hasValue
+                          ? 'bg-muted-foreground/30'
+                          : fault
+                          ? 'bg-red-500 animate-pulse'
+                          : 'bg-emerald-500/60'
                       }`}
                     />
                     <span className="truncate">{b.label}</span>
@@ -215,6 +181,27 @@ export function EVDashboard({
               })}
             </div>
           </div>
+        </div>
+      </Panel>
+
+      {/* Inverter & Motor (Cascadia CM200DX / Emrax 228) */}
+      <Panel title="Inverter & Motor · Cascadia CM200DX" className="lg:col-span-12">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-2">
+          <CoolStat label="Torque Cmd"   value={fmt(ch['Torque_Command'], 0)}    unit="Nm" borderClass="border-emerald-500/40" />
+          <CoolStat label="Torque Fdbk"  value={fmt(ch['Torque_Feedback'], 0)}   unit="Nm" borderClass="border-emerald-500/40" />
+          <CoolStat label="Torque Lim"   value={fmt(ch['MCU_Torque_Limit'], 0)}  unit="Nm" borderClass="border-muted-foreground/30" />
+          <CoolStat label="MCU DC Current" value={fmt(ch['MCU_DC_Current'], 1)} unit="A"  borderClass="border-amber-500/40" />
+          <CoolStat
+            label="Inverter State"
+            value={ch['InverterEnable'] !== undefined && Number.isFinite(ch['InverterEnable']) ? (ch['InverterEnable'] >= 0.5 ? 'ENABLED' : 'DISABLED') : '—'}
+            unit=""
+            borderClass={ch['InverterEnable'] !== undefined && ch['InverterEnable'] >= 0.5 ? 'border-emerald-500/50' : 'border-muted-foreground/30'}
+          />
+          <CoolStat label="Phase A"      value={fmt(ch['Phase_A_Current'], 0)}   unit="A"  borderClass="border-muted-foreground/30" />
+          <CoolStat label="Phase B"      value={fmt(ch['Phase_B_Current'], 0)}   unit="A"  borderClass="border-muted-foreground/30" />
+          <CoolStat label="Phase C"      value={fmt(ch['Phase_C_Current'], 0)}   unit="A"  borderClass="border-muted-foreground/30" />
+          <CoolStat label="Id Feedback"  value={fmt(ch['Id_Feeback'], 0)}        unit="A"  borderClass="border-muted-foreground/30" />
+          <CoolStat label="Iq Feedback"  value={fmt(ch['Iq_Feedback'], 0)}        unit="A"  borderClass="border-muted-foreground/30" />
         </div>
       </Panel>
 

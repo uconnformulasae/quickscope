@@ -1,6 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { X, Download, Loader2, CheckCircle, HardDrive, Radio } from 'lucide-react';
-import { listAimSessions, pullFromAim, type AimSession } from '../lib/api';
+import {
+  listAimSessions,
+  pullFromAim,
+  fetchAimPullProgress,
+  type AimSession,
+  type AimPullProgress,
+} from '../lib/api';
+import { formatAimDeviceListDate } from '../lib/time-format';
 
 interface AimSessionPickerProps {
   onClose: () => void;
@@ -14,13 +21,36 @@ function formatSize(bytes: number): string {
   return `${bytes} B`;
 }
 
+function mergePullProgress(queue: string[], server: AimPullProgress): Record<string, number> {
+  const next: Record<string, number> = {};
+  for (const name of queue) next[name] = 0;
+  if (!server.active) return next;
+
+  const completedCount = Math.max(0, server.file_index - 1);
+  for (let i = 0; i < completedCount && i < queue.length; i++) {
+    next[queue[i]] = 100;
+  }
+
+  const current = server.filename;
+  if (!current || !queue.includes(current)) return next;
+
+  if (server.bytes_total > 0) {
+    next[current] = Math.min(100, Math.round((server.bytes_received / server.bytes_total) * 100));
+  } else if (server.phase === 'parse') {
+    next[current] = 100;
+  }
+  return next;
+}
+
 export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProps) {
   const [sessions, setSessions] = useState<AimSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [downloading, setDownloading] = useState(false);
+  const [pullPercent, setPullPercent] = useState<Record<string, number>>({});
   const [downloadResult, setDownloadResult] = useState<string | null>(null);
+  const pullPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Dismiss on Escape
   useEffect(() => {
@@ -61,13 +91,30 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
     setSelected(new Set());
   }, []);
 
+  const stopPullPoll = useCallback(() => {
+    if (pullPollRef.current !== null) {
+      clearInterval(pullPollRef.current);
+      pullPollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopPullPoll(), [stopPullPoll]);
+
   const handleDownload = useCallback(async () => {
     if (selected.size === 0) return;
+    const queue = Array.from(selected);
     setDownloading(true);
+    setPullPercent(Object.fromEntries(queue.map(name => [name, 0])));
     setError(null);
     setDownloadResult(null);
+    stopPullPoll();
+    pullPollRef.current = setInterval(() => {
+      fetchAimPullProgress()
+        .then(progress => setPullPercent(mergePullProgress(queue, progress)))
+        .catch(() => { /* ignore transient poll errors */ });
+    }, 200);
     try {
-      const result = await pullFromAim(Array.from(selected));
+      const result = await pullFromAim(queue);
       if (result.error) {
         setError(result.error);
       } else {
@@ -105,9 +152,11 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Download failed');
     } finally {
+      stopPullPoll();
       setDownloading(false);
+      setPullPercent({});
     }
-  }, [selected, onDownloaded]);
+  }, [selected, onDownloaded, stopPullPoll]);
 
   const newCount = sessions.filter(s => !s.already_downloaded).length;
 
@@ -148,17 +197,26 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
               {sessions.map(session => {
                 const isSelected = selected.has(session.filename);
                 const isDownloaded = session.already_downloaded;
+                const pullFill = pullPercent[session.filename];
 
                 return (
                   <button
                     key={session.filename}
                     onClick={() => !isDownloaded && toggleSelect(session.filename)}
                     disabled={isDownloaded || downloading}
-                    className={`w-full flex items-center gap-3 px-5 py-2.5 text-left transition-colors
+                    className={`relative w-full overflow-hidden text-left transition-colors
                       ${isDownloaded ? 'opacity-50' : 'hover:bg-muted/20'}
-                      ${isSelected && !isDownloaded ? 'bg-primary/5' : ''}
+                      ${isSelected && !isDownloaded && pullFill === undefined ? 'bg-primary/5' : ''}
                     `}
                   >
+                    {pullFill !== undefined && (
+                      <div
+                        className="absolute inset-y-0 left-0 bg-primary/25 dark:bg-primary/30 transition-[width] duration-200 ease-out pointer-events-none"
+                        style={{ width: `${pullFill}%` }}
+                        aria-hidden
+                      />
+                    )}
+                    <div className="relative flex w-full items-center gap-3 px-5 py-2.5">
                     {/* Checkbox */}
                     <div className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors
                       ${isDownloaded
@@ -186,7 +244,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
                         )}
                       </div>
                       <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                        {session.date && <span>{session.date}</span>}
+                        {session.date && <span>{formatAimDeviceListDate(session.date)}</span>}
                         {session.hour && <span>{session.hour}</span>}
                         {session.vehicle && <span>{session.vehicle}</span>}
                       </div>
@@ -198,6 +256,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
                         <span>{session.lap_count} laps</span>
                       )}
                       <span>{formatSize(session.size)}</span>
+                    </div>
                     </div>
                   </button>
                 );

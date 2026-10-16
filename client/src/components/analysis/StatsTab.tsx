@@ -42,12 +42,16 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
     <div className="p-2 space-y-2">
       {viewRange && (
         <p className="text-xs text-muted-foreground px-1 pb-1 border-b border-border">
-          Mean/StdDev for selected range • Min/Max always full session
+          Showing statistics for selected zoom range
         </p>
       )}
       {stats.map(({ chan, color, globalStats: gs, viewStats: vs, totalSamples }) => {
         const hasData = totalSamples > 0;
         const canNavigate = !!onNavigateToTime;
+        const displayMin = viewRange ? vs.min : gs.min;
+        const displayMinTs = viewRange ? vs.minTimestamp : gs.minTimestamp;
+        const displayMax = viewRange ? vs.max : gs.max;
+        const displayMaxTs = viewRange ? vs.maxTimestamp : gs.maxTimestamp;
         return (
           <div key={chan.index} className="rounded-lg border border-border overflow-hidden">
             <div
@@ -68,29 +72,29 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
               <div className="grid grid-cols-2 gap-px bg-border">
                 <button
                   className={`bg-card px-2.5 py-1.5 text-left group ${canNavigate ? 'cursor-pointer hover:bg-muted/30 transition-colors' : 'cursor-default'}`}
-                  onClick={canNavigate ? () => onNavigateToTime!(gs.minTimestamp) : undefined}
+                  onClick={canNavigate ? () => onNavigateToTime!(displayMinTs) : undefined}
                   disabled={!canNavigate}
-                  title={canNavigate ? `Jump to min @ ${formatTime(gs.minTimestamp)}` : undefined}
+                  title={canNavigate ? `Jump to min @ ${formatTime(displayMinTs)}` : undefined}
                 >
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-muted-foreground leading-none mb-0.5">Min</p>
                     {canNavigate && <Crosshair className="w-3 h-3 text-muted-foreground/30 group-hover:text-primary/60 transition-colors" />}
                   </div>
-                  <p className="text-sm font-medium text-foreground tabular">{formatNum(gs.min)}</p>
-                  <p className="text-xs text-muted-foreground/50 leading-none mt-0.5">@ {formatTime(gs.minTimestamp)}</p>
+                  <p className="text-sm font-medium text-foreground tabular">{formatNum(displayMin)}</p>
+                  <p className="text-xs text-muted-foreground/50 leading-none mt-0.5">@ {formatTime(displayMinTs)}</p>
                 </button>
                 <button
                   className={`bg-card px-2.5 py-1.5 text-left group ${canNavigate ? 'cursor-pointer hover:bg-muted/30 transition-colors' : 'cursor-default'}`}
-                  onClick={canNavigate ? () => onNavigateToTime!(gs.maxTimestamp) : undefined}
+                  onClick={canNavigate ? () => onNavigateToTime!(displayMaxTs) : undefined}
                   disabled={!canNavigate}
-                  title={canNavigate ? `Jump to max @ ${formatTime(gs.maxTimestamp)}` : undefined}
+                  title={canNavigate ? `Jump to max @ ${formatTime(displayMaxTs)}` : undefined}
                 >
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-muted-foreground leading-none mb-0.5">Max</p>
                     {canNavigate && <Crosshair className="w-3 h-3 text-muted-foreground/30 group-hover:text-primary/60 transition-colors" />}
                   </div>
-                  <p className="text-sm font-medium text-foreground tabular">{formatNum(gs.max)}</p>
-                  <p className="text-xs text-muted-foreground/50 leading-none mt-0.5">@ {formatTime(gs.maxTimestamp)}</p>
+                  <p className="text-sm font-medium text-foreground tabular">{formatNum(displayMax)}</p>
+                  <p className="text-xs text-muted-foreground/50 leading-none mt-0.5">@ {formatTime(displayMaxTs)}</p>
                 </button>
                 <div className="bg-card px-2.5 py-1.5">
                   <p className="text-xs text-muted-foreground leading-none mb-0.5">Mean</p>

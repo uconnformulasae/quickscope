@@ -99,8 +99,7 @@ export function ChannelSidebar({
               title="Create derived channel"
               data-testid="btn-create-derived-open"
             >
-              <Plus className="w-3 h-3" />
-              <FlaskConical className="w-3 h-3" />
+              <FlaskConical className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -369,8 +368,8 @@ function DerivedChannelRow({ dc, isActive, sampleCount, onToggle, onEdit, onRemo
         </div>
       </button>
 
-      {/* Edit / delete — visible on hover */}
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      {/* Edit / delete — visible on hover (subtle on touch) */}
+      <div className="flex items-center gap-0.5 opacity-60 sm:opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={e => { e.stopPropagation(); onEdit(); }}
           className="p-1 rounded text-muted-foreground/60 hover:text-primary transition-colors"

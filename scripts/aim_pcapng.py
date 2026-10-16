@@ -61,6 +61,8 @@ class TcpStream:
         buf = bytearray()
         for seg in sorted(data_segs, key=lambda s: (s.seq - base) & 0xFFFFFFFF):
             offset = (seg.seq - base) & 0xFFFFFFFF
+            if offset > 0x7FFFFFFF:
+                continue
             end = offset + len(seg.payload)
             if end > len(buf):
                 buf.extend(b"\x00" * (end - len(buf)))

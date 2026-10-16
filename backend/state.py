@@ -286,14 +286,14 @@ def sanitize_filename(filename: str) -> str:
     """Strip directory components and dangerous characters from a filename."""
     safe = Path(filename).name
     safe = re.sub(r'[^\w\-.]', '_', safe)
-    if not safe:
+    if not safe or safe in {".", ".."} or safe.startswith("."):
         raise ValueError("Invalid filename")
     return safe
 
 
 def interpolate(timestamps, values, t):
     """Binary-search linear interpolation at timestamp t."""
-    if not timestamps:
+    if not timestamps or not math.isfinite(t):
         return None
     if t <= timestamps[0]:
         return values[0]

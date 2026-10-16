@@ -130,7 +130,7 @@ export const PANEL_OWNED_CHANNELS = new Set<string>([
   // Accumulator (Orion-exposed)
   'Pack_Temp', 'Min_Cell_Voltage', 'BMS_Disch_Lim', 'BMS_Disch_Enable', 'BMS_LV_input',
   // Cooling
-  'Motor_Temp',
+  'Motor_Temp', 'Logger Temperature',
   // Vehicle dynamics
   'Throttle_Pos', 'TPS_1', 'TPS_2', 'BSE_Voltage', 'LFspeed', 'RPM', 'YawRate', 'RollRate', 'PitchRate',
   'LateralAcc', 'InlineAcc', 'VerticalAcc',
@@ -139,8 +139,6 @@ export const PANEL_OWNED_CHANNELS = new Set<string>([
   'Torque_Command', 'Torque_Feedback', 'MCU_Torque_Limit', 'MCU_DC_Current',
   'Phase_A_Current', 'Phase_B_Current', 'Phase_C_Current',
   'Id_Feeback', 'Iq_Feedback', 'InverterEnable',
-  // GPS (rendered in the Track panel)
-  'GPS_Lat', 'GPS_Lon', 'GPS_Speed', 'GPS_Heading', 'GPS_Altitude', 'GPS_Sats',
   // Boolean state + fault channels (rendered in the Status & Faults panel)
   ...BOOL_CHANNELS.map((b) => b.name),
 ]);

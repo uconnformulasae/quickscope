@@ -21,8 +21,6 @@ from conftest import make_log
 from services import session_store, settings_store
 from state import channel_data, state
 
-known_bug = pytest.mark.xfail(strict=True)
-
 
 def _client_with_log(monkeypatch, log) -> TestClient:
     from main import app

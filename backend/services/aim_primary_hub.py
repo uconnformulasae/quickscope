@@ -95,6 +95,11 @@ class AimPrimaryHub:
         return client
 
     async def list_sessions(self, host: str | None = None) -> list[dict]:
+        if self._live_active:
+            raise ConnectionError(
+                "Cannot list AiM sessions while live view is active. "
+                "Close live view first."
+            )
         async with self._lock:
             if self._live_active:
                 raise ConnectionError(
@@ -136,8 +141,9 @@ class AimPrimaryHub:
             raise ConnectionError(
                 "Close live view before downloading logs from the AiM device."
             )
-        await self.close_primary()
-        logger.info("AiM primary hub: released primary TCP for file download")
+        async with self._lock:
+            await self.close_primary()
+            logger.info("AiM primary hub: released primary TCP for file download")
 
     async def close_primary(self) -> None:
         if self._client is not None:

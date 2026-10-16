@@ -139,6 +139,9 @@ export function TelemetryChart({
     if (cursorTime !== undefined && cursorTime !== null) {
       cursorXRef.current = cursorTime;
       needsDrawRef.current = true;
+    } else if (cursorTime === null) {
+      cursorXRef.current = null;
+      needsDrawRef.current = true;
     }
   }, [cursorTime]);
 
@@ -531,9 +534,14 @@ export function TelemetryChart({
     hoverXRef.current = null;
     if (!deltaModeRef.current) {
       cursorXRef.current = null;
+      if (cursorEmitTimer.current) {
+        clearTimeout(cursorEmitTimer.current);
+        cursorEmitTimer.current = null;
+      }
+      onCursorTimeChange?.(null);
     }
     needsDrawRef.current = true;
-  }, []);
+  }, [onCursorTimeChange]);
 
   const handleDoubleClick = useCallback(() => {
     xRangeRef.current = null;

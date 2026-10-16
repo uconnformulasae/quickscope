@@ -120,7 +120,7 @@ export function SessionInfoModal({
                 onClick={() => setEditing(true)}
                 className="px-3.5 py-1 rounded-md bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors"
               >
-                Edit
+                Rename
               </button>
             )}
             <button
@@ -140,7 +140,7 @@ export function SessionInfoModal({
               label={field.label}
               value={field.value}
               editable={editing && field.editable}
-              onChange={(v) => setEditFilename(v)}
+              onChange={field.editable ? setEditFilename : () => {}}
             />
           ))}
         </div>

@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import type { XRKSession, LapSource } from '../../lib/xrk-parser';
 import { computeStats, formatLapTime } from '../../lib/xrk-parser';
-import type { ActiveChannel } from '../../lib/useXRKStore';
+import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { Timer } from 'lucide-react';
-import { formatNum } from './analysis-helpers';
+import { formatNum, resolveChannel, resolveSamples } from './analysis-helpers';
 
 const LAP_SOURCE_LABEL: Record<LapSource, string> = {
   device: 'Device markers',
@@ -19,9 +19,16 @@ const LAP_SOURCE_TONE: Record<LapSource, string> = {
   none: 'bg-muted text-muted-foreground border-border',
 };
 
-export function LapAnalysisTab({ session, activeChannels }: {
+export function LapAnalysisTab({
+  session,
+  activeChannels,
+  derivedChannels,
+  derivedSamplesMap,
+}: {
   session: XRKSession;
   activeChannels: ActiveChannel[];
+  derivedChannels?: DerivedChannel[];
+  derivedSamplesMap?: Map<number, any>;
 }) {
   const lapData = useMemo(() => {
     const markers = session.lapMarkers;
@@ -43,19 +50,19 @@ export function LapAnalysisTab({ session, activeChannels }: {
 
       const channelStats: Record<string, any> = {};
       for (const ac of activeChannels.slice(0, 3)) {
-        const chan = session.channels.get(ac.channelId);
+        const chan = resolveChannel(ac.channelId, session, derivedChannels);
         if (!chan) continue;
-        const samps = (session.samples.get(ac.channelId) || [])
-          .filter(s => s.timestamp >= startMs && s.timestamp <= endMs);
+        const allSamps = resolveSamples(ac.channelId, session, derivedSamplesMap);
+        const samps = allSamps.filter(s => s.timestamp >= startMs && s.timestamp <= endMs);
         channelStats[chan.shortName] = { ...computeStats(samps), color: ac.color };
       }
 
-      laps.push({ lapNum: i + 1, startMs, endMs, lapTimeS, channelStats, isBest: false });
+      laps.push({ lapNum: markers[i].lapNumber ?? (i + 1), startMs, endMs, lapTimeS, channelStats, isBest: false });
     }
 
     if (bestLap >= 0) laps[bestLap].isBest = true;
     return laps;
-  }, [session, activeChannels]);
+  }, [session, activeChannels, derivedChannels, derivedSamplesMap]);
 
   if (session.lapMarkers.length < 2) {
     return (

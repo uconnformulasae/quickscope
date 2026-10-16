@@ -9,6 +9,7 @@ import { formatTimeSec } from './chart-utils';
 import { formatTime } from './xrk-parser';
 
 const DATE_SLASH = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+const AIM_DEVICE_LIST_DATE = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/;
 
 function isValidDate(year: number, month: number, day: number): boolean {
   const d = new Date(year, month - 1, day);
@@ -32,8 +33,11 @@ function parseDateParts(dateStr: string): { year: number; month: number; day: nu
   }
   const dash = trimmed.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
   if (dash) {
-    const parts = { year: +dash[3], month: +dash[2], day: +dash[1] };
-    return isValidDate(parts.year, parts.month, parts.day) ? parts : null;
+    const dmy = { year: +dash[3], month: +dash[2], day: +dash[1] };
+    if (isValidDate(dmy.year, dmy.month, dmy.day)) return dmy;
+    const mdy = { year: +dash[3], month: +dash[1], day: +dash[2] };
+    if (isValidDate(mdy.year, mdy.month, mdy.day)) return mdy;
+    return null;
   }
   return null;
 }
@@ -49,6 +53,25 @@ function parseTimeParts(timeStr: string): { hour: number; minute: number; second
     return { hour: +hm[1], minute: +hm[2], second: 0 };
   }
   return { hour: 0, minute: 0, second: 0 };
+}
+
+function expandTwoDigitYear(year: number): number {
+  if (year >= 100) return year;
+  return year >= 70 ? 1900 + year : 2000 + year;
+}
+
+/** AiM session-list dates are day/month/year; show as US mm/dd/yy in the picker UI. */
+export function formatAimDeviceListDate(dateStr: string): string {
+  const trimmed = dateStr.trim();
+  if (!trimmed) return '';
+  const match = trimmed.match(AIM_DEVICE_LIST_DATE);
+  if (!match) return trimmed;
+  const day = +match[1];
+  const month = +match[2];
+  const year = expandTwoDigitYear(+match[3]);
+  if (!isValidDate(year, month, day)) return trimmed;
+  const yy = (year % 100).toString().padStart(2, '0');
+  return `${month.toString().padStart(2, '0')}/${day.toString().padStart(2, '0')}/${yy}`;
 }
 
 /** Parse AiM Log Date + Log Time into epoch milliseconds (local time). */
@@ -100,13 +123,6 @@ export function formatChartAxisTime(
   }
 
   const d = new Date(logStartMs + elapsedSec * 1000);
-  if (tickStep !== undefined && tickStep >= 3600) {
-    const h = d.getHours();
-    const hour12 = h % 12 || 12;
-    const minute = d.getMinutes().toString().padStart(2, '0');
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    return `${hour12}:${minute} ${ampm}`;
-  }
   if (tickStep !== undefined && tickStep >= 60) {
     const h = d.getHours();
     const hour12 = h % 12 || 12;
