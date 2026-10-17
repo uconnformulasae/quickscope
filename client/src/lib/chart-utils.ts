@@ -17,6 +17,8 @@ export interface TelemetryChartProps {
   cursorTime?: number | null;
   onCursorTimeChange?: (t: number | null) => void;
   chartMode?: ChartMode;
+  /** Loaded session file name, used by Save image */
+  fileName?: string | null;
 }
 
 export interface StripLayout {
@@ -74,6 +76,15 @@ const LIGHT_COLOR_MAP: Record<string, string> = {
 export function resolveChartColor(hex: string, theme: 'dark' | 'light'): string {
   if (theme === 'dark') return hex;
   return LIGHT_COLOR_MAP[hex.toLowerCase()] || LIGHT_COLOR_MAP[hex] || hex;
+}
+
+const DARK_COLOR_MAP: Record<string, string> = Object.fromEntries(
+  Object.entries(LIGHT_COLOR_MAP).map(([dark, light]) => [light, dark]),
+);
+
+/** Inverse of resolveChartColor: map a light-mode variant back to its dark-mode colour. */
+export function toDarkChartColor(hex: string): string {
+  return DARK_COLOR_MAP[hex.toLowerCase()] || hex;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────

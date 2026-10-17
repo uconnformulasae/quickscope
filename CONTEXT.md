@@ -22,7 +22,7 @@
 | `backend/data/` (gitignored) | `sessions.json`, `sessions/` (raw file cache), `settings.json` | Runtime local storage, not source |
 | `client/src/App.tsx` | Root component, view routing | Wiring new views/components in |
 | `client/src/lib/` | `api.ts` (HTTP client), `useXRKStore.ts` (single `useState` global store), `xrk-parser.ts` (types/helpers only, no parsing), `formula-engine.ts` (derived-channel expression evaluator) | Frontend state/data-flow changes |
-| `client/src/components/` | `TelemetryChart.tsx` (canvas engine), `AnalysisPanel.tsx` (Stats/Laps/Histogram/XY/GPS tabs), `ChannelSidebar.tsx`, `SessionBrowser.tsx`, `LiveView.tsx` (live AiM dashboard), `AimSessionPicker.tsx`, `SettingsDialog.tsx`, `GPSMapView.tsx`/`GPSThumbnail.tsx`, `TableView.tsx`, `SessionHeader.tsx`, `SessionInfoModal.tsx`, `DerivedChannelDialog.tsx`, `ExportDialog.tsx` | UI features |
+| `client/src/components/` | `TelemetryChart.tsx` (canvas engine), `AnalysisPanel.tsx` (Stats/Laps/Histogram/XY/GPS tabs), `ChannelSidebar.tsx`, `SessionBrowser.tsx`, `LiveView.tsx` (live AiM dashboard), `AimSessionPicker.tsx`, `SettingsDialog.tsx`, `GPSMapView.tsx`/`GPSThumbnail.tsx`, `TableView.tsx`, `SessionHeader.tsx`, `SessionInfoModal.tsx`, `DerivedChannelDialog.tsx`, `ExportDialog.tsx` (CSV), `ImageExportDialog.tsx` (Save image preview: Download PNG / Copy to clipboard) | UI features |
 | `client/src/components/ui/` | ~40 shadcn/ui components | Mostly unused scaffolding, harmless — per AGENT.md |
 | `shared/schema.ts` | Shared TS types between server/client | Cross-cutting type changes |
 | `server/` | Vestigial Express server (`index.ts`, `routes.ts`, `static.ts`, `vite.ts`) — only serves the Vite dev build | AGENT.md explicitly calls this vestigial; all real API logic is the Python backend |
@@ -45,6 +45,8 @@
 - **Derived channels:** client-side recursive-descent formula engine (`formula-engine.ts`) — `+ - * / ^`, functions `abs/sqrt/sin/cos/diff/smooth/delay`, channel names as variables, cross-channel interpolation. Recomputed from scratch each time (no incremental updates).
 - **Resizable sidebars (2026-09-17):** both analysis-view sidebars drag to resize via `components/ResizeHandle.tsx`; widths live in `lib/useSidebarWidths.ts` (localStorage `quickscope-sidebar-widths`), deliberately *not* in `useAppState` — the drag mutates `panel.style.width` directly so no React re-render happens per pointermove, and `TelemetryChart`'s ResizeObserver re-measures the canvas. Left 140–480 px (default 192), right 220–640 px (default 288); the chart area never goes below 320 px. Double-click a handle to reset, arrow keys nudge by 16 px.
 - **Style:** dark theme only (`#0d0e14` bg, `#4361ee`/`#f77f00` accents), JetBrains Mono for data, DM Sans for UI, lucide-react icons only.
+
+- **Save image (2026-10-10):** icon-only `ImageDown` button in the chart toolbar (between "Δ Delta" and "Reset") opens `ImageExportDialog`. `client/src/lib/chart-export.ts` re-renders the visible window (same channels, separate/overlay layout, whole-session min/max markers) into an offscreen canvas, 1600 px wide (900 tall, taller for many stacked strips) at 2x, always dark, with a header band (file, car/driver/venue/date, window + duration, per-channel min/max inside the window) and a "QuickScope" footer. Separate renderer on purpose: `chart-draw.ts` stays the on-screen engine. Filename `<file base>_<start>s-<end>s_<channels>.png`.
 
 ## How to run / test
 From README.md / AGENT.md (copied verbatim):

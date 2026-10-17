@@ -441,6 +441,7 @@ export default function App() {
                 cursorTime={state.cursorTime}
                 onCursorTimeChange={setCursorTime}
                 chartMode={state.chartMode}
+                fileName={state.fileName}
               />
             )
           ) : (
