@@ -425,7 +425,8 @@ def test_load_session_with_missing_file_is_reported(client_with_synthetic_log, i
     (isolated_data_dir / "sessions" / "run1.xrk").unlink()
     session_cache.clear()
     res = client_with_synthetic_log.post(f"/api/sessions/{sid}/load")
-    assert res.status_code in (400, 404, 410)
+    assert res.status_code == 400
+    assert res.json()["detail"] == "Session file not available locally. Pull it first."
 
 
 def test_rename_moves_file_and_updates_index(client_with_synthetic_log, isolated_data_dir):

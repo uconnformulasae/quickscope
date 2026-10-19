@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import aim_capture_stream
+
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 CAPTURES = ROOT / "docs" / "protocol" / "captures"
@@ -294,18 +296,9 @@ def test_decoys_and_blobs_not_live() -> None:
 
 
 def test_oct1_capture_595_frames_decode_with_layout() -> None:
-    import sys
-    from pathlib import Path
-
     from services.aim_live_layout import parse_channel_layout
 
-    cap = Path.home() / "Downloads" / "oct1livetest1.pcapng"
-    if not cap.exists():
-        pytest.skip("oct1livetest1.pcapng not available")
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from scripts.aim_pcapng import tcp_streams
-
-    buf = tcp_streams(cap)[0].reassemble(client_to_server=False)
+    buf = aim_capture_stream("oct1livetest1.pcapng")
     off, blob, live = 0, None, []
     while off < len(buf):
         f, n = decode_frame(buf, off)
@@ -324,18 +317,9 @@ def test_oct1_capture_595_frames_decode_with_layout() -> None:
 
 def test_ic_capture_494_frames_decode_ic_channels() -> None:
     """UConn-IC: 494 B live frames + 85-channel layout; IMU/brake-temp channels decode."""
-    import sys
-    from pathlib import Path
-
     from services.aim_live_layout import parse_channel_layout
 
-    cap = Path.home() / "Downloads" / "IC_RS3_live.pcapng"
-    if not cap.exists():
-        pytest.skip("IC_RS3_live.pcapng not available")
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from scripts.aim_pcapng import tcp_streams
-
-    buf = tcp_streams(cap)[0].reassemble(client_to_server=False)
+    buf = aim_capture_stream("IC_RS3_live.pcapng")
     off, blob, live = 0, None, []
     while off < len(buf):
         f, n = decode_frame(buf, off)
@@ -373,18 +357,9 @@ def test_ic_layout_blob_recognised_by_tag_not_size() -> None:
 
 
 def test_ictestoct1_capture_layout_detected_and_decoded() -> None:
-    import sys
-    from pathlib import Path
-
     from services.aim_live_layout import is_layout_blob, parse_channel_layout
 
-    cap = Path.home() / "Downloads" / "ictestoct1.pcapng"
-    if not cap.exists():
-        pytest.skip("ictestoct1.pcapng not available")
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from scripts.aim_pcapng import tcp_streams
-
-    buf = tcp_streams(cap)[0].reassemble(client_to_server=False)
+    buf = aim_capture_stream("ictestoct1.pcapng")
     off, layouts, live = 0, [], []
     while off < len(buf):
         f, n = decode_frame(buf, off)

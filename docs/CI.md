@@ -46,6 +46,30 @@ gh auth login
 
 DLL jobs clone the MatLabXRK DLL from [laz-/xrk](https://github.com/laz-/xrk) on `windows-latest`.
 
+## AiM live / download protocol tests
+
+Two layers, so the device protocol is tested on every PR without hardware:
+
+1. **Fake logger (always runs).** `tests/fake_aim_device.py` is an in-process TCP server that answers
+   `AimLiveClient` the way the EVO5 does (hello, enumeration, channel layout, live polling, session list)
+   and can simulate drops, stalls, a silent hello and line noise. `tests/test_aim_live_client.py` drives
+   the real client against it. Nothing to download.
+2. **Capture replay (runs when streams are available).** `tests/test_aim_live.py` and
+   `tests/test_aim_download.py` replay real Race Studio / QuickScope Wireshark captures. Raw `.pcapng`
+   files are never committed; `scripts/extract_aim_streams.py` keeps only the AiM TCP payload bytes
+   (`<stem>.server.bin.gz` / `<stem>.client.bin.gz`). The `test / ubuntu` job downloads them from the
+   **`aim-streams-v1`** release into `tests/fixtures/aim_streams/`; if the release is missing, those tests skip.
+
+Tests look for a capture in this order: `$QUICKSCOPE_AIM_CAPTURES`, `tests/fixtures/aim_streams/`, the repo
+root, then `~/Downloads` (extracted `.bin.gz` or raw `.pcapng`).
+
+Publish or refresh the streams (the repo is public, so release assets are public):
+
+```bash
+python scripts/extract_aim_streams.py ~/Downloads
+scripts/publish_aim_streams_release.sh
+```
+
 ## Branch protection
 
 On `main`, enable required status checks:

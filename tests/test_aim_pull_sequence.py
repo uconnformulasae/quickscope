@@ -52,7 +52,7 @@ def pull_env(tmp_path, monkeypatch, fake_keepalive):
 def _record_downloads(monkeypatch, hub, *, fail: bool = False):
     sizes: list[int] = []
 
-    def _fake_download(filename, dest_dir, expected_size=0):
+    def _fake_download(filename, dest_dir, expected_size=0, on_progress=None):
         keepalive = FakeKeepalive.instances[-1]
         hub.calls.append(
             f"download:{filename}:keepalive={'on' if keepalive.started and not keepalive.stopped else 'off'}"
@@ -124,7 +124,7 @@ def test_pull_proceeds_without_keepalive_when_udp_unavailable(monkeypatch, pull_
     hub = pull_env
     downloads: list[str] = []
 
-    def _fake_download(filename, dest_dir, expected_size=0):
+    def _fake_download(filename, dest_dir, expected_size=0, on_progress=None):
         downloads.append(filename)
         path = dest_dir / filename
         path.write_bytes(b"x" * 500)

@@ -1,11 +1,7 @@
-"""Executable record of bugs found in the codebase audit.
+"""Regression guards for bugs found in an earlier codebase audit.
 
-Each test asserts the *correct* behavior and is marked ``xfail(strict=True)``:
-
-* today it fails (xfail), so the suite stays green and the bug is documented;
-* the moment someone fixes the bug it XPASSes, ``strict`` turns that into a
-  failure, and the fix is forced to remove the marker -- so the test becomes a
-  permanent regression guard instead of rotting.
+Each test asserts the *correct* behavior for a bug that has since been fixed,
+so a regression fails the suite. None of them are marked ``xfail``.
 
 Nothing here modifies application code.
 """
@@ -203,5 +199,6 @@ def test_garbage_upload_is_rejected_not_stored_as_an_empty_session():
             "/api/upload",
             files={"file": ("broken.xrk", b"\x00not an xrk" * 100, "application/octet-stream")},
         )
-        assert res.status_code >= 400
+        assert res.status_code == 400
+        assert res.json()["detail"] == "Not a valid XRK/XRZ file"
         assert c.get("/api/sessions").json() == []

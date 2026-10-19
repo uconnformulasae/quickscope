@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import itertools
-import os
 import struct
-from pathlib import Path
 from unittest.mock import patch
 
-import aim_pcapng
 import pytest
+
+from conftest import aim_capture_stream
 
 from services.aim_connector import (
     _BATCH_PAYLOAD_BYTES,
@@ -307,18 +306,6 @@ def test_receive_file_data_multi_batch_with_replay_yields_exact_file():
     assert acks and acks[0] == 600
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _find_capture(name: str) -> Path:
-    """Locate a Wireshark capture (large, never committed); skip the test if absent."""
-    roots = [os.environ.get("QUICKSCOPE_AIM_CAPTURES", ""), _REPO_ROOT, Path.home() / "Downloads"]
-    for root in roots:
-        if root and (Path(root) / name).is_file():
-            return Path(root) / name
-    pytest.skip(f"{name} not present (set QUICKSCOPE_AIM_CAPTURES)")
-
-
 def _stcp_4byte_values(stream: bytes) -> list[int]:
     return [
         struct.unpack("<I", frame.payload)[0]
@@ -345,15 +332,15 @@ def _iter_frames(stream: bytes):
 
 
 def test_wireshark_a0116_capture_uses_cumulative_progress_acks():
-    download = aim_pcapng.largest_stream(_find_capture("116CaptureWireshark.pcapng"))
+    client_stream = aim_capture_stream("116CaptureWireshark.pcapng", client_to_server=True)
 
-    ack_values = _stcp_4byte_values(download.reassemble(client_to_server=True))
+    ack_values = _stcp_4byte_values(client_stream)
 
     assert ack_values == [0, 982320, 1964640, 0]
 
 
 def _load_pcap_server_stream(name: str = "116CaptureWireshark.pcapng") -> bytes:
-    return aim_pcapng.largest_stream(_find_capture(name)).reassemble(client_to_server=False)
+    return aim_capture_stream(name)
 
 
 class _FixedChunkReplaySocket:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from main import app
+from services import settings_store
 
 client = TestClient(app)
 
@@ -12,13 +13,13 @@ client = TestClient(app)
 def test_list_sessions():
     res = client.get("/api/sessions")
     assert res.status_code == 200
-    assert isinstance(res.json(), list)
+    assert res.json() == []  # isolated, empty data dir
 
 
 def test_settings():
     res = client.get("/api/settings")
     assert res.status_code == 200
-    assert isinstance(res.json(), dict)
+    assert res.json() == settings_store.DEFAULTS
 
 
 def test_channels_without_loaded_session():
