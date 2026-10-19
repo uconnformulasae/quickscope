@@ -56,7 +56,7 @@ def _setup_pull_mocks(
     monkeypatch.setattr("routes.sessions.get_aim_primary_hub", lambda: hub)
     monkeypatch.setattr("routes.sessions.AimKeepalive", FakeKeepalive)
 
-    def _fake_download(filename: str, dest_dir, expected_size: int = 0):
+    def _fake_download(filename: str, dest_dir, expected_size: int = 0, on_progress=None):
         path = dest_dir / filename
         path.write_bytes(b"x" * 500)
         return path
@@ -66,7 +66,7 @@ def _setup_pull_mocks(
         _fake_download,
     )
 
-    def _fake_parse(path):
+    def _fake_parse(path, *_args, **_kwargs):
         class _Log:
             metadata = {
                 "Vehicle": "V",
@@ -80,9 +80,9 @@ def _setup_pull_mocks(
 
         return _Log()
 
-    monkeypatch.setattr("routes.sessions.parse_file", _fake_parse)
+    monkeypatch.setattr("services.aim_pull_indexer.parse_file", _fake_parse)
     monkeypatch.setattr(
-        "routes.sessions.extract_session_info",
+        "services.aim_pull_indexer.extract_session_info",
         lambda log, filename: {
             "metadata": {
                 "vehicle": "V",
