@@ -1,0 +1,203 @@
+import type React from 'react';
+import { evaluateFormula, type ChannelMap } from '../../lib/formula-engine';
+import { CHANNEL_META, IC_ENGINE_STATS, type Snapshot } from './live-channels';
+import { otherChannelEntries, type ChannelRef, type StatStyle, type WidgetConfig } from './layout-schema';
+import { fmt, directionLabel, Panel, BigStat, CoolStat, VehicleStat, BarRow, BoolPill, GForceCircle, type StatTone } from './widgets';
+
+// Default unit / precision for channels the layout doesn't override.
+const META = new Map<string, { unit: string; precision: number }>([
+  ...CHANNEL_META.map((m) => [m.name, m] as const),
+  ...IC_ENGINE_STATS.map((s) => [s.name, s] as const),
+]);
+
+/** Evaluate a formula against one snapshot (each channel as a one-sample series). */
+function evalExpr(expr: string, ch: Record<string, number>): number | undefined {
+  const map: ChannelMap = {};
+  for (const [name, v] of Object.entries(ch)) map[name] = { timestamps: [0], values: [v] };
+  const out = evaluateFormula(expr, map);
+  return typeof out === 'string' ? undefined : out.values[0];
+}
+
+export function readValue(ref: ChannelRef, ch: Record<string, number>): number | undefined {
+  let v = ref.expr ? evalExpr(ref.expr, ch) : ch[ref.name];
+  if (v === undefined || !Number.isFinite(v)) return undefined;
+  if (ref.invalidBelow !== undefined && v <= ref.invalidBelow) return undefined;
+  return v;
+}
+
+function displayValue(ref: ChannelRef, v: number | undefined): string {
+  if (ref.format === 'onoff') return v === undefined ? '—' : v >= 0.5 ? 'ENABLED' : 'DISABLED';
+  if (ref.format === 'direction') return directionLabel(v);
+  const precision = ref.precision ?? META.get(ref.name)?.precision ?? (v !== undefined && Math.abs(v) >= 100 ? 0 : 2);
+  return fmt(v, precision);
+}
+
+function unitOf(ref: ChannelRef): string {
+  if (ref.format === 'onoff' || ref.format === 'direction') return '';
+  return ref.unit ?? META.get(ref.name)?.unit ?? '';
+}
+
+/** Threshold color wins over the configured tone; on/off tiles go green when on. */
+function toneFor(ref: ChannelRef, v: number | undefined): StatTone | undefined {
+  if (v !== undefined) {
+    if (ref.crit !== undefined && v >= ref.crit) return 'red';
+    if (ref.warn !== undefined && v >= ref.warn) return 'amber';
+    if (ref.format === 'onoff') return v >= 0.5 ? 'emerald' : 'muted';
+  }
+  return ref.tone;
+}
+
+const MIN_TILE_PX: Record<StatStyle, number> = { big: 140, tile: 110, compact: 76 };
+
+// `columns` is a maximum: tiles still wrap once they'd shrink below `minPx`,
+// so a fixed 8-across strip doesn't crush itself on a narrow window.
+function gridStyle(columns: number | undefined, minPx: number): React.CSSProperties {
+  const track = columns
+    ? `max(${minPx}px, calc((100% - ${(columns - 1) * 0.5}rem) / ${columns}))`
+    : `${minPx}px`;
+  return {
+    display: 'grid',
+    gap: '0.5rem',
+    gridTemplateColumns: `repeat(auto-fill, minmax(${track}, 1fr))`,
+  };
+}
+
+export function WidgetRenderer({
+  widget,
+  latest,
+  totalReceived,
+  usedChannels,
+}: {
+  widget: WidgetConfig;
+  latest: Snapshot | null;
+  totalReceived: number;
+  /** Channels referenced by any widget in the layout (for `otherChannels`). */
+  usedChannels: Set<string>;
+}) {
+  const ch = latest?.channels ?? {};
+  const label = (ref: ChannelRef) => ref.label || ref.name || ref.expr || '—';
+  const note = widget.note && widget.type !== 'note' && (
+    <p className="mt-2 text-[10px] text-muted-foreground/70 leading-snug whitespace-pre-wrap">{widget.note}</p>
+  );
+  // With a snapshot in hand but nothing for any of this widget's channels,
+  // the source isn't transmitting (e.g. ECU unpowered) — say so instead of a wall of dashes.
+  const valueWidget = widget.type === 'stats' || widget.type === 'bars' || widget.type === 'boolGroup' || widget.type === 'gForce';
+  const noData = valueWidget && latest !== null && widget.channels.length > 0
+    && widget.channels.every((ref) => readValue(ref, ch) === undefined);
+  const rightSlot = noData ? (
+    <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0" title="The logger reports no value for any channel in this widget">
+      no data
+    </span>
+  ) : undefined;
+
+  let body: React.ReactNode;
+  switch (widget.type) {
+    case 'stats': {
+      const style = widget.style ?? 'tile';
+      body = (
+        <div style={gridStyle(widget.columns, MIN_TILE_PX[style])}>
+          {widget.channels.map((ref, i) => {
+            const v = readValue(ref, ch);
+            const props = { label: label(ref), value: displayValue(ref, v), unit: unitOf(ref), tone: toneFor(ref, v) };
+            return style === 'big' ? <BigStat key={i} {...props} />
+              : style === 'compact' ? <VehicleStat key={i} {...props} />
+              : <CoolStat key={i} {...props} />;
+          })}
+        </div>
+      );
+      break;
+    }
+    case 'bars':
+      body = (
+        <div className="space-y-2.5">
+          {widget.channels.map((ref, i) => {
+            const v = readValue(ref, ch);
+            const min = ref.min ?? 0;
+            const max = ref.max ?? 100;
+            const fraction = v === undefined || max <= min ? undefined : Math.max(0, Math.min(1, (v - min) / (max - min)));
+            return (
+              <BarRow key={i} label={label(ref)} value={displayValue(ref, v)} unit={unitOf(ref)} fraction={fraction} tone={toneFor(ref, v)} />
+            );
+          })}
+        </div>
+      );
+      break;
+    case 'boolGroup':
+      body = (
+        <div style={gridStyle(widget.columns, 130)} className="!gap-1.5">
+          {widget.channels.map((ref, i) => (
+            <BoolPill key={i} name={ref.name} label={label(ref)} kind={ref.kind ?? 'state'} value={readValue(ref, ch)} />
+          ))}
+        </div>
+      );
+      break;
+    case 'gForce': {
+      const [latRef, longRef] = widget.channels;
+      body = (
+        <GForceCircle
+          lat={latRef ? readValue(latRef, ch) : undefined}
+          long={longRef ? readValue(longRef, ch) : undefined}
+          range={latRef?.max ?? 2}
+        />
+      );
+      break;
+    }
+    case 'otherChannels': {
+      const entries = otherChannelEntries(ch, usedChannels);
+      body = entries.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground/60">
+          {latest
+            ? 'Every channel in this snapshot is already on the dashboard.'
+            : 'Channels the car sends that no other widget shows will appear here.'}
+        </p>
+      ) : (
+        <div style={gridStyle(widget.columns, 96)} className="!gap-1.5">
+          {entries.map(([name, val]) => {
+            const ref = { name };
+            return (
+              <div
+                key={name}
+                className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5"
+              >
+                <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={name}>{name}</p>
+                <p className="text-sm font-semibold tabular mt-0.5 text-foreground">
+                  {displayValue(ref, val)}
+                  {unitOf(ref) && <span className="text-[9px] text-muted-foreground font-normal ml-1">{unitOf(ref)}</span>}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      );
+      break;
+    }
+    case 'streamHealth':
+      body = (
+        <div className="space-y-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Snapshots received</span>
+            <span className="tabular font-semibold">{totalReceived}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Latest ts</span>
+            <span className="tabular font-semibold">{latest ? `${(latest.ts / 1000).toFixed(2)}s` : '—'}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Subsystem</span>
+            <span className="font-mono font-semibold">{latest?.subsystem || '—'}</span>
+          </div>
+        </div>
+      );
+      break;
+    case 'note':
+      body = <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">{widget.note || ''}</p>;
+      break;
+  }
+
+  return (
+    <Panel title={widget.title} tone={widget.emphasis ? 'primary' : undefined} rightSlot={rightSlot} className="h-full">
+      {body}
+      {note}
+    </Panel>
+  );
+}

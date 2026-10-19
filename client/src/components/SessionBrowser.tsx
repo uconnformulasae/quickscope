@@ -312,7 +312,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
               ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20'
               : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
           }`}
-          title={aimStatus?.connected ? 'Stream live data from the AiM device' : 'Open live view (AiM device not currently reachable)'}
+          title={aimStatus?.connected ? 'Stream live data from the AiM device' : 'Open live view (offline preview: AiM device not reachable)'}
         >
           <Activity className="w-3.5 h-3.5" />
           Live

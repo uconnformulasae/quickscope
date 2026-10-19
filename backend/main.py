@@ -11,7 +11,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes import sessions, analysis, settings, live
+from routes import sessions, analysis, settings, live, live_layouts
 from services import session_store
 from services.aim_live_logging import setup_aim_live_file_logging
 from services.aim_primary_hub import get_aim_primary_hub
@@ -59,6 +59,7 @@ app.include_router(sessions.router)
 app.include_router(analysis.router)
 app.include_router(settings.router)
 app.include_router(live.router)
+app.include_router(live_layouts.router)
 
 
 if __name__ == "__main__":

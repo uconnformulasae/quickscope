@@ -38,6 +38,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   const [reconnecting, setReconnecting] = useState(false);
   const [latest, setLatest] = useState<Snapshot | null>(null);
   const [totalReceived, setTotalReceived] = useState(0);
+  /** Wall-clock ms of the last snapshot (for "last values · Ns ago" while offline). */
+  const [receivedAt, setReceivedAt] = useState<number | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pausedRef = useRef(false);
@@ -46,6 +48,7 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     if (wsRef.current) return;
     setStatus('connecting');
     setError(null);
+    setTotalReceived(0);
     const ws = new WebSocket(liveWebSocketUrl());
     wsRef.current = ws;
 
@@ -60,6 +63,7 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
         channels: msg.channels,
       };
       setLatest(snap);
+      setReceivedAt(Date.now());
       setTotalReceived((n) => n + 1);
     };
 
@@ -117,11 +121,12 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     };
   }, [deviceKey, connect]);
 
+  // Keeps `latest` so the dashboard can show the last values (dimmed) after
+  // a disconnect; the next connect starts the counters over.
   const disconnect = () => {
     closeLiveWebSocket(wsRef.current);
     wsRef.current = null;
-    setTotalReceived(0);
-    setLatest(null);
+    pausedRef.current = false;
     setStatus('idle');
   };
 
@@ -131,7 +136,7 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   };
 
   return {
-    status, device, error, reconnecting, latest, totalReceived,
+    status, device, error, reconnecting, latest, totalReceived, receivedAt,
     connect, disconnect, togglePause,
   };
 }

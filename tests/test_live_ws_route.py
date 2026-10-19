@@ -85,3 +85,24 @@ def test_live_ws_omits_raw_by_default_and_includes_it_with_raw_flag():
             assert payloads
             assert all("raw" in p for p in payloads)
             ws.send_text("stop")
+
+
+def test_live_ws_caches_seen_channel_names_for_the_offline_editor():
+    import time
+
+    from services import live_channel_cache
+
+    with patch("routes.live.get_aim_primary_hub", return_value=_FakeHub()):
+        with client.websocket_connect("/api/live/ws") as ws:
+            ws.receive_json()  # connected
+            ws.receive_json()  # first snapshot / batch
+            ws.send_text("stop")
+
+    # The cache write runs in a worker thread off the device pump.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not live_channel_cache.get("ev")["channels"]:
+        time.sleep(0.02)
+    cached = live_channel_cache.get("ev")
+    assert cached["channels"] == ["RPM"]
+    assert cached["vehicle"] == "CT17"
+    assert cached["serial"] == "123"
