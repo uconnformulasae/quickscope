@@ -20,7 +20,8 @@ Committed **text fixtures** (`captures/fixtures/*.txt`) are tshark TCP-follow ex
 | UDP discovery + `aim-ka` | `backend/services/aim_discovery.py`, `aim_keepalive.py` |
 | Primary TCP, hub lock | `backend/services/aim_primary_hub.py` |
 | Hello, enumeration, live poll, decode | `backend/services/aim_live.py`, `aim_live_layout.py` |
-| Session list + download TCP | `backend/services/aim_connector.py` |
+| Download on primary TCP | `AimLiveClient.download_file` (`aim_live.py`), `AimPrimaryHub.download_sessions` |
+| File receive state machine, fallback download TCP | `backend/services/aim_connector.py` (`AimFileReceiver`, `download_aim_session`) |
 | Live WebSocket API | `backend/routes/live.py` |
 
 ## Before merging protocol changes

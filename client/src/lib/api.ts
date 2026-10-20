@@ -70,6 +70,8 @@ export interface LocalSession {
   duration_s: number;
   lap_count: number;
   source: 'manual_upload' | 'aim_device';
+  /** Set for AiM pulls: metadata is filled in by background indexing after download. */
+  index_status?: AimIndexStatus;
   created_at: string;
   updated_at: string;
 }
@@ -152,7 +154,10 @@ export async function listAimSessions(): Promise<{ ok: boolean; sessions: AimSes
   return res.json();
 }
 
+export type AimIndexStatus = 'pending' | 'running' | 'ok' | 'failed';
+
 export interface AimPullProgress {
+  /** True only while the device is being read; indexing continues afterwards. */
   active: boolean;
   filenames: string[];
   file_index: number;
@@ -160,7 +165,8 @@ export interface AimPullProgress {
   filename: string;
   bytes_received: number;
   bytes_total: number;
-  phase: 'idle' | 'download' | 'parse';
+  phase: 'idle' | 'download';
+  indexing: Record<string, AimIndexStatus>;
 }
 
 export async function fetchAimPullProgress(): Promise<AimPullProgress> {
@@ -187,7 +193,7 @@ export interface AimPullResult {
   bytes: number;
   duration_s: number;
   session_id: string;
-  parse_ok: boolean;
+  index_status: AimIndexStatus;
   local_path: string;
 }
 

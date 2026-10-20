@@ -122,6 +122,13 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     return () => clearInterval(interval);
   }, [refreshSessions, checkAimStatus]);
 
+  const hasIndexingSessions = sessions.some(s => s.index_status === 'pending');
+  useEffect(() => {
+    if (!hasIndexingSessions) return;
+    const interval = setInterval(refreshSessions, 1500);
+    return () => clearInterval(interval);
+  }, [hasIndexingSessions, refreshSessions]);
+
   const handleAimPickerDownloaded = useCallback(() => {
     refreshSessions();
   }, [refreshSessions]);
@@ -606,7 +613,17 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
                   {/* Meta pills */}
                   <div className="hidden sm:flex items-center gap-2 flex-shrink-0 text-xs text-muted-foreground">
-                    <span className="tabular">{formatDuration(session.duration_s)}</span>
+                    {session.index_status === 'pending' ? (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary"
+                        title="Downloaded; reading laps and metadata in the background"
+                      >
+                        <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                        Indexing
+                      </span>
+                    ) : (
+                      <span className="tabular">{formatDuration(session.duration_s)}</span>
+                    )}
                     {session.lap_count > 0 && (
                       <span>{session.lap_count} laps</span>
                     )}

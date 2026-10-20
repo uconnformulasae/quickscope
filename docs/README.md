@@ -26,7 +26,8 @@ backend/
     aim_keepalive.py      # Periodic UDP aim-ka while primary TCP is open
     aim_primary_hub.py    # One primary TCP: live + session list
     aim_live.py           # Handshake, poll loop, snapshot decode
-    aim_connector.py      # Session list + download on primary / download TCP
+    aim_connector.py      # File receive state machine + fallback download TCP
+    aim_pull_indexer.py   # Background parse/metadata for pulled files
     aim_*_trace.py        # JSONL debug logs (live, download, pull)
 ```
 
