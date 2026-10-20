@@ -418,18 +418,6 @@ export interface LiveDeviceInfo {
   vehicle: string;
 }
 
-export interface LiveStatus {
-  reachable: boolean;
-  host: string;
-  device?: LiveDeviceInfo;
-}
-
-export async function fetchLiveStatus(): Promise<LiveStatus> {
-  const res = await fetch(`${API_BASE}/api/live/status`);
-  if (!res.ok) throw new Error(`Live status failed: ${res.status}`);
-  return res.json();
-}
-
 export type LiveSnapshotMessage = {
   type: 'snapshot';
   /** Monotonic per-connection snapshot counter; a jump means data was skipped. */

@@ -118,7 +118,7 @@ describe('SessionBrowser', () => {
     await screen.findByText('old.xrk');
 
     fireEvent.click(screen.getByText('old.xrk'));
-    await waitFor(() => expect(props.onSessionLoaded).toHaveBeenCalledWith(info, 'old', 'old.xrk'));
+    await waitFor(() => expect(props.onSessionLoaded).toHaveBeenCalledWith(info, 'old', 'old.xrk', 'manual_upload'));
   });
 
   it('loads a session with the keyboard', async () => {
@@ -301,7 +301,7 @@ describe('SessionBrowser', () => {
     FakeXHR.last.onload?.();
 
     await waitFor(() =>
-      expect(props.onSessionLoaded).toHaveBeenCalledWith({ durationMs: 5, sessionId: 'fresh-id' }, 'fresh-id', 'fresh.xrk'),
+      expect(props.onSessionLoaded).toHaveBeenCalledWith({ durationMs: 5, sessionId: 'fresh-id' }, 'fresh-id', 'fresh.xrk', 'manual_upload'),
     );
     expect(screen.queryByText(/Uploading/)).toBeNull();
   });

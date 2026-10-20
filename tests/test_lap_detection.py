@@ -30,6 +30,47 @@ def test_gps_loop_detection_finds_each_completed_lap():
         assert (l["endTime"] - l["startTime"]) == pytest.approx(30_000, abs=1_500)
 
 
+def _paddock_start_session(n_laps=3, lap_s=30, hz=10, park_s=60):
+    """Logger powered on in a paddock ~200 m from the track: park, drive to
+    the circuit, lap it, then drive back. The paddock is never revisited
+    during the laps."""
+    ts_lap, lat_lap, lon_lap = circuit_samples(n_laps=n_laps, lap_s=lap_s, hz=hz)
+    lat0, lon0 = lat_lap[0], lon_lap[0]
+    pit_lat, pit_lon = lat0 - 0.0018, lon0  # ~200 m south of the track
+    ts, lat, lon = [], [], []
+    t = 0
+    step = int(1000 / hz)
+    for _ in range(park_s * hz):  # parked
+        ts.append(t); lat.append(pit_lat); lon.append(pit_lon); t += step
+    drive = 20 * hz  # 20 s out-lap to the circuit
+    for i in range(drive):
+        f = i / drive
+        ts.append(t); lat.append(pit_lat + (lat0 - pit_lat) * f); lon.append(pit_lon); t += step
+    for la, lo in zip(lat_lap, lon_lap):
+        ts.append(t); lat.append(la); lon.append(lo); t += step
+    for i in range(drive):  # in-lap back to the paddock
+        f = i / drive
+        ts.append(t); lat.append(lat0 + (pit_lat - lat0) * f); lon.append(pit_lon); t += step
+    return ts, lat, lon
+
+
+def test_gps_detection_from_a_paddock_start_finds_the_track_laps():
+    """The first fix is the pit box, which the car never returns to while
+    lapping -- using it as start/finish used to find zero laps."""
+    ts, lat, lon = _paddock_start_session(n_laps=3, lap_s=30)
+    laps = ld.from_gps(ts, lat, lon)
+    assert len(laps) >= 2
+    for l in laps:
+        assert (l["endTime"] - l["startTime"]) == pytest.approx(30_000, abs=1_500)
+
+
+def test_gps_detection_does_not_count_the_out_lap_as_lap_1():
+    ts, lat, lon = _paddock_start_session(n_laps=3, lap_s=30, park_s=300)
+    laps = ld.from_gps(ts, lat, lon)
+    # Parked 5 min + 20 s out-lap: no lap may start before the car reached the track.
+    assert laps and laps[0]["startTime"] >= 300_000
+
+
 def test_gps_detection_needs_departure_before_return():
     """A parked car jittering near the start line is not doing laps."""
     n = 300
@@ -60,9 +101,21 @@ def test_beacon_rising_edges_become_laps():
     ts = [i * 1000 for i in range(100)]
     values = [1.0 if i % 25 == 0 and i else 0.0 for i in range(100)]
     laps = ld.from_beacon(ts, values)
-    assert [l["source"] for l in laps] == ["beacon_auto"] * 3
-    assert [l["endTime"] for l in laps] == [25_000, 50_000, 75_000]
-    assert laps[0]["startTime"] == 0
+    assert [l["source"] for l in laps] == ["beacon_auto"] * 2
+    assert [(l["startTime"], l["endTime"]) for l in laps] == [(25_000, 50_000), (50_000, 75_000)]
+
+
+def test_beacon_time_before_the_first_pulse_is_the_out_lap_not_lap_1():
+    """Logger on in the pits at t=0, first line crossing 6 min later: lap 1
+    must run pulse 1 -> pulse 2, not boot -> pulse 1."""
+    ts = [i * 1000 for i in range(600)]
+    pulses = {360, 400, 440}
+    values = [1.0 if i in pulses else 0.0 for i in range(600)]
+    laps = ld.from_beacon(ts, values)
+    assert [(l["lapNumber"], l["startTime"], l["endTime"]) for l in laps] == [
+        (1, 360_000, 400_000),
+        (2, 400_000, 440_000),
+    ]
 
 
 def test_beacon_flat_signal_and_short_signal_yield_nothing():
@@ -80,7 +133,7 @@ def test_fallback_chain_uses_gps_then_beacon_then_none():
     bval = [1.0 if i % 25 == 0 and i else 0.0 for i in range(100)]
     beacon_log = make_log({"Lap Beacon": (bts, bval, "")})
     laps, source = _detect(beacon_log)
-    assert source == "beacon_auto" and len(laps) == 3
+    assert source == "beacon_auto" and len(laps) == 2
 
     laps, source = _detect(make_log({"RPM": ([0, 10], [1.0, 2.0], "")}))
     assert (laps, source) == ([], "none")

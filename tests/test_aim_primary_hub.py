@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from services.aim_primary_hub import AimPrimaryHub
+from services.aim_primary_hub import AimPrimaryHub, LiveBusyError
 
 
 def test_cancel_during_connect_releases_lock(monkeypatch):
@@ -48,7 +48,9 @@ def test_failed_connect_releases_lock_and_propagates(monkeypatch):
     assert hub._live_active is False
 
 
-def test_second_acquire_waits_for_first_then_succeeds(monkeypatch):
+def test_second_live_viewer_is_rejected_instead_of_hanging(monkeypatch):
+    """A second live tab used to queue on the lock forever, then silently take
+    over the device when the first tab closed."""
     async def scenario():
         hub = AimPrimaryHub()
         sentinel = object()
@@ -58,13 +60,27 @@ def test_second_acquire_waits_for_first_then_succeeds(monkeypatch):
 
         monkeypatch.setattr(hub, "ensure_primary", ok)
         assert await hub.acquire_for_live("h") is sentinel
-        assert hub._lock.locked()
 
-        second = asyncio.create_task(hub.acquire_for_live("h"))
-        await asyncio.sleep(0.05)
-        assert not second.done()
+        with pytest.raises(LiveBusyError):
+            await asyncio.wait_for(hub.acquire_for_live("h"), 1)
 
         await hub.release_live()
-        assert await asyncio.wait_for(second, 1) is sentinel
+        assert await hub.acquire_for_live("h") is sentinel  # free again
+        await hub.release_live()
+        assert not hub._lock.locked()
+
+    asyncio.run(scenario())
+
+
+def test_live_acquire_times_out_while_a_list_holds_the_lock(monkeypatch):
+    monkeypatch.setattr("services.aim_primary_hub.LOCK_WAIT_S", 0.05)
+
+    async def scenario():
+        hub = AimPrimaryHub()
+        await hub._lock.acquire()  # e.g. a session list in progress
+        with pytest.raises(ConnectionError, match="busy"):
+            await hub.acquire_for_live("h")
+        assert hub._live_active is False
+        hub._lock.release()
 
     asyncio.run(scenario())

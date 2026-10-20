@@ -23,6 +23,16 @@ logger = logging.getLogger(__name__)
 
 _hub: Optional[AimPrimaryHub] = None
 
+# Longest a live viewer waits for a session list / download hand-off to free
+# the primary TCP before giving up with an error.
+LOCK_WAIT_S = 30.0
+
+_LIVE_BUSY_MSG = "Live view is already open in another window. Close it first."
+
+
+class LiveBusyError(ConnectionError):
+    """Another client already holds the live stream."""
+
 
 def get_aim_primary_hub() -> AimPrimaryHub:
     global _hub
@@ -35,22 +45,9 @@ class AimPrimaryHub:
     """One primary ``AimLiveClient`` TCP; exclusive lock for live vs list."""
 
     def __init__(self) -> None:
-        self._loop: asyncio.AbstractEventLoop | None = None
         self._lock = asyncio.Lock()
         self._client: AimLiveClient | None = None
         self._live_active = False
-
-    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
-        self._loop = loop
-
-    def can_run_async(self) -> bool:
-        return self._loop is not None and self._loop.is_running()
-
-    def run_sync(self, coro):  # noqa: ANN001
-        if self._loop is None:
-            raise RuntimeError("AiM primary hub has no event loop")
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=120)
 
     def resolve_host(self, host: str | None) -> str:
         """Explicit host, else cached discovery IP, else settings/default."""
@@ -115,7 +112,19 @@ class AimPrimaryHub:
         *,
         trace: AimLiveTrace | None = None,
     ) -> AimLiveClient:
-        await self._lock.acquire()
+        # Only one live viewer at a time. A second one gets an immediate error
+        # rather than queueing on the lock until the first viewer closes.
+        if self._live_active:
+            raise LiveBusyError(_LIVE_BUSY_MSG)
+        try:
+            await asyncio.wait_for(self._lock.acquire(), timeout=LOCK_WAIT_S)
+        except asyncio.TimeoutError:
+            raise ConnectionError(
+                "AiM device is busy (session list or download in progress). Try again."
+            ) from None
+        if self._live_active:
+            self._lock.release()
+            raise LiveBusyError(_LIVE_BUSY_MSG)
         try:
             self._live_active = True
             return await self.ensure_primary(host, trace=trace)

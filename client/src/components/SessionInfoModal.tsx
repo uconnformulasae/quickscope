@@ -1,6 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { X } from 'lucide-react';
 import { renameSession } from '../lib/api';
+import type { LocalSession } from '../lib/api';
+
+const SOURCE_LABELS: Record<LocalSession['source'], string> = {
+  manual_upload: 'Manual upload',
+  aim_device: 'AiM device',
+};
 
 interface SessionInfoModalProps {
   sessionId: string;
@@ -16,7 +22,7 @@ interface SessionInfoModalProps {
   durationMs: number;
   lapCount: number;
   fileName: string;
-  source?: string;
+  source: LocalSession['source'];
   onClose: () => void;
   onFileRenamed?: (newFileName: string) => void;
 }
@@ -101,7 +107,7 @@ export function SessionInfoModal({
     { label: 'Championship', key: 'championship', value: metadata.championship, editable: false },
     { label: 'Duration', key: 'duration', value: formatDuration(durationMs), editable: false },
     { label: 'Laps', key: 'laps', value: lapCount > 0 ? String(lapCount) : '\u2014', editable: false },
-    { label: 'Source', key: 'source', value: source || 'Manual upload', editable: false },
+    { label: 'Source', key: 'source', value: SOURCE_LABELS[source], editable: false },
   ];
 
   return (

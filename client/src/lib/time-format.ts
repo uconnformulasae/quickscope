@@ -16,29 +16,28 @@ function isValidDate(year: number, month: number, day: number): boolean {
   return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
 }
 
+/** `a/b/yyyy` read month-first (US), falling back to day-first only when the
+ *  month-first reading is impossible (e.g. "25/10/2026"). */
+function monthFirst(a: string, b: string, year: string): { year: number; month: number; day: number } | null {
+  const mdy = { year: +year, month: +a, day: +b };
+  if (isValidDate(mdy.year, mdy.month, mdy.day)) return mdy;
+  const dmy = { year: +year, month: +b, day: +a };
+  if (isValidDate(dmy.year, dmy.month, dmy.day)) return dmy;
+  return null;
+}
+
+/** Slash/dash dates are month-first, so "05/10/2026" is 10 May. */
 function parseDateParts(dateStr: string): { year: number; month: number; day: number } | null {
   const trimmed = dateStr.trim();
   const slash = trimmed.match(DATE_SLASH);
-  if (slash) {
-    const dmy = { year: +slash[3], month: +slash[2], day: +slash[1] };
-    if (isValidDate(dmy.year, dmy.month, dmy.day)) return dmy;
-    const mdy = { year: +slash[3], month: +slash[1], day: +slash[2] };
-    if (isValidDate(mdy.year, mdy.month, mdy.day)) return mdy;
-    return null;
-  }
+  if (slash) return monthFirst(slash[1], slash[2], slash[3]);
   const iso = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (iso) {
     const parts = { year: +iso[1], month: +iso[2], day: +iso[3] };
     return isValidDate(parts.year, parts.month, parts.day) ? parts : null;
   }
   const dash = trimmed.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-  if (dash) {
-    const dmy = { year: +dash[3], month: +dash[2], day: +dash[1] };
-    if (isValidDate(dmy.year, dmy.month, dmy.day)) return dmy;
-    const mdy = { year: +dash[3], month: +dash[1], day: +dash[2] };
-    if (isValidDate(mdy.year, mdy.month, mdy.day)) return mdy;
-    return null;
-  }
+  if (dash) return monthFirst(dash[1], dash[2], dash[3]);
   return null;
 }
 

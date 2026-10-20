@@ -20,7 +20,6 @@ from services.aim_connector import (
     _open_device_socket,
     _parse_discovery_reply,
     _send_and_await_frame,
-    _send_and_recv,
     discover_device,
     download_aim_session,
     parse_aim_session_csv_rows,
@@ -164,27 +163,7 @@ def test_open_device_socket_raises_last_error_when_all_fail(connect_socket):
     assert all(s.closed for s in connect_socket.instances)
 
 
-# ── _send_and_recv / _send_and_await_frame ─────────────────────────────────
-
-
-def test_send_and_recv_collects_continuation_until_idle():
-    sock = ScriptedSocket([b"abc", b"def", socket.timeout()])
-
-    assert _send_and_recv(sock, b"MSG", "label", read_timeout=1.5) == b"abcdef"
-    assert sock.sent == [b"MSG"]
-    assert sock.timeouts == [1.5, 0.5]
-
-
-def test_send_and_recv_stops_on_peer_close():
-    sock = ScriptedSocket([b"abc", b""])
-
-    assert _send_and_recv(sock, b"MSG", "label") == b"abc"
-
-
-def test_send_and_recv_returns_empty_on_timeout():
-    sock = ScriptedSocket([socket.timeout()])
-
-    assert _send_and_recv(sock, b"MSG", "label") == b""
+# ── _send_and_await_frame ─────────────────────────────────────────────────
 
 
 def test_send_and_await_frame_returns_once_frame_complete():

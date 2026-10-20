@@ -1,8 +1,9 @@
 """``/api/aim/pull`` must follow the RS3 connection sequence (QS_Pull_241/242 vs RS3_PULL_*).
 
 List on the primary TCP -> release it -> aim-ka keep-alive for the whole
-download loop -> stop keep-alive. Never open the legacy list TCP: the device
-ignores it while the primary is open and the pull stalls ~37 s.
+download loop -> stop keep-alive. The list must come from the primary TCP:
+the device ignores a second list TCP while the primary is open and the pull
+stalls ~37 s.
 """
 
 from __future__ import annotations
@@ -34,13 +35,6 @@ def pull_env(tmp_path, monkeypatch, fake_keepalive):
         lambda log, filename: {"metadata": {}, "durationMs": 0, "lapCount": 0},
     )
     monkeypatch.setattr("routes.sessions.parse_file", lambda path, *a, **k: object())
-
-    def _legacy_list_forbidden():
-        raise AssertionError("pull must not open the legacy session-list TCP")
-
-    monkeypatch.setattr(
-        "routes.sessions.aim_connector.list_aim_sessions", _legacy_list_forbidden
-    )
 
     hub = FakePullHub([{"filename": "a_0242.xrz", "size": 500, "date": "", "hour": ""}])
     monkeypatch.setattr("routes.sessions.get_aim_primary_hub", lambda: hub)

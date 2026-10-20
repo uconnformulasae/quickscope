@@ -1,6 +1,7 @@
 /**
  * DerivedChannelDialog — Create or edit a derived/computed channel.
- * Supports formula mode (math expression) and JavaScript mode (function body).
+ * Supports formula mode (math expression, evaluated client-side) and Python
+ * mode (script evaluated by the backend's restricted sandbox).
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, FlaskConical, Code2, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Search } from 'lucide-react';

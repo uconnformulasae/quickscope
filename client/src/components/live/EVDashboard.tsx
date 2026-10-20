@@ -9,6 +9,12 @@ import { fmt, directionLabel, Panel, BigStat, CoolStat, VehicleStat } from './wi
 //   bg-[hsl(225,30%,95%)] dark:bg-card / border-[hsl(225,25%,85%)] dark:border-border/50
 // ────────────────────────────────────────────────────────────────────────────
 
+/** Pack power in kW, or undefined until both inputs have been received. */
+function packPowerKw(volts: number | undefined, amps: number | undefined): number | undefined {
+  if (volts === undefined || amps === undefined) return undefined;
+  return (volts * amps) / 1000;
+}
+
 export function EVDashboard({
   latest,
   totalReceived,
@@ -27,7 +33,7 @@ export function EVDashboard({
           <BigStat label="SOC"          value={fmt(ch['State_of_Charge'], 1)}  unit="%"  tone="emerald" />
           <BigStat
             label="Pack Power"
-            value={fmt(((ch['Pack_Voltage'] ?? 0) * (ch['Pack_Current'] ?? 0)) / 1000, 1)}
+            value={fmt(packPowerKw(ch['Pack_Voltage'], ch['Pack_Current']), 1)}
             unit="kW"
             tone="amber"
           />
@@ -36,9 +42,14 @@ export function EVDashboard({
           <span>Max V <span className="tabular text-foreground">{PACK_V_MAX}</span> · Nom <span className="tabular text-foreground">{PACK_V_NOMINAL}</span></span>
           <span>I limit <span className="tabular text-foreground">{fmt(ch['BMS_Disch_Lim'], 0)}</span> A</span>
           <span>Min cell V <span className="tabular text-foreground">{fmt(ch['Min_Cell_Voltage'], 3)}</span></span>
-          <span>Disch <span className={`tabular ${ch['BMS_Disch_Enable'] ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
-            {ch['BMS_Disch_Enable'] ? 'ENABLED' : 'DISABLED'}
-          </span></span>
+          <span>Disch {ch['BMS_Disch_Enable'] === undefined ? (
+            // No reading yet (disconnected / not in this layout) -- not an alarm.
+            <span className="tabular text-muted-foreground">—</span>
+          ) : (
+            <span className={`tabular ${ch['BMS_Disch_Enable'] ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+              {ch['BMS_Disch_Enable'] ? 'ENABLED' : 'DISABLED'}
+            </span>
+          )}</span>
         </div>
       </Panel>
 

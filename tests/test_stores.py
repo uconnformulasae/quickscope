@@ -18,7 +18,7 @@ def test_add_get_update_delete_roundtrip():
     )
     assert session_store.get_session(entry["id"]) == entry
     assert session_store.find_by_filename("run.xrk")["id"] == entry["id"]
-    assert session_store.find_by_aim_session_id("run")["id"] == entry["id"]  # defaults to stem
+    assert entry["aim_session_id"] == "run"  # defaults to stem
 
     updated = session_store.update_session(entry["id"], track_name="Pitt Race")
     assert updated["track_name"] == "Pitt Race"
@@ -219,6 +219,17 @@ def test_update_drops_legacy_keys_already_in_the_file():
     out = settings_store.update({"aim_device_port": 2005})
     assert "railway_url" not in out
     assert "railway_url" not in json.loads(settings_store.SETTINGS_FILE.read_text())
+
+
+@pytest.mark.parametrize("contents", ["", "{not json", "[1, 2]"])
+def test_update_recovers_from_a_corrupt_settings_file(contents):
+    """PUT /api/settings used to 500 on a damaged file; it must recover the
+    same way load() does: keep the bad file aside and start from defaults."""
+    settings_store.SETTINGS_FILE.write_text(contents)
+    out = settings_store.update({"aim_device_ip": "3.3.3.3"})
+    assert out == {**settings_store.DEFAULTS, "aim_device_ip": "3.3.3.3"}
+    assert json.loads(settings_store.SETTINGS_FILE.read_text()) == out
+    assert list(settings_store.DATA_DIR.glob("settings.json.*.corrupt"))
 
 
 # ─── ring logs (upload_log / aim_pull_log share RingLog) ─────────────────────

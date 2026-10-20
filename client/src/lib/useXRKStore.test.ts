@@ -69,7 +69,7 @@ describe('basic state', () => {
   it('toggles a channel on and off', () => {
     const { result } = setup();
     act(() => result.current.toggleChannel(1, '#f00'));
-    expect(result.current.state.activeChannels).toEqual([{ channelId: 1, color: '#f00', visible: true }]);
+    expect(result.current.state.activeChannels).toEqual([{ channelId: 1, color: '#f00' }]);
     act(() => result.current.toggleChannel(1, '#f00'));
     expect(result.current.state.activeChannels).toEqual([]);
   });

@@ -80,14 +80,6 @@ def find_by_filename(filename: str) -> Optional[dict]:
     return None
 
 
-def find_by_aim_session_id(aim_session_id: str) -> Optional[dict]:
-    with _lock:
-        for s in _load():
-            if s.get("aim_session_id") == aim_session_id:
-                return s
-    return None
-
-
 def add_session(
     filename: str,
     source: str,

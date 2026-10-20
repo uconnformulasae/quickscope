@@ -137,10 +137,10 @@ describe('useLiveStream', () => {
     expect(result.current.error).toBe('WebSocket connection failed');
   });
 
-  it('returns to idle when the socket closes cleanly', () => {
+  it('returns to idle when the socket closes cleanly before the device connects', () => {
+    // A close after 'connected' reconnects instead (see useLiveStream.test.tsx).
     const { result } = renderHook(() => useLiveStream());
     const ws = latestWs();
-    ws.receive({ type: 'connected', device });
     ws.receive({ type: 'status', state: 'reconnecting' });
     act(() => ws.onclose?.());
     expect(result.current.status).toBe('idle');

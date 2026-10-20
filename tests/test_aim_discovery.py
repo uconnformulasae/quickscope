@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import threading
 
 import pytest
 
@@ -245,3 +246,47 @@ def test_parse_discovery_text_ignores_non_printable_device_name():
     data[0x14:0x17] = b"\x01\x02\x03"
 
     assert aim_discovery.parse_discovery_text("10.0.0.1", bytes(data))["device_name"] == ""
+
+
+@pytest.mark.parametrize("data", [b"", b"\xff\xfe\x00garbage", bytes(range(256))])
+def test_parse_discovery_text_leaves_fields_empty_on_junk(data):
+    info = aim_discovery.parse_discovery_text("10.0.0.9", data)
+    assert info["ip"] == "10.0.0.9"
+    assert info["model"] == info["serial"] == info["vehicle"] == ""
+
+
+# Shape of a real EVO5 reply: name field at 0x14..0x54, SSID text further in.
+_REPLY = (
+    b"\xec\x00\x00\x00" + b"\x00" * 16
+    + b"UConn EV".ljust(0x40, b"\x00")
+    + b"\x00" * 40
+    + b"AiM-EVO5-00740-UConn-EV" + b"\x00" * 97
+)
+
+
+def test_udp_probe_round_trip_over_a_real_socket(monkeypatch):
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind(("127.0.0.1", 0))
+    server.settimeout(2.0)
+    monkeypatch.setattr(aim_discovery, "DISCOVERY_PORT", server.getsockname()[1])
+
+    received: list[bytes] = []
+
+    def answer_once():
+        data, addr = server.recvfrom(64)
+        received.append(data)
+        server.sendto(_REPLY, addr)
+
+    t = threading.Thread(target=answer_once)
+    t.start()
+    try:
+        assert aim_discovery.udp_probe("127.0.0.1", timeout=2.0) == _REPLY
+    finally:
+        t.join()
+    assert received == [aim_discovery.DISCOVERY_MAGIC]
+
+    # Nobody answers the second probe: None, not an exception.
+    try:
+        assert aim_discovery.udp_probe("127.0.0.1", timeout=0.05) is None
+    finally:
+        server.close()

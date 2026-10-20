@@ -34,6 +34,7 @@ export function ExportDialog({
     return ids;
   });
   const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // Build the full channel list (session + derived), only those with data
   const allChannels = useMemo<ExportChannel[]>(() => {
@@ -103,6 +104,7 @@ export function ExportDialog({
   const handleExport = useCallback(async () => {
     if (selectedIds.size === 0) return;
     setIsExporting(true);
+    setExportError(null);
 
     try {
       // Get selected channel names 
@@ -129,6 +131,7 @@ export function ExportDialog({
       onClose();
     } catch (err) {
       console.error('Export failed:', err);
+      setExportError(err instanceof Error ? err.message : 'Export failed');
     } finally {
       setIsExporting(false);
     }
@@ -221,7 +224,9 @@ export function ExportDialog({
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-border flex-shrink-0 bg-muted/10">
           <div className="text-xs text-muted-foreground">
-            {totalRows > 0 ? (
+            {exportError ? (
+              <span className="text-red-500" role="alert">Export failed: {exportError}</span>
+            ) : totalRows > 0 ? (
               <>~{totalRows.toLocaleString()} rows</>
             ) : (
               'Select channels to export'

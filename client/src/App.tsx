@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus } from './lib/api';
+import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import type { DerivedChannel } from './lib/useXRKStore';
@@ -65,6 +65,7 @@ export default function App() {
 
   // Session ID from backend
   const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
+  const [loadedSessionSource, setLoadedSessionSource] = useState<LocalSession['source']>('manual_upload');
 
   // Drag over state for chart area
   const [isDragOver, setIsDragOver] = useState(false);
@@ -158,8 +159,11 @@ export default function App() {
   }, [setSession, setProgress]);
 
   /** Called when session browser loads a session */
-  const handleSessionLoaded = useCallback(async (info: SessionInfo, sessionId: string, fileName: string) => {
+  const handleSessionLoaded = useCallback(async (
+    info: SessionInfo, sessionId: string, fileName: string, source: LocalSession['source'],
+  ) => {
     setLoadedSessionId(sessionId);
+    setLoadedSessionSource(source);
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
@@ -192,6 +196,7 @@ export default function App() {
       });
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
       setLoadedSessionId(info.sessionId ?? null);
+      setLoadedSessionSource('manual_upload');
       await buildAndSetSession(info, file.name);
     } catch (err) {
       setError(`Failed to upload XRK file: ${err instanceof Error ? err.message : String(err)}`);
@@ -529,6 +534,7 @@ export default function App() {
           durationMs={session.durationMs}
           lapCount={Math.max(0, session.lapMarkers.length - 1)}
           fileName={state.fileName}
+          source={loadedSessionSource}
           onClose={() => setSessionInfoOpen(false)}
           onFileRenamed={handleFileRenamed}
         />

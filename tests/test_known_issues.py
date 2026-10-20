@@ -1,9 +1,8 @@
 """Regression guards for bugs found in an earlier codebase audit.
 
-Each test asserts the *correct* behavior for a bug that has since been fixed,
-so a regression fails the suite. None of them are marked ``xfail``.
-
-Nothing here modifies application code.
+Each test asserts the *correct* behavior. The bugs have all been fixed, so
+these are ordinary passing tests now (none are ``xfail``); a failure here
+means one of those bugs has come back.
 """
 
 from __future__ import annotations
@@ -199,6 +198,6 @@ def test_garbage_upload_is_rejected_not_stored_as_an_empty_session():
             "/api/upload",
             files={"file": ("broken.xrk", b"\x00not an xrk" * 100, "application/octet-stream")},
         )
-        assert res.status_code == 400
+        assert res.status_code == 400  # rejected as bad input, not a 500 crash
         assert res.json()["detail"] == "Not a valid XRK/XRZ file"
         assert c.get("/api/sessions").json() == []

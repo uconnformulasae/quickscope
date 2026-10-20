@@ -31,6 +31,8 @@ def isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(session_store, "SESSIONS_DIR", sessions_dir)
     monkeypatch.setattr(settings_store, "DATA_DIR", data_dir)
     monkeypatch.setattr(settings_store, "SETTINGS_FILE", data_dir / "settings.json")
+    # Trace logs resolve their dirs from DATA_DIR at import time; keep them out
+    # of the real data dir too.
     monkeypatch.setattr(aim_live_trace, "_SESSION_DIR", data_dir / "logs" / "aim_live" / "sessions")
     monkeypatch.setattr(aim_download_trace, "_LOG_DIR", data_dir / "logs" / "aim_download")
     return data_dir

@@ -70,13 +70,8 @@ export const CHANNEL_META: ChannelMeta[] = [
   // External voltages / logger
   { name: 'External Voltage',   unit: 'V',   precision: 2 },
   { name: 'Logger Temperature', unit: '°C',  precision: 1 },
-  // GPS (channel #13, 56-byte struct at offset 168 of the live frame)
-  { name: 'GPS_Lat',            unit: '°',   precision: 6 },
-  { name: 'GPS_Lon',            unit: '°',   precision: 6 },
-  { name: 'GPS_Speed',          unit: 'kph', precision: 1 },
-  { name: 'GPS_Heading',        unit: '°',   precision: 1 },
-  { name: 'GPS_Altitude',       unit: 'm',   precision: 1 },
-  { name: 'GPS_Sats',           unit: '',    precision: 0 },
+  // No GPS entries: the live GPS struct (type 65536) isn't decoded by
+  // backend/services/aim_live_layout.py, so those channels never arrive.
 ];
 
 // Boolean / state channels from the AiM channel-config. Each carries 0/1

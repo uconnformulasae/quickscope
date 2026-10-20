@@ -10,7 +10,6 @@ import { fetchChannelData } from './api';
 export interface ActiveChannel {
   channelId: number;
   color: string;
-  visible: boolean;
 }
 
 export interface TimeRange {
@@ -78,6 +77,18 @@ const DERIVED_CHART_COLORS = [
 ];
 
 let derivedIdCounter = 10000;
+
+/** State that refers to the loaded session's channels or timeline, and so
+ *  must not survive a switch to another session. */
+const SESSION_SCOPED_RESET = {
+  activeChannels: [],
+  derivedChannels: [],
+  viewRange: null,
+  cursorTime: null,
+  histogramChannelId: null,
+  xyXChannelId: null,
+  xyYChannelId: null,
+} satisfies Partial<AppState>;
 
 /** Build channel data map for formula/python evaluation.
  *  Uses a lazy Proxy cache to avoid duplicating large sample arrays until accessed. */
@@ -180,16 +191,34 @@ const BACKEND_URL =
   (typeof window !== 'undefined' && window.__QUICKSCOPE_BACKEND__) ||
   `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
 
+/** Channel names a Python script refers to. Scripts read channels as
+ *  `channels['Name']` (see DerivedChannelDialog), so a name counts as used
+ *  when it appears as a quoted string literal. */
+function pythonReferencedNames(expression: string, names: Iterable<string>): string[] {
+  const out: string[] = [];
+  for (const name of names) {
+    if (expression.includes(`'${name}'`) || expression.includes(`"${name}"`)) out.push(name);
+  }
+  return out;
+}
+
 /** Evaluate a Python expression via the backend */
 async function computePythonSamples(
   expression: string,
   channelData: Record<string, { timestamps: number[]; values: number[] }>,
 ): Promise<ChannelSample[] | string> {
+  // Send only the channels the script uses. Serialising the whole lazy map
+  // would materialise every loaded channel into one huge JSON body.
+  const payload: Record<string, { timestamps: number[]; values: number[] }> = {};
+  for (const name of pythonReferencedNames(expression, Object.keys(channelData))) {
+    const data = channelData[name];
+    if (data) payload[name] = data;
+  }
   try {
     const resp = await fetch(`${BACKEND_URL}/api/derived/evaluate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expression, channels: channelData }),
+      body: JSON.stringify({ expression, channels: payload }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({ message: resp.statusText }));
@@ -251,9 +280,7 @@ export function useAppState() {
       isLoading: false,
       loadError: null,
       parseProgress: null,
-      activeChannels: [],
-      derivedChannels: [],
-      viewRange: null,
+      ...SESSION_SCOPED_RESET,
     }));
     setDerivedSamplesMap(new Map());
   }, []);
@@ -286,7 +313,7 @@ export function useAppState() {
       } else {
         return {
           ...prev,
-          activeChannels: [...prev.activeChannels, { channelId, color, visible: true }],
+          activeChannels: [...prev.activeChannels, { channelId, color }],
         };
       }
     });
@@ -350,9 +377,7 @@ export function useAppState() {
       ...prev,
       session: null,
       fileName: null,
-      activeChannels: [],
-      derivedChannels: [],
-      viewRange: null,
+      ...SESSION_SCOPED_RESET,
       loadError: null,
     }));
     setDerivedSamplesMap(new Map());
@@ -361,17 +386,17 @@ export function useAppState() {
 
   // ─── Derived channel actions ──────────────────────────────────────────────
 
-  /** For formula mode, lazy-fetch any channels the expression references that
-   *  aren't yet loaded into session.samples. Returns the freshly-fetched
-   *  samples (passed to compute), and persists them to session state so
-   *  subsequent operations don't refetch. Python mode is a no-op — we can't
-   *  statically determine which channels a script will touch. */
+  /** Lazy-fetch any channels the expression references that aren't yet
+   *  loaded into session.samples. Returns the freshly-fetched samples (passed
+   *  to compute), and persists them to session state so subsequent operations
+   *  don't refetch. Python scripts are matched by quoted channel names. */
   const ensureExpressionChannelsLoaded = useCallback(async (
     session: XRKSession,
     def: Omit<DerivedChannel, 'id' | 'color'>,
   ): Promise<Map<number, ChannelSample[]>> => {
-    if (def.mode !== 'formula') return new Map();
-    const referenced = extractChannelNames(def.expression);
+    const referenced = def.mode === 'formula'
+      ? extractChannelNames(def.expression)
+      : pythonReferencedNames(def.expression, Array.from(session.channels.values(), c => c.shortName));
     if (referenced.length === 0) return new Map();
     const fetched = await fetchMissingChannels(session, referenced);
     if (fetched.size > 0) {
@@ -405,7 +430,7 @@ export function useAppState() {
     setState(prev => ({
       ...prev,
       derivedChannels: [...prev.derivedChannels, newDef],
-      activeChannels: [...prev.activeChannels, { channelId: id, color, visible: true }],
+      activeChannels: [...prev.activeChannels, { channelId: id, color }],
     }));
 
     setDerivedSamplesMap(prev => {
