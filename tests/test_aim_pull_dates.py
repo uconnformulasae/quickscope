@@ -56,7 +56,7 @@ def _setup_pull_mocks(
     monkeypatch.setattr("routes.sessions.get_aim_primary_hub", lambda: hub)
     monkeypatch.setattr("routes.sessions.AimKeepalive", FakeKeepalive)
 
-    def _fake_download(filename: str, dest_dir, expected_size: int = 0):
+    def _fake_download(filename: str, dest_dir, expected_size: int = 0, on_progress=None):
         path = dest_dir / filename
         path.write_bytes(b"x" * 500)
         return path

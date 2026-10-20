@@ -33,7 +33,8 @@ describe('interpolateValue', () => {
   });
   it('handles empty input and duplicate timestamps', () => {
     expect(interpolateValue([], 5)).toBeNull();
-    expect(interpolateValue([s(0, 1), s(100, 2), s(100, 3), s(200, 4)], 100)).toBeDefined();
+    // Either duplicate is acceptable, but the result must be one of them -- not NaN/null.
+    expect([2, 3]).toContain(interpolateValue([s(0, 1), s(100, 2), s(100, 3), s(200, 4)], 100));
   });
 });
 
