@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 import { ChannelDatalist, ChannelPicker, type ChannelSources } from './ChannelPicker';
+import { compatibleUnits } from './units';
 import {
   WIDGET_TYPES,
   type ChannelRef,
@@ -76,8 +77,38 @@ const TONES: { value: Tone | ''; label: string }[] = [
   { value: 'muted', label: 'Grey' },
 ];
 
+/**
+ * Unit picker: a dropdown of real conversions when the channel's logger unit has
+ * any, else free text (a plain label, e.g. for formulas). Blank = the logger's unit.
+ */
+function UnitField({ ch, sourceUnit, set }: { ch: ChannelRef; sourceUnit?: string; set: (patch: Partial<ChannelRef>) => void }) {
+  const choices = sourceUnit ? compatibleUnits(sourceUnit) : [];
+  if (choices.length === 0) {
+    return (
+      <label className="block min-w-0">
+        <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">Unit</span>
+        <input value={ch.unit ?? ''} onChange={(e) => set({ unit: e.target.value || undefined })} placeholder={sourceUnit || 'auto'} className={INPUT} />
+      </label>
+    );
+  }
+  const value = ch.unit === sourceUnit ? undefined : ch.unit;
+  const options = [
+    { value: '', label: `Default (${sourceUnit})` },
+    ...choices.slice(1).map((u) => ({ value: u, label: u })),
+    // Keep a hand-typed label from an older layout selectable rather than silently dropping it.
+    ...(value && !choices.includes(value) ? [{ value, label: `${value} (label only)` }] : []),
+  ];
+  return <SelectField<string> label="Unit" value={value} options={options} onChange={(v) => set({ unit: v })} />;
+}
+
 /** Type-specific settings for one channel row. */
-function ChannelDetails({ type, ch, set }: { type: WidgetType; ch: ChannelRef; set: (patch: Partial<ChannelRef>) => void }) {
+function ChannelDetails({ type, ch, sourceUnit, set }: {
+  type: WidgetType;
+  ch: ChannelRef;
+  /** Unit the logger sends this channel in, when known. */
+  sourceUnit?: string;
+  set: (patch: Partial<ChannelRef>) => void;
+}) {
   if (type === 'boolGroup') {
     return (
       <div className="grid grid-cols-2 gap-2">
@@ -94,10 +125,7 @@ function ChannelDetails({ type, ch, set }: { type: WidgetType; ch: ChannelRef; s
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-4 gap-2">
-        <label className="block min-w-0">
-          <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">Unit</span>
-          <input value={ch.unit ?? ''} onChange={(e) => set({ unit: e.target.value || undefined })} placeholder="auto" className={INPUT} />
-        </label>
+        <UnitField ch={ch} sourceUnit={sourceUnit} set={set} />
         <NumField label="Decimals" value={ch.precision} onChange={(v) => set({ precision: v === undefined ? undefined : Math.max(0, Math.min(6, Math.round(v))) })} placeholder="auto" />
         <NumField label="Warn ≥" value={ch.warn} onChange={(v) => set({ warn: v })} />
         <NumField label="Critical ≥" value={ch.crit} onChange={(v) => set({ crit: v })} />
@@ -285,7 +313,7 @@ export function WidgetConfigDialog({
                         </>
                       )}
                     </div>
-                    <ChannelDetails type={draft.type} ch={ch} set={(patch) => setChannel(i, patch)} />
+                    <ChannelDetails type={draft.type} ch={ch} sourceUnit={ch.expr ? undefined : sources.units[ch.name]} set={(patch) => setChannel(i, patch)} />
                   </div>
                 ))}
               </div>

@@ -483,6 +483,8 @@ export interface LiveChannelCache {
   serial: string | null;
   seen_at: string | null;
   channels: string[];
+  /** Unit the logger declared for each channel. */
+  units?: Record<string, string>;
 }
 
 async function detailError(res: Response, fallback: string): Promise<Error> {

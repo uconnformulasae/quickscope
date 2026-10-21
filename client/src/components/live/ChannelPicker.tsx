@@ -5,6 +5,8 @@ export interface ChannelSources {
   seen: string[];
   /** Channels the app knows the car has (live-channels.ts). */
   builtin: string[];
+  /** Unit the logger sends each channel in (live, else remembered, else built-in). */
+  units: Record<string, string>;
   vehicleLabel: string;
 }
 

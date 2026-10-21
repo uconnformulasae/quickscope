@@ -66,25 +66,32 @@ def get(kind: str) -> dict:
     with _lock:
         entry = _load_unlocked().get(kind)
     if entry is None:
-        return {"vehicle_kind": kind, "vehicle": None, "serial": None, "seen_at": None, "channels": []}
-    return {"vehicle_kind": kind, **entry}
+        return {"vehicle_kind": kind, "vehicle": None, "serial": None, "seen_at": None, "channels": [], "units": {}}
+    return {"vehicle_kind": kind, "units": {}, **entry}
 
 
-def record(vehicle: str | None, serial: str | None, names) -> bool:
-    """Merge channel names seen for this car. Returns True if the file was written."""
+def record(vehicle: str | None, serial: str | None, names, units: dict | None = None) -> bool:
+    """Merge channel names (and their logger units) seen for this car.
+
+    Returns True if the file was written.
+    """
     kind = vehicle_kind(vehicle)
     names = {n for n in names if isinstance(n, str) and n}
+    units = {k: v for k, v in (units or {}).items() if isinstance(k, str) and isinstance(v, str)}
     with _lock:
         data = _load_unlocked()
         entry = data.get(kind) or {"channels": []}
         known = set(entry["channels"])
-        if names <= known:
+        known_units = entry.get("units") if isinstance(entry.get("units"), dict) else {}
+        merged_units = {**known_units, **units}
+        if names <= known and merged_units == known_units:
             return False
         data[kind] = {
             "vehicle": vehicle or entry.get("vehicle"),
             "serial": serial or entry.get("serial"),
             "seen_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "channels": sorted(known | names),
+            "units": dict(sorted(merged_units.items())),
         }
         _save_unlocked(data)
         return True

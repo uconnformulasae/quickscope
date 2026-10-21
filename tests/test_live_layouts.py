@@ -127,8 +127,17 @@ def test_record_keeps_cars_separate():
 
 def test_get_unknown_vehicle_returns_empty_list():
     assert live_channel_cache.get("ic") == {
-        "vehicle_kind": "ic", "vehicle": None, "serial": None, "seen_at": None, "channels": [],
+        "vehicle_kind": "ic", "vehicle": None, "serial": None, "seen_at": None, "channels": [], "units": {},
     }
+
+
+def test_record_remembers_units_and_writes_when_they_change():
+    assert live_channel_cache.record("UConn-IC", "1", {"S8_ect1"}, {"S8_ect1": "°C"}) is True
+    # Same names and units: nothing to write.
+    assert live_channel_cache.record("UConn-IC", "1", {"S8_ect1"}, {"S8_ect1": "°C"}) is False
+    # A changed unit (logger reconfigured) is written even with no new names.
+    assert live_channel_cache.record("UConn-IC", "1", {"S8_ect1"}, {"S8_ect1": "°F"}) is True
+    assert live_channel_cache.get("ic")["units"] == {"S8_ect1": "°F"}
 
 
 # ─── routes ──────────────────────────────────────────────────────────────────

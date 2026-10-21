@@ -141,12 +141,13 @@ async def live_ws(websocket: WebSocket) -> None:
     seen_channels: set[str] = set()
     identity = client.identity
 
-    def _record_channels(names: set[str]) -> None:
+    def _record_channels(names: set[str], units: dict[str, str]) -> None:
         try:
             live_channel_cache.record(
                 identity.vehicle if identity else None,
                 identity.serial if identity else None,
                 names,
+                units,
             )
         except Exception:
             logger.warning("Live WS: failed to cache channel list", exc_info=True)
@@ -161,7 +162,7 @@ async def live_ws(websocket: WebSocket) -> None:
                 _enqueue(_snapshot_message(snap))
                 if snap.channels and not seen_channels.issuperset(snap.channels):
                     seen_channels.update(snap.channels)
-                    loop.run_in_executor(None, _record_channels, set(seen_channels))
+                    loop.run_in_executor(None, _record_channels, set(seen_channels), client.channel_units)
         except ConnectionError as exc:
             device_dropped = True
             logger.info("Live WS: device closed TCP during stream: %s", exc)

@@ -1,6 +1,7 @@
 import type React from 'react';
 import { evaluateFormula, type ChannelMap } from '../../lib/formula-engine';
-import { CHANNEL_META, IC_ENGINE_STATS, type Snapshot } from './live-channels';
+import { BUILTIN_UNITS, CHANNEL_META, IC_ENGINE_STATS, type Snapshot } from './live-channels';
+import { convertUnit } from './units';
 import { otherChannelEntries, type ChannelRef, type StatStyle, type WidgetConfig } from './layout-schema';
 import { fmt, directionLabel, Panel, BigStat, CoolStat, VehicleStat, BarRow, BoolPill, GForceCircle, type StatTone } from './widgets';
 
@@ -18,9 +19,22 @@ function evalExpr(expr: string, ch: Record<string, number>): number | undefined 
   return typeof out === 'string' ? undefined : out.values[0];
 }
 
-export function readValue(ref: ChannelRef, ch: Record<string, number>): number | undefined {
+/** Unit the logger sends this channel in (formulas have none). */
+export function sourceUnit(ref: ChannelRef, deviceUnits: Record<string, string>): string | undefined {
+  if (ref.expr) return undefined;
+  return deviceUnits[ref.name] ?? BUILTIN_UNITS[ref.name];
+}
+
+/**
+ * The value as the tile shows it: converted into `ref.unit` when that's a unit the
+ * channel's own unit converts to (otherwise `ref.unit` is just a label). The no-data
+ * floor and thresholds are in this same displayed unit.
+ */
+export function readValue(ref: ChannelRef, ch: Record<string, number>, deviceUnits: Record<string, string> = {}): number | undefined {
   let v = ref.expr ? evalExpr(ref.expr, ch) : ch[ref.name];
   if (v === undefined || !Number.isFinite(v)) return undefined;
+  const from = sourceUnit(ref, deviceUnits);
+  if (ref.unit && from) v = convertUnit(v, from, ref.unit) ?? v;
   if (ref.invalidBelow !== undefined && v <= ref.invalidBelow) return undefined;
   return v;
 }
@@ -35,7 +49,7 @@ function displayValue(ref: ChannelRef, v: number | undefined): string {
 /** Layout override first, then the unit the logger's channel layout declares, then the built-in default. */
 function unitOf(ref: ChannelRef, deviceUnits: Record<string, string>): string {
   if (ref.format === 'onoff' || ref.format === 'direction') return '';
-  return ref.unit ?? deviceUnits[ref.name] ?? META.get(ref.name)?.unit ?? '';
+  return ref.unit ?? sourceUnit(ref, deviceUnits) ?? '';
 }
 
 /** Threshold color wins over the configured tone; on/off tiles go green when on. */
@@ -76,7 +90,9 @@ export function WidgetRenderer({
   usedChannels: Set<string>;
 }) {
   const ch = latest?.channels ?? {};
-  const unit = (ref: ChannelRef) => unitOf(ref, latest?.units ?? {});
+  const deviceUnits = latest?.units ?? {};
+  const unit = (ref: ChannelRef) => unitOf(ref, deviceUnits);
+  const read = (ref: ChannelRef) => readValue(ref, ch, deviceUnits);
   const label = (ref: ChannelRef) => ref.label || ref.name || ref.expr || '—';
   const note = widget.note && widget.type !== 'note' && (
     <p className="mt-2 text-[10px] text-muted-foreground/70 leading-snug whitespace-pre-wrap">{widget.note}</p>
@@ -85,7 +101,7 @@ export function WidgetRenderer({
   // the source isn't transmitting (e.g. ECU unpowered) — say so instead of a wall of dashes.
   const valueWidget = widget.type === 'stats' || widget.type === 'bars' || widget.type === 'boolGroup' || widget.type === 'gForce';
   const noData = valueWidget && latest !== null && widget.channels.length > 0
-    && widget.channels.every((ref) => readValue(ref, ch) === undefined);
+    && widget.channels.every((ref) => read(ref) === undefined);
   const rightSlot = noData ? (
     <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0" title="The logger reports no value for any channel in this widget">
       no data
@@ -99,7 +115,7 @@ export function WidgetRenderer({
       body = (
         <div style={gridStyle(widget.columns, MIN_TILE_PX[style])}>
           {widget.channels.map((ref, i) => {
-            const v = readValue(ref, ch);
+            const v = read(ref);
             const props = { label: label(ref), value: displayValue(ref, v), unit: unit(ref), tone: toneFor(ref, v) };
             return style === 'big' ? <BigStat key={i} {...props} />
               : style === 'compact' ? <VehicleStat key={i} {...props} />
@@ -113,7 +129,7 @@ export function WidgetRenderer({
       body = (
         <div className="space-y-2.5">
           {widget.channels.map((ref, i) => {
-            const v = readValue(ref, ch);
+            const v = read(ref);
             const min = ref.min ?? 0;
             const max = ref.max ?? 100;
             const fraction = v === undefined || max <= min ? undefined : Math.max(0, Math.min(1, (v - min) / (max - min)));
@@ -128,7 +144,7 @@ export function WidgetRenderer({
       body = (
         <div style={gridStyle(widget.columns, 130)} className="!gap-1.5">
           {widget.channels.map((ref, i) => (
-            <BoolPill key={i} name={ref.name} label={label(ref)} kind={ref.kind ?? 'state'} value={readValue(ref, ch)} />
+            <BoolPill key={i} name={ref.name} label={label(ref)} kind={ref.kind ?? 'state'} value={read(ref)} />
           ))}
         </div>
       );
@@ -137,8 +153,8 @@ export function WidgetRenderer({
       const [latRef, longRef] = widget.channels;
       body = (
         <GForceCircle
-          lat={latRef ? readValue(latRef, ch) : undefined}
-          long={longRef ? readValue(longRef, ch) : undefined}
+          lat={latRef ? read(latRef) : undefined}
+          long={longRef ? read(longRef) : undefined}
           range={latRef?.max ?? 2}
         />
       );

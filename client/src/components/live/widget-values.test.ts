@@ -21,3 +21,24 @@ describe('readValue', () => {
     expect(readValue({ name: '0TC02', invalidBelow: -1000 }, ch)).toBe(31.5);
   });
 });
+
+describe('readValue with a chosen unit', () => {
+  const ch = { S8_ect1: 100, S8_map1: 1, Pack_Voltage: 400 };
+  const units = { S8_ect1: '°C', S8_map1: 'bar' };
+
+  it('converts from the logger unit into the tile unit', () => {
+    expect(readValue({ name: 'S8_ect1', unit: '°F' }, ch, units)).toBeCloseTo(212);
+    expect(readValue({ name: 'S8_map1', unit: 'kPa' }, ch, units)).toBeCloseTo(100);
+  });
+
+  it('leaves the value alone without a choice, or when the unit is only a label', () => {
+    expect(readValue({ name: 'S8_ect1' }, ch, units)).toBe(100);
+    expect(readValue({ name: 'S8_ect1', unit: 'degrees' }, ch, units)).toBe(100);
+    expect(readValue({ name: '', expr: 'Pack_Voltage / 1000', unit: 'kV' }, ch, units)).toBeCloseTo(0.4);
+  });
+
+  it('applies the no-data floor in the tile unit', () => {
+    expect(readValue({ name: 'S8_ect1', unit: '°F', invalidBelow: 200 }, ch, units)).toBeCloseTo(212);
+    expect(readValue({ name: 'S8_ect1', unit: '°F', invalidBelow: 220 }, ch, units)).toBeUndefined();
+  });
+});

@@ -4,7 +4,7 @@ import {
   Activity, AlertCircle, ArrowLeft, Copy, Download, Loader2, MoreHorizontal, Pause, Pencil, Pin, PinOff,
   Play, Plus, Save, Trash2, Upload, Wifi, WifiOff, X,
 } from 'lucide-react';
-import { BUILTIN_CHANNELS, vehicleKind, type VehicleKind } from './live/live-channels';
+import { BUILTIN_CHANNELS, BUILTIN_UNITS, vehicleKind, type VehicleKind } from './live/live-channels';
 import { useLiveStream } from './live/useLiveStream';
 import { useLiveLayouts } from './live/useLiveLayouts';
 import { LiveDashboard } from './live/LiveDashboard';
@@ -70,6 +70,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [seenChannels, setSeenChannels] = useState<string[]>([]);
+  const [seenUnits, setSeenUnits] = useState<Record<string, string>>({});
   const fileInput = useRef<HTMLInputElement>(null);
 
   const layouts = useLiveLayouts(connectedKind, draft !== null);
@@ -84,8 +85,16 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
     if (!draftVehicle) return;
     let cancelled = false;
     fetchLiveChannels(draftVehicle)
-      .then((res) => { if (!cancelled) setSeenChannels(res.channels); })
-      .catch(() => { if (!cancelled) setSeenChannels([]); });
+      .then((res) => {
+        if (cancelled) return;
+        setSeenChannels(res.channels);
+        setSeenUnits(res.units ?? {});
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSeenChannels([]);
+        setSeenUnits({});
+      });
     return () => { cancelled = true; };
   }, [draftVehicle]);
 
@@ -152,6 +161,11 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
     live: connectedKind === draft.vehicle ? Object.keys(latest?.channels ?? {}) : [],
     seen: seenChannels,
     builtin: BUILTIN_CHANNELS[draft.vehicle],
+    units: {
+      ...BUILTIN_UNITS,
+      ...seenUnits,
+      ...(connectedKind === draft.vehicle ? latest?.units : undefined),
+    },
     vehicleLabel: VEHICLE_LABEL[draft.vehicle],
   };
 
