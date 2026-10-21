@@ -400,3 +400,20 @@ def test_ictestoct1_capture_layout_detected_and_decoded() -> None:
     fields = parse_channel_layout(layouts[0], live_frame_len=1 << 16)
     assert len(fields) == 85
     assert parse_live_snapshot(live[5], fields).channels
+
+
+def test_ic_snapshot_timestamp_falls_back_to_master_clk() -> None:
+    """IC `kkk` live frames leave bytes 8-11 zero; the time is in Master Clk."""
+    from parse_aim_stream import load_stream, parse_frames
+    from services.aim_live import parse_live_snapshot
+    from services.aim_live_layout import parse_channel_layout
+
+    _, s2c = load_stream(CAPTURES / "fixtures" / "live_ic_494b_follow_raw.txt")
+    sframes = parse_frames(s2c, "S")
+    layout = next(f.payload for f in sframes if f.cmd == b"STCP" and len(f.payload) == 11232)
+    live = [f.payload for f in sframes if f.cmd == b"STCP" and len(f.payload) == 494 and f.payload[4:7] == b"kkk"]
+    fields = parse_channel_layout(layout, live_frame_len=1 << 16)
+
+    stamps = [parse_live_snapshot(p, fields).timestamp_ms for p in live]
+    assert all(s > 0 for s in stamps)
+    assert stamps == sorted(stamps)

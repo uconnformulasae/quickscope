@@ -32,9 +32,10 @@ function displayValue(ref: ChannelRef, v: number | undefined): string {
   return fmt(v, precision);
 }
 
-function unitOf(ref: ChannelRef): string {
+/** Layout override first, then the unit the logger's channel layout declares, then the built-in default. */
+function unitOf(ref: ChannelRef, deviceUnits: Record<string, string>): string {
   if (ref.format === 'onoff' || ref.format === 'direction') return '';
-  return ref.unit ?? META.get(ref.name)?.unit ?? '';
+  return ref.unit ?? deviceUnits[ref.name] ?? META.get(ref.name)?.unit ?? '';
 }
 
 /** Threshold color wins over the configured tone; on/off tiles go green when on. */
@@ -75,6 +76,7 @@ export function WidgetRenderer({
   usedChannels: Set<string>;
 }) {
   const ch = latest?.channels ?? {};
+  const unit = (ref: ChannelRef) => unitOf(ref, latest?.units ?? {});
   const label = (ref: ChannelRef) => ref.label || ref.name || ref.expr || '—';
   const note = widget.note && widget.type !== 'note' && (
     <p className="mt-2 text-[10px] text-muted-foreground/70 leading-snug whitespace-pre-wrap">{widget.note}</p>
@@ -98,7 +100,7 @@ export function WidgetRenderer({
         <div style={gridStyle(widget.columns, MIN_TILE_PX[style])}>
           {widget.channels.map((ref, i) => {
             const v = readValue(ref, ch);
-            const props = { label: label(ref), value: displayValue(ref, v), unit: unitOf(ref), tone: toneFor(ref, v) };
+            const props = { label: label(ref), value: displayValue(ref, v), unit: unit(ref), tone: toneFor(ref, v) };
             return style === 'big' ? <BigStat key={i} {...props} />
               : style === 'compact' ? <VehicleStat key={i} {...props} />
               : <CoolStat key={i} {...props} />;
@@ -116,7 +118,7 @@ export function WidgetRenderer({
             const max = ref.max ?? 100;
             const fraction = v === undefined || max <= min ? undefined : Math.max(0, Math.min(1, (v - min) / (max - min)));
             return (
-              <BarRow key={i} label={label(ref)} value={displayValue(ref, v)} unit={unitOf(ref)} fraction={fraction} tone={toneFor(ref, v)} />
+              <BarRow key={i} label={label(ref)} value={displayValue(ref, v)} unit={unit(ref)} fraction={fraction} tone={toneFor(ref, v)} />
             );
           })}
         </div>
@@ -162,7 +164,7 @@ export function WidgetRenderer({
                 <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={name}>{name}</p>
                 <p className="text-sm font-semibold tabular mt-0.5 text-foreground">
                   {displayValue(ref, val)}
-                  {unitOf(ref) && <span className="text-[9px] text-muted-foreground font-normal ml-1">{unitOf(ref)}</span>}
+                  {unit(ref) && <span className="text-[9px] text-muted-foreground font-normal ml-1">{unit(ref)}</span>}
                 </p>
               </div>
             );

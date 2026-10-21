@@ -35,6 +35,7 @@ class _FakeIdentity:
 
 class _FakeLiveClient:
     identity = _FakeIdentity()
+    channel_units = {"RPM": "rpm"}
     _snapshots_yielded = 0
     _poll_a_timeouts = 0
 
@@ -106,3 +107,17 @@ def test_live_ws_caches_seen_channel_names_for_the_offline_editor():
     assert cached["channels"] == ["RPM"]
     assert cached["vehicle"] == "CT17"
     assert cached["serial"] == "123"
+
+
+def test_live_ws_sends_channel_units_once_per_layout():
+    with patch("routes.live.get_aim_primary_hub", return_value=_FakeHub()):
+        with client.websocket_connect("/api/live/ws") as ws:
+            ws.receive_json()  # connected
+            msg = ws.receive_json()
+            snaps = msg["messages"] if msg["type"] == "batch" else [msg]
+            while len(snaps) < 2:
+                nxt = ws.receive_json()
+                snaps += nxt["messages"] if nxt["type"] == "batch" else [nxt]
+            ws.send_text("stop")
+    assert snaps[0]["units"] == {"RPM": "rpm"}
+    assert all("units" not in s for s in snaps[1:])

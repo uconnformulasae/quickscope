@@ -60,17 +60,21 @@ fi
 
 VENV_PY=".venv/bin/python"
 
-# Install Python deps if libxrk missing inside the venv
-if ! "$VENV_PY" -c "import libxrk" 2>/dev/null; then
+# Install Python deps if libxrk missing inside the venv or requirements.txt changed
+PY_DEPS_STAMP=".venv/.requirements-installed"
+if ! "$VENV_PY" -c "import libxrk" 2>/dev/null || [ backend/requirements.txt -nt "$PY_DEPS_STAMP" ]; then
     echo "Installing Python dependencies..."
     "$VENV_PY" -m pip install --upgrade pip
     "$VENV_PY" -m pip install -r backend/requirements.txt
+    touch "$PY_DEPS_STAMP"
 fi
 
-# Install Node deps if needed
-if [ ! -d "node_modules/.bin" ]; then
+# Install Node deps if missing or package-lock.json changed since the last install
+NODE_DEPS_STAMP="node_modules/.package-lock.json"
+if [ ! -d "node_modules/.bin" ] || [ package-lock.json -nt "$NODE_DEPS_STAMP" ]; then
     echo "Installing Node dependencies..."
     npm install
+    touch "$NODE_DEPS_STAMP"
 fi
 
 # npm 11+ warns on devdir injected by some tooling (e.g. Cursor); not a valid npm config key.

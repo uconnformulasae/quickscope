@@ -43,6 +43,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const pausedRef = useRef(false);
+  // The backend only sends units when they change, so carry the last set onto every snapshot.
+  const unitsRef = useRef<Record<string, string>>({});
 
   const connect = useCallback(() => {
     if (wsRef.current) return;
@@ -55,12 +57,14 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     // Applies one logical message. `batch` (sent when the WS sender fell
     // behind the device pump) unpacks into a call of this per snapshot.
     const applySnapshot = (msg: LiveSnapshotMessage) => {
+      if (msg.units) unitsRef.current = msg.units;
       if (pausedRef.current) return;
       const snap: Snapshot = {
         ts: msg.ts,
         subsystem: msg.subsystem,
         raw: msg.raw ?? '',
         channels: msg.channels,
+        units: unitsRef.current,
       };
       setLatest(snap);
       setReceivedAt(Date.now());

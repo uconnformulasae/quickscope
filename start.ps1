@@ -34,16 +34,26 @@ try {
     if ($LASTEXITCODE -eq 0) { $hasLibxrk = $true }
 } catch {}
 
-if (-not $hasLibxrk) {
+# Returns $true when $Source was modified after $Stamp (or $Stamp doesn't exist)
+function Test-NewerThan($Source, $Stamp) {
+    if (-not (Test-Path $Stamp)) { return $true }
+    return (Get-Item $Source).LastWriteTime -gt (Get-Item $Stamp).LastWriteTime
+}
+
+$pyDepsStamp = ".venv/.requirements-installed"
+if (-not $hasLibxrk -or (Test-NewerThan "backend/requirements.txt" $pyDepsStamp)) {
     Write-Host "Installing Python dependencies..."
     & $venvPy -m pip install --upgrade pip
     & $venvPy -m pip install -r backend/requirements.txt
+    if ($LASTEXITCODE -eq 0) { New-Item -ItemType File -Force $pyDepsStamp | Out-Null }
 }
 
-# Install Node deps if needed
-if (-not (Test-Path "node_modules")) {
+# Install Node deps if missing or package-lock.json changed since the last install
+$nodeDepsStamp = "node_modules/.package-lock.json"
+if (-not (Test-Path "node_modules") -or (Test-NewerThan "package-lock.json" $nodeDepsStamp)) {
     Write-Host "Installing Node dependencies..."
     npm install
+    if ($LASTEXITCODE -eq 0) { (Get-Item $nodeDepsStamp).LastWriteTime = Get-Date }
 }
 
 # npm 11+ warns on devdir injected by some tooling (e.g. Cursor); not a valid npm config key.

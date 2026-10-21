@@ -90,7 +90,10 @@ async def live_ws(websocket: WebSocket) -> None:
     queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX)
     _SENTINEL = None
 
+    sent_units: dict[str, str] | None = None
+
     def _snapshot_message(snap) -> dict:
+        nonlocal sent_units
         msg = {
             "type": "snapshot",
             "seq": client._snapshots_yielded,
@@ -98,6 +101,11 @@ async def live_ws(websocket: WebSocket) -> None:
             "subsystem": snap.subsystem,
             "channels": snap.channels,
         }
+        # Units only change with the channel layout, so send them on the
+        # first snapshot and again only after a new layout arrives.
+        if client.channel_units is not sent_units:
+            sent_units = client.channel_units
+            msg["units"] = sent_units
         if send_raw:
             msg["raw"] = snap.raw_b64
         return msg

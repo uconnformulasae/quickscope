@@ -3,6 +3,8 @@ export interface Snapshot {
   subsystem: string;
   raw: string;
   channels?: Record<string, number>;  // populated in preview mode; real frames decode this client-side later
+  /** Display unit per channel, from the logger's channel layout. */
+  units?: Record<string, string>;
 }
 
 export interface ChannelMeta {

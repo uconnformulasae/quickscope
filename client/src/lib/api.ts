@@ -439,6 +439,8 @@ export type LiveSnapshotMessage = {
   /** Opt-in only (connect with `?raw=1`) -- omitted by default to save ~1 KB/snapshot. */
   raw?: string;
   channels?: Record<string, number>;
+  /** Channel name -> display unit; sent on the first snapshot and again only when the channel layout changes. */
+  units?: Record<string, string>;
 };
 
 export type LiveWSMessage =

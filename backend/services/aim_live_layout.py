@@ -3,11 +3,15 @@
 Mapping validated in docs/protocol/captures/analysis/q5_validate.py:
   live_offset = logical_offset(u68 in record) + 12
   width       = u72 in record
-  value       = raw * scale + offset  (scale/offset as f32 at +100/+104 in record)
+  value       = raw * scale  (f32 at +100; +104/+108 are the display min/max
+                range, e.g. Logger Temperature -99.9..999.9 -- NOT an offset)
+  quantity    = u16 at +12, low 7 bits -- what the channel measures, and so
+                the unit AiM sends it in (see _QUANTITY_UNITS)
 """
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 
@@ -17,17 +21,26 @@ INT16_PLACEHOLDER = 0x7FFF
 # Layout frames seen on EVO5 (Race Studio 2026 captures).
 LAYOUT_SIZES = frozenset({13608, 15060})
 
-# f32 "*_Voltage" channels that are raw ADC / auxiliary-BMS readings and come
-# off the wire in millivolts, unlike Pack_Voltage/Pack_Current which arrive
-# pre-scaled in real V/A from the BMS CAN aggregate. Confirmed against
-# wiresharklivedata.pcapng (2026-09-24, UConn EVO5 707 B rig): Min_Cell_Voltage
-# read 4012 (mV) alongside Pack_Voltage 407.6 (V, matches CT-17 EV pack
-# nominal/max of 370/415 V) in the same frame, and BSE_Voltage/TPS_*_Voltage
-# read in the hundreds despite being 0-5 V analog sensors. Same convention as
-# the int16 "Voltage" heuristic below, just never extended to f32 fields.
-_MILLIVOLT_FLOAT_CHANNELS = frozenset(
-    {"Min_Cell_Voltage", "BMS_LV_input", "BSE_Voltage", "TPS_1_Voltage", "TPS_2_Voltage"}
-)
+# Layout quantity code -> (display unit, factor from the wire unit). Verified
+# against UConn EV (live_707b_evo5) and IC (oct20livetest.pcapng) captures:
+# every 0x15 voltage arrives in mV (External Voltage 12424, Min_Cell_Voltage
+# 4012, S8_vbat 12485) while the BMS pack voltage is its own quantity 0x20 in
+# V (407.6); 0x0e pressures read 0.99 for MAP at atmosphere, so bar.
+_QUANTITY_UNITS: dict[int, tuple[str, float]] = {
+    0x01: ("%", 1.0),
+    0x03: ("g", 1.0),
+    0x04: ("°", 1.0),
+    0x05: ("°/s", 1.0),
+    0x0E: ("bar", 1.0),
+    0x0F: ("rpm", 1.0),
+    0x10: ("km/h", 1.0),
+    0x11: ("°C", 1.0),
+    0x12: ("ms", 1.0),
+    0x13: ("Nm", 1.0),
+    0x15: ("V", 0.001),
+    0x1B: ("A", 1.0),
+    0x20: ("V", 1.0),
+}
 
 
 @dataclass(frozen=True)
@@ -36,8 +49,11 @@ class ChannelField:
     live_offset: int
     width: int
     scale: float
-    offset: float
     type_code: int
+    # Display unit from the layout's quantity code ("" when unknown/unitless)
+    # and the factor converting the wire value into it (mV -> V).
+    unit: str = ""
+    unit_factor: float = 1.0
 
 
 def parse_inner_records(stream: bytes, start_at: int = LIVE_FRAME_HEADER) -> list[bytes]:
@@ -85,15 +101,18 @@ def parse_channel_layout(blob: bytes, *, live_frame_len: int = 691) -> list[Chan
         name = record[32:64].rstrip(b"\x00").decode("latin1", errors="replace").strip()
         if not name:
             continue
-        scale, offset = struct.unpack_from("<2f", record, 100)
+        scale = struct.unpack_from("<f", record, 100)[0]
+        quantity = struct.unpack_from("<H", record, 12)[0] & 0x7F
+        unit, unit_factor = _QUANTITY_UNITS.get(quantity, ("", 1.0))
         fields.append(
             ChannelField(
                 name=name,
                 live_offset=live_off,
                 width=width,
                 scale=scale,
-                offset=offset,
                 type_code=type_code,
+                unit=unit,
+                unit_factor=unit_factor,
             )
         )
     return fields
@@ -120,22 +139,20 @@ def _raw_scalar(sl: bytes) -> float | None:
     return None
 
 
-def _effective_offset(offset: float) -> float:
-    if offset != offset or abs(offset) > 1e10:
-        return 0.0
-    return offset
-
-
 def _decode_field_value(payload: bytes, field: ChannelField) -> float | None:
     end = field.live_offset + field.width
     if end > len(payload):
         return None
     sl = payload[field.live_offset:end]
-    off = _effective_offset(field.offset)
 
-    is_f32_scalar = field.width == 4 and field.type_code in (2, 4, 6)
+    is_float = field.type_code in (2, 4, 6) and field.width in (2, 4)
     is_bool_flag = field.type_code in (512, 514) and len(sl) >= 4
-    if is_f32_scalar or is_bool_flag:
+    if is_float or is_bool_flag:
+        # 4-byte type 2/4/6 fields are f32; 2-byte ones are IEEE half floats
+        # (VerticalAcc reads -1.0 g at rest, Logger Temperature ~25 C, and
+        # FBRAKEPres matches its f32 FBrakePressCorr). AiM marks "no sensor"
+        # with -inf (0xfc00 / 0xff800000), e.g. unplugged thermocouples.
+        #
         # 512/514 are boolean state/fault/alarm flags. AiM always encodes them
         # as an f32 0.0/1.0 (confirmed: BMS_Disch_Enable / Direction read raw
         # 0x3f800000 -- garbage 1065353216 if read as int32) in the first 4
@@ -145,35 +162,14 @@ def _decode_field_value(payload: bytes, field: ChannelField) -> float | None:
         # (verified identical across all 70 live frames / 3 TCP sessions in
         # wiresharklivedata.pcapng), so we deliberately ignore them rather
         # than reading a bogus f64 across the whole 8-byte slot.
-        value, = struct.unpack_from("<f", sl, 0)
-        if value != value or abs(value) >= 1e20:
+        value, = struct.unpack_from("<e" if field.width == 2 else "<f", sl, 0)
+    else:
+        raw = _raw_scalar(sl)
+        if raw is None:
             return None
-        scale = field.scale
-        if scale == 1.0 and field.name in _MILLIVOLT_FLOAT_CHANNELS:
-            scale = 0.001
-        return value * scale + off
-
-    if field.width == 2:
-        if len(sl) < 2:
-            return None
-        signed = struct.unpack("<h", sl)[0]
-        if signed == INT16_PLACEHOLDER:
-            return None
-        scale = field.scale
-        if scale == 1.0 and "Voltage" in field.name:
-            scale = 0.001
-        elif field.type_code == 6 and scale == 1.0:
-            scale = 0.0001
-        value = signed * scale + off
-        if value != value or abs(value) >= 1e20:
-            return None
-        return value
-
-    raw = _raw_scalar(sl)
-    if raw is None:
-        return None
-    value = raw * field.scale + off
-    if value != value or abs(value) >= 1e20:
+        value = raw
+    value = value * field.scale * field.unit_factor
+    if not math.isfinite(value) or abs(value) >= 1e20:
         return None
     return value
 
