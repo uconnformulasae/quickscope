@@ -36,7 +36,9 @@ class IntersectionObserverStub {
 globalThis.IntersectionObserver ??= IntersectionObserverStub as unknown as typeof IntersectionObserver;
 
 // No 2D context in jsdom: components must cope with getContext() === null.
-HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
+if (typeof HTMLCanvasElement !== 'undefined') {
+  HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
+}
 
 /** Give every element the same fake box (jsdom reports 0x0 by default). */
 export function fakeLayout({ width, height, scrollHeight }: { width: number; height: number; scrollHeight?: number }) {

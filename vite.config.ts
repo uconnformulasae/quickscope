@@ -1,9 +1,10 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
@@ -23,5 +24,11 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+  },
+  test: {
+    root: path.resolve(import.meta.dirname, "client"),
+    environment: "node",
+    setupFiles: [path.resolve(import.meta.dirname, "client", "src", "test", "dom-setup.ts")],
+    environmentMatchGlobs: [["**/*.test.tsx", "jsdom"]],
   },
 });
