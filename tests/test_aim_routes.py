@@ -110,28 +110,12 @@ def test_aim_pull_downloads_indexes_and_logs(
         "routes.sessions.aim_connector.discover_device",
         lambda: {"ip": "10.0.0.1", "ssid": "AiM-TEST", "device_name": ""},
     )
-    dest_parent = None
-
-    def _fake_download(filename: str, dest_dir, expected_size: int = 0, on_progress=None):
-        nonlocal dest_parent
-        dest_parent = dest_dir
-        path = dest_dir / filename
-        path.write_bytes(b"x" * 500)
-        if on_progress is not None:
-            on_progress(500, 500)
-        return path
-
     monkeypatch.setattr(
         "routes.sessions.get_aim_primary_hub",
         lambda: FakePullHub(),
     )
 
-    monkeypatch.setattr(
-        "routes.sessions.aim_connector.download_aim_session",
-        _fake_download,
-    )
-
-    def _fake_parse(path):
+    def _fake_parse(path, *_args, **_kwargs):
         class _Log:
             metadata = {"Vehicle": "V", "Driver": "D", "Log Date": "", "Log Time": "", "Venue": ""}
             channels = {}
@@ -139,9 +123,9 @@ def test_aim_pull_downloads_indexes_and_logs(
 
         return _Log()
 
-    monkeypatch.setattr("routes.sessions.parse_file", _fake_parse)
+    monkeypatch.setattr("services.aim_pull_indexer.parse_file", _fake_parse)
     monkeypatch.setattr(
-        "routes.sessions.extract_session_info",
+        "services.aim_pull_indexer.extract_session_info",
         lambda log, filename: {
             "metadata": {},
             "durationMs": 0,
@@ -164,12 +148,41 @@ def test_aim_pull_downloads_indexes_and_logs(
     assert [s["filename"] for s in stored] == ["pull_test.xrk"]
     assert stored[0]["source"] == "aim_device"
     assert "sync_status" not in stored[0] and "remote_id" not in stored[0]
-    assert body["results"][0]["parse_ok"] is True
+    # The pull returns before indexing; the indexer then marks the session.
+    assert body["results"][0]["index_status"] == "pending"
+    assert stored[0]["index_status"] == "ok"
 
     log = aim_pull_log.list_recent()
     assert log[0]["action"] == "pull"
     assert log[0]["status"] == "ok"
     assert "railway_queued" not in log[0]
+
+    progress = client.get("/api/aim/pull/progress").json()
+    assert progress["active"] is False
+    assert progress["indexing"] == {"pull_test.xrk": "ok"}
+
+
+def test_aim_pull_records_parse_failure_without_failing_the_download(
+    monkeypatch: pytest.MonkeyPatch, isolated_session_data
+):
+    monkeypatch.setattr(
+        "routes.sessions.aim_connector.discover_device",
+        lambda: {"ip": "10.0.0.1", "ssid": "AiM-TEST", "device_name": ""},
+    )
+    monkeypatch.setattr("routes.sessions.get_aim_primary_hub", lambda: FakePullHub())
+
+    def _broken_parse(path, *_args, **_kwargs):
+        raise ValueError("corrupt xrk")
+
+    monkeypatch.setattr("services.aim_pull_indexer.parse_file", _broken_parse)
+
+    res = client.post("/api/aim/pull", json={"filenames": ["bad.xrk"]})
+
+    assert res.status_code == 200
+    assert res.json()["downloaded"] == ["bad.xrk"]
+    (stored,) = session_store.list_sessions()
+    assert stored["index_status"] == "failed"
+    assert aim_pull_log.list_recent()[0]["status"] == "parse_failed"
 
 
 def test_aim_pull_progress_endpoint_idle():

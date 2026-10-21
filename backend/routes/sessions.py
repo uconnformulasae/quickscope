@@ -15,8 +15,8 @@ from services import (
     aim_download_trace,
 )
 from services.aim_keepalive import AimKeepalive
-from services import aim_pull_progress
-from services.aim_primary_hub import get_aim_primary_hub
+from services import aim_pull_indexer, aim_pull_progress
+from services.aim_primary_hub import AimLiveActiveError, get_aim_primary_hub
 from parsers.parse_gate import PRIORITY_INTERACTIVE
 from services.session_cache import session_cache
 from state import (
@@ -26,11 +26,6 @@ from state import (
 )
 
 router = APIRouter(prefix="/api")
-
-
-def _parse_with_info(path, filename: str):
-    log = parse_file(path)
-    return log, extract_session_info(log, filename)
 
 
 # ─── Session CRUD ────────────────────────────────────────────────────────────
@@ -270,44 +265,45 @@ async def pull_from_aim(body: AimPullRequest):
 
     logger.info("AiM pull: downloading %d selected sessions...", len(body.filenames))
 
-    aim_pull_progress.begin_pull(body.filenames)
+    batch = _PullBatch(device_ip)
+    filenames = batch.sanitize(body.filenames)
+    aim_pull_progress.begin_pull(filenames)
     hub = get_aim_primary_hub()
-    # Must run on the primary TCP *before* it is released: the device ignores a
-    # second port-2000 connection while the primary is open (QS_Pull_241/242).
-    device_meta_by_file: dict[str, dict] = {}
     try:
-        aim_sessions = await hub.list_sessions(device_ip or None)
-        device_meta_by_file = {
-            s["filename"]: s for s in aim_sessions if s.get("filename")
-        }
-    except (ConnectionError, TimeoutError, RuntimeError, OSError) as exc:
-        logger.warning("AiM pull: could not fetch device session list for dates: %s", exc)
-
-    try:
-        await hub.release_for_download()
-    except ConnectionError as exc:
-        aim_pull_progress.end_pull()
-        return {
-            "ok": False,
-            "error": str(exc),
-            "downloaded": [],
-            "errors": [str(exc)],
-            "results": [],
-        }
-
-    keepalive = await _start_download_keepalive(hub.resolve_host(device_ip or None))
-    try:
-        downloaded, errors, results = await _download_selected(
-            body.filenames,
-            device_meta_by_file=device_meta_by_file,
-            device_ip=device_ip,
-        )
+        try:
+            primary = await hub.download_sessions(
+                filenames,
+                lambda name: session_store.session_file_path(name).parent,
+                host=device_ip or None,
+                on_file_start=aim_pull_progress.start_file,
+                on_progress=aim_pull_progress.update_download,
+                on_file_done=batch.complete,
+            )
+        except AimLiveActiveError as exc:
+            return {
+                "ok": False,
+                "error": str(exc),
+                "downloaded": [],
+                "errors": [str(exc)],
+                "results": [],
+            }
+        if primary.remaining:
+            logger.warning(
+                "AiM pull: primary TCP failed (%s); retrying %d file(s) on a dedicated download TCP",
+                primary.error,
+                len(primary.remaining),
+            )
+            await _download_legacy(
+                hub,
+                primary.remaining,
+                primary.device_meta_by_file,
+                batch,
+                first_index=len(primary.downloaded) + 1,
+            )
     finally:
-        if keepalive is not None:
-            await keepalive.stop()
         aim_pull_progress.end_pull()
 
-    return {"ok": True, "downloaded": downloaded, "errors": errors, "results": results}
+    return batch.response()
 
 
 async def _start_download_keepalive(host: str) -> AimKeepalive | None:
@@ -322,139 +318,137 @@ async def _start_download_keepalive(host: str) -> AimKeepalive | None:
     return keepalive
 
 
-async def _download_selected(
+async def _download_legacy(
+    hub,  # noqa: ANN001
     filenames: list[str],
-    *,
     device_meta_by_file: dict[str, dict],
-    device_ip: str,
-) -> tuple[list[str], list[str], list[dict]]:
-    downloaded = []
-    errors = []
-    results = []
+    batch: "_PullBatch",
+    *,
+    first_index: int,
+) -> None:
+    """Fallback: close the primary and pull each file over its own download TCP."""
+    try:
+        await hub.release_for_download()
+    except ConnectionError as exc:
+        for filename in filenames:
+            batch.fail(filename, exc, 0.0)
+        return
 
-    for file_index, raw_filename in enumerate(filenames, start=1):
-        try:
-            filename = sanitize_filename(raw_filename)
-        except ValueError:
-            errors.append(f"{raw_filename}: invalid filename")
-            aim_pull_log.record(
-                action="pull",
-                status="download_failed",
-                device_ip=device_ip,
-                filename=raw_filename,
-                error="invalid filename",
-            )
-            continue
-
-        logger.info("AiM pull: downloading %s ...", filename)
-        started = time.monotonic()
-        try:
-            dest = session_store.session_file_path(filename)
+    keepalive = await _start_download_keepalive(hub.resolve_host(batch.device_ip or None))
+    try:
+        for file_index, filename in enumerate(filenames, start=first_index):
             device_meta = device_meta_by_file.get(filename, {})
             expected_size = int(device_meta.get("size", 0) or 0)
             aim_pull_progress.start_file(file_index, filename, expected_size)
-
-            def on_download_progress(received: int, total: int) -> None:
-                aim_pull_progress.update_download(received, total)
-
-            await asyncio.to_thread(
-                aim_connector.download_aim_session,
-                filename,
-                dest.parent,
-                expected_size,
-                on_download_progress,
-            )
-            file_bytes = dest.stat().st_size
-            duration_s = time.monotonic() - started
-            if expected_size > 0 and file_bytes < expected_size:
-                raise RuntimeError(
-                    f"Incomplete download: got {file_bytes} bytes, expected {expected_size} bytes"
-                )
-            logger.info(
-                "AiM pull: saved %s (%d bytes%s)",
-                dest,
-                file_bytes,
-                f", expected {expected_size}" if expected_size else "",
-            )
-
-            aim_pull_progress.start_parse()
-            parse_ok = True
+            dest = session_store.session_file_path(filename)
+            started = time.monotonic()
             try:
-                # Parsing a multi-MB log takes seconds; keep it off the event
-                # loop so other requests and the live WebSocket stay responsive.
-                log, info = await asyncio.to_thread(_parse_with_info, dest, filename)
-                meta = info["metadata"]
-            except Exception as parse_err:
-                parse_ok = False
-                logger.warning("AiM pull: parse failed for %s: %s", filename, parse_err)
-                meta = {}
-                info = {"durationMs": 0, "lapCount": 0}
+                await asyncio.to_thread(
+                    aim_connector.download_aim_session,
+                    filename,
+                    dest.parent,
+                    expected_size,
+                    aim_pull_progress.update_download,
+                )
+            except Exception as exc:
+                batch.fail(filename, exc, time.monotonic() - started)
+                continue
+            batch.complete(filename, dest, time.monotonic() - started, device_meta)
+    finally:
+        if keepalive is not None:
+            await keepalive.stop()
+
+
+class _PullBatch:
+    """Collects per-file pull outcomes; registers and queues each landed file for indexing."""
+
+    def __init__(self, device_ip: str) -> None:
+        self.device_ip = device_ip
+        self.downloaded: list[str] = []
+        self.errors: list[str] = []
+        self.results: list[dict] = []
+
+    def sanitize(self, raw_filenames: list[str]) -> list[str]:
+        valid = []
+        for raw in raw_filenames:
+            try:
+                valid.append(sanitize_filename(raw))
+            except ValueError:
+                self.errors.append(f"{raw}: invalid filename")
                 aim_pull_log.record(
                     action="pull",
-                    status="parse_failed",
-                    device_ip=device_ip,
-                    filename=filename,
-                    size=file_bytes,
-                    duration_s=duration_s,
-                    error=str(parse_err)[:200],
+                    status="download_failed",
+                    device_ip=self.device_ip,
+                    filename=raw,
+                    error="invalid filename",
                 )
+        return valid
 
-            device_meta = device_meta_by_file.get(filename, {})
-            recorded_at = resolve_aim_recorded_at(
-                device_meta.get("date", ""),
-                device_meta.get("hour", ""),
-                meta.get("date", ""),
-                meta.get("time", ""),
+    def fail(self, filename: str, exc: BaseException, duration_s: float) -> None:
+        logger.error("AiM pull: failed to download %s: %s", filename, exc, exc_info=exc)
+        self.errors.append(f"{filename}: {exc}")
+        aim_pull_log.record(
+            action="pull",
+            status="download_failed",
+            device_ip=self.device_ip,
+            filename=filename,
+            duration_s=duration_s,
+            error=str(exc)[:200],
+        )
+
+    def complete(self, filename: str, path: Path, duration_s: float, device_meta: dict) -> None:
+        """Register a landed file and queue it for background indexing. Never raises."""
+        try:
+            self._register(filename, path, duration_s, device_meta)
+        except Exception as exc:
+            self.fail(filename, exc, duration_s)
+
+    def _register(self, filename: str, path: Path, duration_s: float, device_meta: dict) -> None:
+        file_bytes = path.stat().st_size
+        expected_size = int(device_meta.get("size", 0) or 0)
+        if expected_size > 0 and file_bytes < expected_size:
+            raise RuntimeError(
+                f"Incomplete download: got {file_bytes} bytes, expected {expected_size} bytes"
             )
+        logger.info("AiM pull: saved %s (%d bytes) in %.1fs", path, file_bytes, duration_s)
 
-            entry = session_store.add_session(
-                filename=filename,
-                source="aim_device",
-                local_path=str(dest),
-                track_name=meta.get("venue", ""),
-                driver_name=meta.get("driver", ""),
-                vehicle_name=meta.get("vehicle", ""),
-                recorded_at=recorded_at,
-                duration_s=info.get("durationMs", 0) / 1000,
-                lap_count=info.get("lapCount", 0),
-            )
-            downloaded.append(entry["filename"])
+        device_date = device_meta.get("date", "")
+        device_hour = device_meta.get("hour", "")
+        fields = {
+            "local_path": str(path),
+            "recorded_at": resolve_aim_recorded_at(device_date, device_hour, "", ""),
+            "index_status": "pending",
+        }
+        existing = session_store.find_by_filename(filename)
+        if existing is not None:
+            entry = session_store.update_session(existing["id"], **fields) or existing
+        else:
+            entry = session_store.add_session(filename=filename, source="aim_device", **fields)
 
-            if parse_ok:
-                session_cache.put(entry["id"], log, filename, dest)
-                try:
-                    await asyncio.to_thread(gps_preview.warm_from_log, entry["id"], dest, log)
-                except Exception:
-                    logger.exception("Failed to warm GPS preview cache for %s", filename)
-                aim_pull_log.record(
-                    action="pull",
-                    status="ok",
-                    device_ip=device_ip,
-                    filename=filename,
-                    size=file_bytes,
-                    duration_s=duration_s,
-                    session_id=entry["id"],
-                )
+        aim_pull_indexer.enqueue(aim_pull_indexer.IndexJob(
+            session_id=entry["id"],
+            filename=filename,
+            path=path,
+            device_ip=self.device_ip,
+            size=file_bytes,
+            download_s=duration_s,
+            device_date=device_date,
+            device_hour=device_hour,
+        ))
+        self.downloaded.append(filename)
+        self.results.append({
+            "filename": filename,
+            "bytes": file_bytes,
+            "duration_s": round(duration_s, 3),
+            "session_id": entry["id"],
+            "index_status": "pending",
+            "local_path": str(path),
+        })
 
-            results.append({
-                "filename": filename,
-                "bytes": file_bytes,
-                "duration_s": round(duration_s, 3),
-                "session_id": entry["id"],
-                "parse_ok": parse_ok,
-                "local_path": str(dest),
-            })
-        except Exception as e:
-            duration_s = time.monotonic() - started
-            logger.error("AiM pull: failed to download %s: %s", filename, e, exc_info=True)
-            errors.append(f"{filename}: {e}")
-            aim_pull_log.record(
-                action="pull",
-                status="download_failed",
-                device_ip=device_ip,
-                filename=filename,
-                duration_s=duration_s,
-                error=str(e)[:200],
-            )
-
-    return downloaded, errors, results
+    def response(self) -> dict:
+        return {
+            "ok": True,
+            "downloaded": self.downloaded,
+            "errors": self.errors,
+            "results": self.results,
+        }

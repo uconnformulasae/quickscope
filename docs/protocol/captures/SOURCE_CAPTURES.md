@@ -68,12 +68,26 @@ Then run `python -m pytest tests/test_aim_live.py`.
 
 | TCP | Used for |
 |-----|----------|
-| **Primary** (``aim_primary_hub``) | Connect, live handshake, live poll, session list — one socket |
-| **Download** (``download_aim_session``) | Pulling ``.xrz`` / log files only — fresh socket after the primary is closed |
+| **Primary** (``aim_primary_hub``) | Connect, live handshake, live poll, session list **and log download** (``AimLiveClient.download_file``) — one socket, kept open after the pull |
+| **Fallback download** (``download_aim_session``) | Only when the primary fails mid-pull: fresh socket per file, opened after the primary is closed |
 
-Reference: ``connect.pcapng`` stream 29 + ``116CaptureWireshark.pcapng`` streams 37/38.
+Reference: ``connect.pcapng`` stream 29, ``RS3_PULL_241/242`` (one TCP), ``116CaptureWireshark.pcapng`` streams 37/38 (older RS3 two-TCP flow).
 
-Current RS3 downloads the file on the **same** TCP as the session list (RS3_PULL_* below). QuickScope deliberately keeps a separate download TCP, opened only after the primary is closed; QS_Pull_241 proves the device serves it at full speed. The device **ignores** a second port-2000 connection while another is open (accepts SYN, never replies).
+Current RS3 downloads the file on the **same** TCP as the session list, and QuickScope now mirrors that. The device **ignores** a second port-2000 connection while another is open (accepts SYN, never replies), so the fallback must close the primary first; QS_Pull_241 proves a fresh download TCP is served at full speed.
+
+### RS3 pull sequence on the list TCP (RS3_PULL_241/242)
+
+After the normal connect + enum + setup + session list (``0x00020051`` ×2, ``0x00020024``), with the user picking a file in between:
+
+1. Client → STNC ``0x00040002`` (``p[10]=0x04``, ``p[0x18]='A'``, path ``1:/mem/a_0241.xrz`` at ``p[0x20:0x40]``). **No** new hello/handshake.
+2. Device → STCP-64 ``I`` then ``Q`` echoing sub ``0x00040002``; the ``Q`` carries the file size at ``p[16:20]`` (``0x00301000`` = 3,149,824 B).
+3. Client → one 4 B STCP ack ``0``; device starts batch 1 at offset 0.
+4. Client → 4 B ack at each exact 982,320 boundary (``982320, 1964640, 2946960[, 3929280]``); nothing after the last partial batch.
+5. ~1.3–2.6 s after the last block, RS3 re-lists with a bare ``0x00020024`` (no ``0x00020051`` prep) → ``I`` / ``Q`` (CSV length) → 4 B ack ``0`` → CSV block. QuickScope does the same re-list after every file before requesting the next one.
+
+The ``Q`` reply to ``0x00020024`` announces the CSV byte count (``0x51cd`` = the 20,941 B list block), so ``fetch_session_list`` finishes as soon as that many data bytes arrive instead of waiting for a read timeout.
+
+Replay tests: ``pytest tests/test_aim_primary_download.py`` (feeds the RS3 server stream from the ``I`` reply onward into ``download_file``; asserts SHA-1 and client acks ``0, 982320, …``).
 
 ## Log download (A116 / a_0241 / a_0242, 2026-09)
 

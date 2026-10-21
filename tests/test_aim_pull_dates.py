@@ -66,7 +66,7 @@ def _setup_pull_mocks(
         _fake_download,
     )
 
-    def _fake_parse(path):
+    def _fake_parse(path, *_args, **_kwargs):
         class _Log:
             metadata = {
                 "Vehicle": "V",
@@ -80,9 +80,9 @@ def _setup_pull_mocks(
 
         return _Log()
 
-    monkeypatch.setattr("routes.sessions.parse_file", _fake_parse)
+    monkeypatch.setattr("services.aim_pull_indexer.parse_file", _fake_parse)
     monkeypatch.setattr(
-        "routes.sessions.extract_session_info",
+        "services.aim_pull_indexer.extract_session_info",
         lambda log, filename: {
             "metadata": {
                 "vehicle": "V",
