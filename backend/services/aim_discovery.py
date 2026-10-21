@@ -109,20 +109,19 @@ def parse_discovery_text(ip: str, data: bytes) -> dict:
         "serial": "",
         "vehicle": "",
     }
-    try:
-        text = data.decode("ascii", errors="replace")
-        aim_match = re.search(r"(AiM-[A-Za-z0-9_-]+)", text)
-        if aim_match:
-            info["ssid"] = aim_match.group(1)
-        m = re.search(r"AiM-([A-Za-z0-9_]+)-(\d+)-([^\x00]+)", text)
-        if m:
-            info["model"] = m.group(1)
-            info["serial"] = m.group(2)
-            info["vehicle"] = m.group(3).rstrip("\x00").rstrip()
-        if len(data) > 0x54:
-            raw_name = data[0x14:0x54].split(b"\x00")[0].decode("ascii", errors="replace")
-            if raw_name and raw_name.isprintable():
-                info["device_name"] = raw_name
-    except Exception:
-        pass
+    # Decoding with errors="replace" and regex matching can't raise, so a
+    # malformed reply just leaves fields empty -- no blanket except needed.
+    text = data.decode("ascii", errors="replace")
+    aim_match = re.search(r"(AiM-[A-Za-z0-9_-]+)", text)
+    if aim_match:
+        info["ssid"] = aim_match.group(1)
+    m = re.search(r"AiM-([A-Za-z0-9_]+)-(\d+)-([^\x00]+)", text)
+    if m:
+        info["model"] = m.group(1)
+        info["serial"] = m.group(2)
+        info["vehicle"] = m.group(3).rstrip("\x00").rstrip()
+    if len(data) > 0x54:
+        raw_name = data[0x14:0x54].split(b"\x00")[0].decode("ascii", errors="replace")
+        if raw_name and raw_name.isprintable():
+            info["device_name"] = raw_name
     return info

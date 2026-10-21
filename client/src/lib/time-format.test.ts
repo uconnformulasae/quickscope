@@ -25,15 +25,16 @@ describe('formatAimDeviceListDate', () => {
 });
 
 describe('parseLogStartMs', () => {
-  it('parses AiM day/month/year dates with times', () => {
-    expect(parseLogStartMs('05/10/2026', '14:30:00')).toBe(local(2026, 10, 5, 14, 30));
-  });
-  it('falls back to month/day when day/month is impossible', () => {
+  it('parses month/day/year dates with times', () => {
+    expect(parseLogStartMs('05/10/2026', '14:30:00')).toBe(local(2026, 5, 10, 14, 30));
     expect(parseLogStartMs('10/25/2026', '08:00:00')).toBe(local(2026, 10, 25, 8));
+  });
+  it('falls back to day/month when month/day is impossible', () => {
+    expect(parseLogStartMs('25/10/2026', '08:00:00')).toBe(local(2026, 10, 25, 8));
   });
   it('accepts ISO and dash dates and HH:MM times', () => {
     expect(parseLogStartMs('2026-10-05', '09:05')).toBe(local(2026, 10, 5, 9, 5));
-    expect(parseLogStartMs('05-10-2026', '')).toBe(local(2026, 10, 5));
+    expect(parseLogStartMs('05-10-2026', '')).toBe(local(2026, 5, 10));
   });
   it.each(['', 'Unknown', 'garbage', '31/02/2026'])('rejects %j', date => {
     expect(parseLogStartMs(date, '10:00:00')).toBeNull();
@@ -47,8 +48,8 @@ describe('resolveLogStartMs', () => {
     );
   });
   it('falls back to date/time strings, then null', () => {
-    expect(resolveLogStartMs(null, '05/10/2026', '14:30:00')).toBe(local(2026, 10, 5, 14, 30));
-    expect(resolveLogStartMs('not-a-date', '05/10/2026', '14:30:00')).toBe(local(2026, 10, 5, 14, 30));
+    expect(resolveLogStartMs(null, '10/05/2026', '14:30:00')).toBe(local(2026, 10, 5, 14, 30));
+    expect(resolveLogStartMs('not-a-date', '10/05/2026', '14:30:00')).toBe(local(2026, 10, 5, 14, 30));
     expect(resolveLogStartMs(undefined)).toBeNull();
   });
 });

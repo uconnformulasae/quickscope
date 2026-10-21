@@ -269,7 +269,8 @@ class AimDll:
         result = self._dll.get_GPS_channel_samples(idx, channel, times, values, count)
         if result <= 0:
             return [], []
-        return list(times), list(values)
+        # The buffer past `result` is never written -- don't return its zeros.
+        return list(times[:result]), list(values[:result])
 
     def iter_regular_channels(self, idx: int) -> Iterator[tuple[str, str, list[float], list[float]]]:
         for ch in range(self.get_channels_count(idx)):

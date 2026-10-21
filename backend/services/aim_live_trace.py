@@ -1,7 +1,7 @@
 """
 Persistent trace for AiM live view sessions.
 
-Writes JSONL timelines under backend/data/logs/aim_live/sessions/ so failures
+Writes JSONL timelines under <data dir>/logs/aim_live/sessions/ so failures
 can be diagnosed without terminal scrollback. Each WebSocket live connection
 gets one trace file; path is logged at session_start.
 """
@@ -15,13 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from services.settings_store import DATA_DIR
 from services.trace_file import open_unique
 
 logger = logging.getLogger(__name__)
 
 _FRAME_FLUSH_INTERVAL_S = 1.0
 
-_SESSION_DIR = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_live" / "sessions"
+_SESSION_DIR = DATA_DIR / "logs" / "aim_live" / "sessions"
 
 
 class AimLiveTrace:

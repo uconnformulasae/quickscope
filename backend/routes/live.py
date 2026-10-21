@@ -11,6 +11,8 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from origins import is_allowed_origin
+
 from services.aim_primary_hub import get_aim_primary_hub
 from services.aim_discovery import DEFAULT_DEVICE_IP
 from services.aim_device_cache import get_cached
@@ -28,10 +30,20 @@ router = APIRouter()
 # whenever a tab is briefly busy.
 _QUEUE_MAX = 2000
 _HEARTBEAT_S = 0.25
+# How long a finished device pump waits for queued frames (e.g. its error
+# message) to reach the browser before the socket is closed.
+_DRAIN_GRACE_S = 0.5
 
 
 @router.websocket("/api/live/ws")
 async def live_ws(websocket: WebSocket) -> None:
+    # CORS never applies to WebSocket handshakes, so any web page could open
+    # this socket and take over the logger link -- check Origin ourselves.
+    origin = websocket.headers.get("origin")
+    if not is_allowed_origin(origin):
+        logger.warning("Live WS: rejected connection from origin %r", origin)
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     settings = load_settings()
     host = settings.get("aim_device_ip", DEFAULT_DEVICE_IP)
@@ -51,11 +63,66 @@ async def live_ws(websocket: WebSocket) -> None:
         msg = user_visible_error(exc)
         trace.log("connect_failed", error=msg, exc_type=type(exc).__name__)
         logger.warning("Live WS: AiM connect failed: %s (trace=%s)", msg, trace.path)
-        await websocket.send_json({"type": "error", "message": msg})
         trace.close(outcome="connect_failed")
-        await websocket.close()
+        try:
+            await websocket.send_json({"type": "error", "message": msg})
+            await websocket.close()
+        except Exception:
+            pass  # the browser already went away while we were connecting
         return
 
+    # Everything after the acquire runs under this try so the hub lock is
+    # released however the session ends -- including a client that drops
+    # before the "connected" frame goes out.
+    device_dropped = False
+    tasks: list[asyncio.Task] = []
+    try:
+        await _stream_session(websocket, client, host, tasks)
+    except _DeviceDropped:
+        device_dropped = True
+    except Exception:
+        logger.debug("Live WS: session ended with error", exc_info=True)
+    finally:
+        client.on_status = None
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if device_dropped:
+            logger.info("Live WS: session ending, closing primary TCP after device drop")
+            await hub.close_primary()
+        else:
+            logger.info("Live WS: session ending, releasing primary TCP (keep open)")
+        await hub.release_live()
+        trace.close(
+            outcome="device_drop" if device_dropped else "normal",
+            snapshots=client._snapshots_yielded,
+            poll_a_timeouts=client._poll_a_timeouts,
+        )
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+class _DeviceDropped(Exception):
+    """The AiM device closed the live TCP mid-stream."""
+
+
+async def _stream_session(
+    websocket: WebSocket,
+    client,
+    host: str,
+    tasks: list[asyncio.Task],
+) -> None:
+    """Pump device snapshots to the browser until either side ends.
+
+    Created tasks are appended to ``tasks`` so the caller can cancel them.
+    Raises ``_DeviceDropped`` when the device closed the TCP.
+    """
     device_ip = client.identity.ip if client.identity else host
     logger.info(
         "Live WS: streaming to client (device_ip=%s model=%s serial=%s)",
@@ -188,39 +255,20 @@ async def live_ws(websocket: WebSocket) -> None:
     send_task = asyncio.create_task(_send_loop())
     hb_task = asyncio.create_task(_heartbeat())
     recv_task = asyncio.create_task(_receive_loop())
+    tasks.extend([pump_task, send_task, hb_task, recv_task])
 
-    try:
-        await asyncio.wait(
-            [recv_task, pump_task, send_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-    finally:
-        stop.set()
-        pump_task.cancel()
-        send_task.cancel()
-        hb_task.cancel()
-        recv_task.cancel()
-        client.on_status = None
-        for task in (pump_task, send_task, hb_task, recv_task):
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
-        if device_dropped:
-            logger.info("Live WS: session ending, closing primary TCP after device drop")
-            await hub.close_primary()
-        else:
-            logger.info("Live WS: session ending, releasing primary TCP (keep open)")
-        await hub.release_live()
-        trace.close(
-            outcome="device_drop" if device_dropped else "normal",
-            snapshots=client._snapshots_yielded,
-            poll_a_timeouts=client._poll_a_timeouts,
-        )
-        try:
-            await websocket.close()
-        except Exception:
-            pass
+    await asyncio.wait(
+        [recv_task, pump_task, send_task],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    stop.set()
+    if pump_task.done() and not send_task.done():
+        # The pump enqueued its final error frame and the sentinel; let the
+        # sender flush it so the browser sees why the stream ended instead of
+        # a bare socket close.
+        await asyncio.wait([send_task], timeout=_DRAIN_GRACE_S)
+    if device_dropped:
+        raise _DeviceDropped()
 
 
 @router.get("/api/live/status")

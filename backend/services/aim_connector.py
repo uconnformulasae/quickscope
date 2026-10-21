@@ -42,13 +42,7 @@ logger = logging.getLogger(__name__)
 # Each STNC message is exactly 84 bytes: header(12) + payload(64) + trailer(8)
 
 _HANDSHAKE = bytes.fromhex("3c685354435008000000003e00000000060800003c535443500e003e")
-_STNC_SYSTEM = bytes.fromhex("3c6853544e4340000000003e000000000000000010000100000000004000000000000000410000000000000000000000000000000000000000000000000000000000000000000000000000003c53544e4392003e")
-_STNC_PREP_SESSIONS = bytes.fromhex("3c6853544e4340000000003e0000000000000000510002000000000000000000000000004100000000000000ffffffff000000000000000000000000000000000000000000000000000000003c53544e4390043e")
-_STNC_GET_SESSIONS = bytes.fromhex("3c6853544e4340000000003e000000000000000024000200000000000000000000000000410000000000000000000000000000000000000000000000000000000000000000000000000000003c53544e4367003e")
 _ACK = bytes.fromhex("3c685354435004000000003e000000003c5354435000003e")
-# Live-stream polling uses zero payloads; file downloads use cumulative byte counts.
-_STCP_MICRO_ACK = encode_frame(b"STCP", b"\x00\x00\x00\x00")
-_STCP_Q_ACK_OPCODE = ord("Q")
 _STCP_Q_ACK_OPCODE_OFFSET = 24
 # The device streams a file in batches of 30 blocks (982,320 bytes) and then
 # waits for a cumulative-progress ACK. Each block carries its *absolute* file
@@ -143,41 +137,13 @@ def discover_device() -> dict | None:
 
 # ── TCP helpers ──────────────────────────────────────────────────────────────
 
-def _send_and_recv(sock: socket.socket, msg: bytes, label: str, read_timeout: float = 3.0) -> bytes:
-    """Send one message and read the response. Each must be a separate TCP write."""
-    logger.debug("Sending %s (%d bytes)", label, len(msg))
-    sock.sendall(msg)
-
-    sock.settimeout(read_timeout)
-    buf = b""
-    try:
-        chunk = sock.recv(8192)
-        if chunk:
-            buf += chunk
-            # Read continuation data
-            sock.settimeout(0.5)
-            while True:
-                try:
-                    more = sock.recv(8192)
-                    if not more:
-                        break
-                    buf += more
-                except socket.timeout:
-                    break  # idle window elapsed: the reply is complete
-    except socket.timeout:
-        logger.warning("No reply from AiM device within %.1fs for %s", read_timeout, label)
-
-    logger.debug("Received %d bytes for %s", len(buf), label)
-    return buf
-
-
 def _send_and_await_frame(
     sock: socket.socket, msg: bytes, label: str, timeout: float = 5.0
 ) -> bytes:
     """Send `msg` and return as soon as one complete protocol frame has arrived.
 
-    `_send_and_recv` always waits an extra 0.5 s idle window for continuation
-    data; a single-frame reply (the handshake hello-ack) doesn't need it.
+    A single-frame reply (the handshake hello-ack) needs no idle window for
+    continuation data.
     """
     logger.debug("Sending %s (%d bytes)", label, len(msg))
     sock.sendall(msg)
@@ -243,92 +209,6 @@ def parse_aim_session_csv_rows(csv_text: str) -> list[dict]:
     return sessions
 
 
-# ── Session listing ──────────────────────────────────────────────────────────
-
-def list_aim_sessions() -> list[dict]:
-    """Deprecated: session list on its own short-lived TCP.
-
-    Only works when no primary hub TCP is open -- the device silently ignores a
-    second port-2000 connection (QS_Pull_241/242 lost ~37 s per pull this way).
-    App code must use ``aim_primary_hub.list_sessions`` instead; this remains for
-    standalone scripts.
-    """
-    return _list_aim_sessions_legacy_tcp()
-
-
-def _list_aim_sessions_legacy_tcp() -> list[dict]:
-    """Fallback: own TCP for session list (pre–primary-hub behavior)."""
-    port = _get_data_port()
-    logger.info("Connecting to AiM device on port %d for session listing...", port)
-
-    try:
-        s, _device_ip = _open_device_socket(timeout=10)
-    except OSError as exc:
-        logger.error("Failed to connect to AiM device: %s", exc)
-        raise ConnectionError(f"Failed to connect to AiM device: {exc}") from exc
-
-    try:
-        all_data = b""
-
-        # Step 0: STCP handshake — device ignores all STNC messages without this
-        resp = _send_and_recv(s, _HANDSHAKE, "STCP handshake", read_timeout=5)
-        all_data += resp
-
-        # Step 1: System info query
-        resp = _send_and_recv(s, _STNC_SYSTEM, "STNC system info", read_timeout=5)
-        all_data += resp
-
-        # Step 2: ACK
-        resp = _send_and_recv(s, _ACK, "ACK", read_timeout=3)
-        all_data += resp
-
-        # Step 3: Session prep #1
-        resp = _send_and_recv(s, _STNC_PREP_SESSIONS, "STNC session prep #1")
-        all_data += resp
-
-        # Step 4: Session prep #2
-        resp = _send_and_recv(s, _STNC_PREP_SESSIONS, "STNC session prep #2")
-        all_data += resp
-
-        # Step 5: Get session list
-        resp = _send_and_recv(s, _STNC_GET_SESSIONS, "STNC get sessions")
-        all_data += resp
-
-        # Step 6: ACK triggers CSV delivery
-        resp = _send_and_recv(s, _ACK, "ACK (trigger CSV)", read_timeout=10)
-        all_data += resp
-
-        # Read remaining CSV data
-        s.settimeout(5)
-        try:
-            while True:
-                chunk = s.recv(8192)
-                if not chunk:
-                    break
-                all_data += chunk
-                s.settimeout(3)
-        except (socket.timeout, OSError):
-            pass  # end of CSV: the device stops sending without closing the socket
-
-        try:
-            s.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-    finally:
-        s.close()
-
-    logger.info("Received %d total bytes from device", len(all_data))
-
-    csv_text = _extract_session_csv(all_data)
-    if csv_text is None:
-        logger.error("Could not find session CSV in device response")
-        return []
-
-    sessions = parse_aim_session_csv_rows(csv_text)
-    logger.info("Found %d sessions on device", len(sessions))
-    return sessions
-
-
 # ── File download ────────────────────────────────────────────────────────────
 
 def _build_download_request(filepath: str) -> bytes:
@@ -364,34 +244,6 @@ def _is_stcp_file_payload(payload: bytes) -> bool:
     ):
         return False
     return True
-
-
-def _iter_file_blocks(raw: bytes) -> list[tuple[int, bytes]]:
-    """Parse STCP file-data frames in stream order.
-
-    Control frames use 4- or 64-byte payloads; file blocks are larger and
-    begin with a little-endian u32 file offset followed by raw bytes.
-    """
-    blocks: list[tuple[int, bytes]] = []
-    offset = 0
-    while offset < len(raw):
-        try:
-            frame, consumed = decode_frame(raw, offset)
-        except ValueError:
-            next_h = raw.find(b"<h", offset + 1)
-            if next_h == -1:
-                break
-            offset = next_h
-            continue
-        if frame is None or consumed == 0:
-            break
-        if frame.cmd == b"STCP" and _is_stcp_file_payload(frame.payload):
-            file_offset = struct.unpack_from("<I", frame.payload, 0)[0]
-            file_data = frame.payload[4:]
-            if file_data:
-                blocks.append((file_offset, file_data))
-        offset += consumed
-    return blocks
 
 
 class _IncrementalReassembler:
@@ -456,30 +308,6 @@ class _IncrementalReassembler:
         return total > 0 and len(self) >= total
 
 
-def _extract_data_blocks(raw: bytes, expected_size: int = 0) -> bytes:
-    """Parse STCP data blocks out of a whole stream and reassemble the file."""
-    blocks = _iter_file_blocks(raw)
-    if not blocks:
-        raise RuntimeError(f"No data blocks found in {len(raw)} bytes of response")
-
-    reassembler = _IncrementalReassembler()
-    for file_offset, data in blocks:
-        reassembler.feed(file_offset, data)
-    file_data = reassembler.file_data
-
-    if expected_size > 0 and len(file_data) > expected_size:
-        return bytes(file_data[:expected_size])
-    return bytes(file_data)
-
-
-def _try_extract_file_size(raw: bytes) -> int:
-    """Return reassembled file byte length from STCP blocks, or 0 if none yet."""
-    try:
-        return len(_extract_data_blocks(raw))
-    except RuntimeError:
-        return 0
-
-
 def _drain_download_frames_incremental(
     frame_buffer: bytes,
     reassembler: "_IncrementalReassembler",
@@ -488,10 +316,9 @@ def _drain_download_frames_incremental(
 ) -> bytes:
     """Parse complete frames out of `frame_buffer`, feeding file-data blocks
     into `reassembler` as they're decoded instead of re-parsing the whole
-    stream from byte 0 (see `_try_extract_file_size`'s old hot-path use,
-    now replaced by this for `_receive_file_data`'s per-`recv()` loop).
+    stream from byte 0 on every `recv()` in `_receive_file_data`.
     Download mode never ACKs control frames inline (only batch/stall ACKs),
-    so unlike `_drain_download_frames()` this never touches the socket.
+    so this never touches the socket.
 
     Stops as soon as the file is complete: anything after it on the same TCP
     (RS3 lists sessions next, RS3_PULL_241/242) also uses offset-0 STCP blocks
@@ -531,39 +358,6 @@ def _make_download_progress_ack(byte_count: int) -> bytes:
 
 def _send_download_progress_ack(sock: socket.socket, byte_count: int) -> None:
     sock.sendall(_make_download_progress_ack(byte_count))
-
-
-def _process_download_frame(
-    sock: socket.socket,
-    frame,
-    trace: AimDownloadTrace | None = None,
-    *,
-    reply_to_control: bool = True,
-) -> bool:
-    """Handle one STCP control frame during transfer.
-
-    Live polling replies to 4-byte and Q-64 server frames with zero micro-ACKs.
-    File download ignores those frames; batch progress ACKs are sent separately.
-    """
-    if frame.cmd != b"STCP":
-        return False
-    if not reply_to_control:
-        if trace is not None and len(frame.payload) <= 64:
-            trace.log_frame(frame, ack_sent=False)
-        return False
-    ack = False
-    if len(frame.payload) == 4:
-        sock.sendall(_STCP_MICRO_ACK)
-        ack = True
-    elif (
-        len(frame.payload) == 64
-        and frame.payload[_STCP_Q_ACK_OPCODE_OFFSET] == _STCP_Q_ACK_OPCODE
-    ):
-        sock.sendall(_STCP_MICRO_ACK)
-        ack = True
-    if trace is not None and (ack or len(frame.payload) <= 64):
-        trace.log_frame(frame, ack_sent=ack)
-    return ack
 
 
 def _prompt_next_batch(

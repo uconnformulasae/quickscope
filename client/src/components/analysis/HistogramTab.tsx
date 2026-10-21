@@ -29,9 +29,13 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
   useEffect(() => {
     if (!chartRef.current || !chan || !activeChan || !hasData) return;
 
+    // Plotly loads lazily; if the tab unmounts (or deps change) before it
+    // arrives, don't render into the detached node -- that leaks a chart
+    // (and, for scattergl, a WebGL context) that nothing will ever purge.
+    let cancelled = false;
     const render = () => {
       const Plotly = (window as any).Plotly;
-      if (!Plotly || !chartRef.current) return;
+      if (cancelled || !Plotly || !chartRef.current) return;
 
       const pc = getPlotlyColors();
 
@@ -77,7 +81,9 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
 
     ensurePlotly(render);
 
+    // Also runs on unmount, releasing the chart's WebGL/DOM resources.
     return () => {
+      cancelled = true;
       const Plotly = (window as any).Plotly;
       if (Plotly && plottedEl.current) {
         Plotly.purge(plottedEl.current);
@@ -85,12 +91,6 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
       }
     };
   }, [session, chan, activeChan, theme]);
-
-  // Release the chart's WebGL/DOM resources when the tab unmounts.
-  useEffect(() => () => {
-    const Plotly = (window as any).Plotly;
-    if (Plotly && plottedEl.current) Plotly.purge(plottedEl.current);
-  }, []);
 
   return (
     <div className="p-2 flex flex-col gap-2 h-full">

@@ -12,6 +12,7 @@ from services import (
     aim_connector,
     gps_preview,
     aim_pull_log,
+    aim_download_trace,
 )
 from services.aim_keepalive import AimKeepalive
 from services import aim_pull_indexer, aim_pull_progress
@@ -98,6 +99,15 @@ async def rename_session(session_id: str, body: RenameRequest):
     if old_path and old_path.exists():
         new_path = str(session_store.session_file_path(new_filename))
         old_path.rename(new_path)
+
+    # Keep the in-memory caches pointing at the renamed file. rebind_file
+    # re-fingerprints the new path so the next load is still a cache hit; the
+    # active session's filename is read back from this entry.
+    if new_path:
+        session_cache.rebind_file(session_id, Path(new_path), new_filename)
+        gps_preview.evict(path=old_path)
+    else:
+        session_cache.rename(session_id, new_filename)
 
     updated = session_store.update_session(
         session_id,
@@ -214,7 +224,7 @@ async def get_aim_pull_progress():
 @router.get("/aim/download/trace")
 async def list_aim_download_traces():
     """List persisted AiM download trace logs (newest first)."""
-    log_dir = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_download"
+    log_dir = aim_download_trace._LOG_DIR
     if not log_dir.is_dir():
         return {"traces": []}
     files = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -234,7 +244,7 @@ async def list_aim_download_traces():
 @router.get("/aim/download/trace/{name}")
 async def get_aim_download_trace(name: str):
     """Return one AiM download trace log file."""
-    log_dir = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_download"
+    log_dir = aim_download_trace._LOG_DIR
     path = (log_dir / Path(name).name).resolve()
     if not path.is_file() or not path.is_relative_to(log_dir.resolve()):
         raise HTTPException(404, "Trace log not found")

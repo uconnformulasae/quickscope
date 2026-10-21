@@ -8,7 +8,7 @@ Live-data client for AiM EVO5 (and likely other AiM Race Studio devices).
 
 Repo fixtures: ``docs/protocol/captures/fixtures/`` · spec notes: ``docs/protocol/captures/SOURCE_CAPTURES.md``
 
-QuickScope JSONL under ``backend/data/logs/aim_live/`` is for debugging our client, not the protocol spec.
+QuickScope JSONL under ``<data dir>/logs/aim_live/`` is for debugging our client, not the protocol spec.
 
 Speaks the protocol documented in `docs/protocol/aim-live-protocol.md`. The
 flow:
@@ -124,7 +124,7 @@ def user_visible_error(exc: BaseException) -> str:
             "UDP discovery can succeed while live TCP is blocked — close Race Studio "
             "live view, confirm you are on the logger WiFi, and retry."
         )
-    return f"{type(exc).__name__} (no detail — see backend/data/logs/aim_live/)"
+    return f"{type(exc).__name__} (no detail — see logs/aim_live/ in the QuickScope data folder)"
 
 
 # ── Outer envelope helpers (see docs/protocol/aim-live-protocol.md §3) ──

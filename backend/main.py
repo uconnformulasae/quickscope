@@ -4,17 +4,16 @@ Parses .xrk files using libxrk and serves channel data via FastAPI.
 Multi-session with local persistence and AiM device integration.
 """
 
-import asyncio
 import logging
 import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from origins import ALLOWED_ORIGINS, ALLOWED_ORIGIN_REGEX
 from routes import sessions, analysis, settings, live
 from services import session_store
 from services.aim_live_logging import setup_aim_live_file_logging
-from services.aim_primary_hub import get_aim_primary_hub
 
 from contextlib import asynccontextmanager
 
@@ -29,7 +28,6 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     log_path = setup_aim_live_file_logging()
     logger.info("AiM live diagnostics log file: %s", log_path)
-    get_aim_primary_hub().bind_loop(asyncio.get_running_loop())
     result = session_store.migrate_legacy_entries()
     if result["pruned"] or result["cleaned"]:
         logger.info(
@@ -42,15 +40,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="QuickScope Backend", lifespan=lifespan)
 
-# Only the local UI may call the API from a browser. Any web page can otherwise
-# reach a backend on localhost. The packaged Electron app loads from file://
-# (Origin: null) and opts in via QUICKSCOPE_ALLOW_NULL_ORIGIN.
-_CORS_ORIGINS = ["null"] if os.environ.get("QUICKSCOPE_ALLOW_NULL_ORIGIN") == "1" else []
-
+# Only the local UI may call the API from a browser (see origins.py).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_CORS_ORIGINS,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )

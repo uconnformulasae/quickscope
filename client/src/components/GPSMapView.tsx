@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { MapPin, Loader2 } from 'lucide-react';
 import { fetchGPS } from '../lib/api';
 import type { GPSData } from '../lib/api';
-
-// Leaflet types loaded from CDN
-declare const L: any;
+// Bundled rather than loaded from a CDN so the track map works trackside with
+// no internet (only the background tiles need a connection).
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 /** Avoid Math.max(...arr) — large GPS traces exceed the argument stack limit. */
 function maxOf(values: number[], fallback = 1): number {
@@ -22,8 +23,10 @@ interface GPSMapViewProps {
 
 export function GPSMapView({ cursorTime }: GPSMapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<any>(null);
-  const markerRef = useRef<any>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.CircleMarker | null>(null);
+  // Filtered track points and their times, for placing the cursor marker
+  const trackRef = useRef<{ coords: [number, number][]; times: number[] } | null>(null);
   const [gpsData, setGpsData] = useState<GPSData | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,40 +54,12 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
     return () => { cancelled = true; };
   }, []);
 
-  // Load Leaflet CSS + JS from CDN
-  useEffect(() => {
-    if (typeof L !== 'undefined') return; // Already loaded
-
-    // CSS
-    if (!document.querySelector('link[href*="leaflet"]')) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-      document.head.appendChild(link);
-    }
-
-    // JS
-    if (!document.querySelector('script[src*="leaflet"]')) {
-      const script = document.createElement('script');
-      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-      document.head.appendChild(script);
-    }
-  }, []);
-
   // Initialize map when data is ready
   useEffect(() => {
     if (!gpsData || !mapContainerRef.current) return;
 
-    // Wait for Leaflet to load (polling stops when this effect is cleaned up)
-    let cancelled = false;
-    let pollTimer: ReturnType<typeof setTimeout> | undefined;
-    const waitForLeaflet = () => {
-      if (cancelled) return;
-      if (typeof L === 'undefined') {
-        pollTimer = setTimeout(waitForLeaflet, 100);
-        return;
-      }
-
+    const container = mapContainerRef.current;
+    const buildMap = () => {
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -108,7 +83,7 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
       if (coords.length < 2) return;
 
       // Create map
-      const map = L.map(mapContainerRef.current, {
+      const map = L.map(container, {
         zoomControl: true,
         attributionControl: true,
       });
@@ -164,17 +139,14 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
 
       mapRef.current = map;
       markerRef.current = marker;
-
-      // Store filtered coords and times for cursor updates
-      (mapRef.current as any)._gpsCoords = coords;
-      (mapRef.current as any)._gpsTimes = filteredTimes;
+      trackRef.current = { coords, times: filteredTimes };
     };
 
-    waitForLeaflet();
+    buildMap();
 
     return () => {
-      cancelled = true;
-      clearTimeout(pollTimer);
+      trackRef.current = null;
+      markerRef.current = null;
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -184,11 +156,11 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
 
   // Update cursor position on map
   useEffect(() => {
-    if (!mapRef.current || !markerRef.current || cursorTime == null) return;
+    const track = trackRef.current;
+    if (!markerRef.current || !track || cursorTime == null) return;
 
-    const coords: [number, number][] = (mapRef.current as any)._gpsCoords;
-    const times: number[] = (mapRef.current as any)._gpsTimes;
-    if (!coords || !times || coords.length === 0) return;
+    const { coords, times } = track;
+    if (coords.length === 0) return;
 
     const tMs = cursorTime * 1000;
 

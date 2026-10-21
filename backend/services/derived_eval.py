@@ -44,8 +44,8 @@ _SAFE_BUILTINS = {
 }
 
 _SAFE_NUMPY_ALLOWLIST = frozenset({
-    "array", "asarray", "asanyarray", "zeros", "ones", "empty", "full", "zeros_like",
-    "ones_like", "empty_like", "full_like", "arange", "linspace", "logspace", "geomspace",
+    "array", "asarray", "asanyarray", "zeros", "ones", "full", "zeros_like",
+    "ones_like", "full_like", "arange", "linspace", "logspace", "geomspace",
     "sin", "cos", "tan", "arcsin", "arccos", "arctan", "arctan2", "sinh", "cosh", "tanh",
     "arcsinh", "arccosh", "arctanh", "exp", "exp2", "expm1", "log", "log2", "log10", "log1p",
     "sqrt", "cbrt", "square", "absolute", "abs", "fabs", "sign", "copysign",
@@ -53,10 +53,10 @@ _SAFE_NUMPY_ALLOWLIST = frozenset({
     "maximum", "minimum", "fmax", "fmin", "nanmax", "nanmin", "nanmean", "nanstd", "nanvar",
     "mean", "std", "var", "median", "sum", "cumsum", "prod", "cumprod", "diff", "gradient",
     "interp", "convolve", "isnan", "isinf", "isfinite", "where", "select",
-    "pi", "e", "nan", "inf", "ndarray", "float32", "float64", "int32", "int64", "bool_",
+    "pi", "e", "nan", "inf", "float32", "float64", "int32", "int64", "bool_",
 })
 
-_safe_np_cache = None
+_safe_np_attrs: dict | None = None
 
 
 class ScriptRejected(ValueError):
@@ -81,17 +81,32 @@ def validate(expression: str) -> ast.AST:
 
 
 def _safe_numpy(np) -> types.SimpleNamespace:
-    """numpy's public callables/constants, strictly limited to mathematical functions."""
-    global _safe_np_cache
-    if _safe_np_cache is None:
+    """numpy's public callables/constants, strictly limited to mathematical functions.
+
+    A fresh namespace per run, so a script that rebinds ``np.sin`` only
+    affects itself, never later scripts.
+    """
+    global _safe_np_attrs
+    if _safe_np_attrs is None:
         attrs = {}
         for name in _SAFE_NUMPY_ALLOWLIST:
             if hasattr(np, name):
                 val = getattr(np, name)
                 if not isinstance(val, types.ModuleType):
                     attrs[name] = val
-        _safe_np_cache = types.SimpleNamespace(**attrs)
-    return _safe_np_cache
+        _safe_np_attrs = attrs
+    return types.SimpleNamespace(**_safe_np_attrs)
+
+
+def _safe_math(math_module) -> types.SimpleNamespace:
+    """Per-run copy of ``math``'s public names.
+
+    Handing scripts the real module would let ``math.sin = ...`` corrupt
+    every other user of ``math`` in the server (lap detection, GPS preview).
+    """
+    return types.SimpleNamespace(**{
+        k: getattr(math_module, k) for k in dir(math_module) if not k.startswith("_")
+    })
 
 
 def run(expression: str, channels: dict, *, np, math_module, interpolate, timeout: float) -> dict:
@@ -102,7 +117,7 @@ def run(expression: str, channels: dict, *, np, math_module, interpolate, timeou
         "channels": channels,
         "np": _safe_numpy(np),
         "interpolate": interpolate,
-        "math": math_module,
+        "math": _safe_math(math_module),
     }
     local_vars: dict = {}
 

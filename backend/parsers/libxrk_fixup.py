@@ -62,15 +62,20 @@ def normalize_libxrk_timestamps(log: LogFile) -> LogFile:
     """Rebase epoch GPS timecodes to session-relative milliseconds."""
     duration_ms = _session_duration_ms(log)
 
-    offset: int | None = None
+    to_rebase: list[tuple[str, pa.Table, list]] = []
     for name, table in log.channels.items():
         if not _is_gps_channel(name) or table.num_rows == 0:
             continue
         timecodes = table["timecodes"].to_pylist()
-        if not _needs_epoch_rebase(timecodes, duration_ms):
-            continue
-        if offset is None:
-            offset = int(min(timecodes))
+        if _needs_epoch_rebase(timecodes, duration_ms):
+            to_rebase.append((name, table, timecodes))
+    if not to_rebase:
+        return log
+
+    # One shared offset: the earliest timecode across ALL rebased channels, so
+    # no channel is pushed below zero by whichever one dict order visited first.
+    offset = int(min(min(timecodes) for _, _, timecodes in to_rebase))
+    for name, table, _ in to_rebase:
         log.channels[name] = _rebase_table(table, offset)
 
     return log

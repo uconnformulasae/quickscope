@@ -16,7 +16,7 @@ import { ThemeToggle } from './ThemeToggle';
 import { GPSThumbnail } from './GPSThumbnail';
 
 interface SessionBrowserProps {
-  onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string) => void;
+  onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string, source: LocalSession['source']) => void;
   onOpenSettings: () => void;
   onOpenLive: (device: AimStatus['device']) => void;
   theme: 'dark' | 'light';
@@ -94,6 +94,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
   const [activityTab, setActivityTab] = useState<'uploads' | 'aim'>('uploads');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  // Enter commits and then the input's blur fires too; only the first counts.
+  const renameDoneRef = useRef(false);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -137,7 +139,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     setLoadingId(session.id);
     try {
       const info = await loadSession(session.id);
-      onSessionLoaded(info, session.id, session.filename);
+      onSessionLoaded(info, session.id, session.filename, session.source);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Load failed');
     } finally {
@@ -158,12 +160,15 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
   const startRename = useCallback((e: React.MouseEvent, session: LocalSession) => {
     e.stopPropagation();
+    renameDoneRef.current = false;
     setRenamingId(session.id);
     setRenameValue(session.aim_session_id || pathStem(session.filename));
     setTimeout(() => renameInputRef.current?.select(), 0);
   }, []);
 
   const submitRename = useCallback(async () => {
+    if (renameDoneRef.current) return;
+    renameDoneRef.current = true;
     const id = renamingId;
     const value = renameValue.trim();
     setRenamingId(null);
@@ -197,9 +202,9 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         ? updated.find(s => s.id === info.sessionId)
         : updated.find(s => s.filename === file.name);
       if (newest) {
-        onSessionLoaded(info, newest.id, file.name);
+        onSessionLoaded(info, newest.id, file.name, newest.source);
       } else if (info.sessionId) {
-        onSessionLoaded(info, info.sessionId, file.name);
+        onSessionLoaded(info, info.sessionId, file.name, 'manual_upload');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
@@ -587,7 +592,10 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                           onBlur={submitRename}
                           onKeyDown={e => {
                             if (e.key === 'Enter') submitRename();
-                            if (e.key === 'Escape') setRenamingId(null);
+                            if (e.key === 'Escape') {
+                              renameDoneRef.current = true;
+                              setRenamingId(null);
+                            }
                           }}
                           onClick={e => e.stopPropagation()}
                           className="text-sm font-medium text-foreground bg-muted/50 border border-primary/50 rounded px-1.5 py-0.5 outline-none w-full max-w-[260px]"

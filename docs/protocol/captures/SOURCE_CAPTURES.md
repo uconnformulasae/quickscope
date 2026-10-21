@@ -40,12 +40,6 @@ python scripts/compare_live_pcaps.py "path\to\new_qs.pcapng" "c:\Users\jesse\Dow
 
 Expect `bad` micro cycles **0**, LIVE count growing, no `RST from 10.0.0.1` in TCP end.
 
-Analyze RS3 1 min capture:
-
-```powershell
-python scripts/analyze_rs3_live_pcap.py "c:\Users\jesse\Downloads\RS3_live_1min.pcapng" --stream 36
-```
-
 Committed text fixtures under `fixtures/` are derived from these pcaps. Re-export when the on-car logger or RS3 version changes.
 
 ## Wireshark

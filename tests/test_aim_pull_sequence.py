@@ -33,13 +33,6 @@ def pull_env(tmp_path, monkeypatch, fake_keepalive):
     )
     monkeypatch.setattr("services.aim_pull_indexer.parse_file", lambda path, *a, **k: object())
 
-    def _legacy_list_forbidden():
-        raise AssertionError("pull must not open the legacy session-list TCP")
-
-    monkeypatch.setattr(
-        "routes.sessions.aim_connector.list_aim_sessions", _legacy_list_forbidden
-    )
-
     hub = FakePullHub([{"filename": "a_0242.xrz", "size": 500, "date": "", "hour": ""}])
     monkeypatch.setattr("routes.sessions.get_aim_primary_hub", lambda: hub)
     aim_pull_log.clear()

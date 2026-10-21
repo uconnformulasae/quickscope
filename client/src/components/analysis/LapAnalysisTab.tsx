@@ -5,6 +5,9 @@ import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { Timer } from 'lucide-react';
 import { formatNum, resolveChannel, resolveSamples } from './analysis-helpers';
 
+/** Laps shorter than this fraction of the median lap can't be the best lap. */
+const MIN_BEST_LAP_FRACTION = 0.5;
+
 const LAP_SOURCE_LABEL: Record<LapSource, string> = {
   device: 'Device markers',
   gps_auto: 'Auto-detected (GPS)',
@@ -38,12 +41,20 @@ export function LapAnalysisTab({
     let bestLap = -1;
     let bestTime = Infinity;
 
+    // A "lap" far shorter than the typical lap is a spurious marker (double
+    // beacon hit, pit-lane split), not a best lap. Relative to the median so
+    // short autocross/kart laps still qualify.
+    const lapTimes = markers.slice(1).map((m, i) => (m.timestamp - markers[i].timestamp) / 1000);
+    const sortedTimes = [...lapTimes].sort((a, b) => a - b);
+    const medianLapS = sortedTimes[Math.floor(sortedTimes.length / 2)];
+    const minBestLapS = medianLapS * MIN_BEST_LAP_FRACTION;
+
     for (let i = 0; i < markers.length - 1; i++) {
       const startMs = markers[i].timestamp;
       const endMs = markers[i + 1].timestamp;
       const lapTimeS = (endMs - startMs) / 1000;
 
-      if (lapTimeS < bestTime && lapTimeS > 10) {
+      if (lapTimeS < bestTime && lapTimeS >= minBestLapS) {
         bestTime = lapTimeS;
         bestLap = i;
       }
