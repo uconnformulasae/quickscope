@@ -27,23 +27,37 @@ if (-not (Test-Path $venvPy)) {
     python -m venv .venv
 }
 
-# Install Python deps if needed
+# Install Python deps if missing or requirements.txt changed since the last install
+$pyStamp = Join-Path $PSScriptRoot ".venv\.requirements-installed"
 $hasLibxrk = $false
 try {
     & $venvPy -c "import libxrk" 2>$null
     if ($LASTEXITCODE -eq 0) { $hasLibxrk = $true }
 } catch {}
 
-if (-not $hasLibxrk) {
+function Test-Stale([string]$Stamp, [string[]]$Sources) {
+    if (-not (Test-Path $Stamp)) { return $true }
+    $stampTime = (Get-Item $Stamp).LastWriteTime
+    foreach ($src in $Sources) {
+        if ((Get-Item $src).LastWriteTime -gt $stampTime) { return $true }
+    }
+    return $false
+}
+
+if (-not $hasLibxrk -or (Test-Stale $pyStamp @("backend/requirements.txt"))) {
     Write-Host "Installing Python dependencies..."
     & $venvPy -m pip install --upgrade pip
     & $venvPy -m pip install -r backend/requirements.txt
+    New-Item -ItemType File -Path $pyStamp -Force | Out-Null
 }
 
-# Install Node deps if needed
-if (-not (Test-Path "node_modules")) {
+# Install Node deps if missing or package.json / package-lock.json changed since the last install
+# (npm writes node_modules/.package-lock.json on every install)
+$nodeStamp = "node_modules/.package-lock.json"
+if (Test-Stale $nodeStamp @("package.json", "package-lock.json")) {
     Write-Host "Installing Node dependencies..."
     npm install
+    (Get-Item $nodeStamp).LastWriteTime = Get-Date
 }
 
 # npm 11+ warns on devdir injected by some tooling (e.g. Cursor); not a valid npm config key.
