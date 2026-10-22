@@ -1,9 +1,10 @@
 import type React from 'react';
 import { evaluateFormula, type ChannelMap } from '../../lib/formula-engine';
 import { BUILTIN_UNITS, CHANNEL_META, IC_ENGINE_STATS, type Snapshot } from './live-channels';
-import { convertUnit } from './units';
+import { convertUnit, unitCycle } from './units';
+import { overrideKey, type UnitOverrides } from './useUnitOverrides';
 import { otherChannelEntries, type ChannelRef, type StatStyle, type WidgetConfig } from './layout-schema';
-import { fmt, directionLabel, Panel, BigStat, CoolStat, VehicleStat, BarRow, BoolPill, GForceCircle, type StatTone } from './widgets';
+import { fmt, directionLabel, clickableProps, unitTone, CLICKABLE, Panel, BigStat, CoolStat, VehicleStat, BarRow, BoolPill, GForceCircle, type StatTone } from './widgets';
 
 // Default unit / precision for channels the layout doesn't override.
 const META = new Map<string, { unit: string; precision: number }>([
@@ -37,6 +38,30 @@ export function readValue(ref: ChannelRef, ch: Record<string, number>, deviceUni
   if (ref.unit && from) v = convertUnit(v, from, ref.unit) ?? v;
   if (ref.invalidBelow !== undefined && v <= ref.invalidBelow) return undefined;
   return v;
+}
+
+const UNIT_FIELDS = ['min', 'max', 'warn', 'crit', 'invalidBelow'] as const;
+
+/**
+ * `ref` shown in `unit` instead of its layout unit: the range, thresholds and no-data
+ * floor are converted along with it. A layout unit that's only a label counts as the
+ * logger's `sourceUnit`, since that's what the values were entered in.
+ */
+export function withDisplayUnit(ref: ChannelRef, unit: string, sourceUnit: string): ChannelRef {
+  const from = ref.unit && convertUnit(0, sourceUnit, ref.unit) !== undefined ? ref.unit : sourceUnit;
+  const out: ChannelRef = { ...ref, unit };
+  for (const field of UNIT_FIELDS) {
+    const v = ref[field];
+    if (v !== undefined) out[field] = convertUnit(v, from, unit) ?? v;
+  }
+  return out;
+}
+
+/** Click-to-switch units for live values (absent in edit mode). */
+export interface UnitSwitch {
+  layoutId: string;
+  overrides: UnitOverrides;
+  cycle: (key: string, units: string[]) => void;
 }
 
 function displayValue(ref: ChannelRef, v: number | undefined): string {
@@ -82,17 +107,35 @@ export function WidgetRenderer({
   latest,
   totalReceived,
   usedChannels,
+  unitSwitch,
 }: {
   widget: WidgetConfig;
   latest: Snapshot | null;
   totalReceived: number;
   /** Channels referenced by any widget in the layout (for `otherChannels`). */
   usedChannels: Set<string>;
+  unitSwitch?: UnitSwitch;
 }) {
   const ch = latest?.channels ?? {};
   const deviceUnits = latest?.units ?? {};
   const unit = (ref: ChannelRef) => unitOf(ref, deviceUnits);
   const read = (ref: ChannelRef) => readValue(ref, ch, deviceUnits);
+  // The ref as shown, with the viewer's clicked unit applied, and how to switch it.
+  // A stored unit that no longer fits the channel is ignored, so a value never gets stuck.
+  const view = (ref: ChannelRef): { ref: ChannelRef; unitChanged: boolean; onClick?: () => void } => {
+    const source = sourceUnit(ref, deviceUnits);
+    if (!unitSwitch || !source || ref.format === 'onoff' || ref.format === 'direction') return { ref, unitChanged: false };
+    const cycle = unitCycle(source, ref.unit ?? source);
+    if (cycle.length < 2) return { ref, unitChanged: false };
+    const key = overrideKey(unitSwitch.layoutId, widget.id, ref.name);
+    const chosen = unitSwitch.overrides[key];
+    const active = chosen !== undefined && chosen !== cycle[0] && cycle.includes(chosen) ? chosen : undefined;
+    return {
+      ref: active ? withDisplayUnit(ref, active, source) : ref,
+      unitChanged: active !== undefined,
+      onClick: () => unitSwitch.cycle(key, cycle),
+    };
+  };
   const label = (ref: ChannelRef) => ref.label || ref.name || ref.expr || '—';
   const note = widget.note && widget.type !== 'note' && (
     <p className="mt-2 text-[10px] text-muted-foreground/70 leading-snug whitespace-pre-wrap">{widget.note}</p>
@@ -114,9 +157,10 @@ export function WidgetRenderer({
       const style = widget.style ?? 'tile';
       body = (
         <div style={gridStyle(widget.columns, MIN_TILE_PX[style])}>
-          {widget.channels.map((ref, i) => {
+          {widget.channels.map((layoutRef, i) => {
+            const { ref, unitChanged, onClick } = view(layoutRef);
             const v = read(ref);
-            const props = { label: label(ref), value: displayValue(ref, v), unit: unit(ref), tone: toneFor(ref, v) };
+            const props = { label: label(ref), value: displayValue(ref, v), unit: unit(ref), tone: toneFor(ref, v), unitChanged, onClick };
             return style === 'big' ? <BigStat key={i} {...props} />
               : style === 'compact' ? <VehicleStat key={i} {...props} />
               : <CoolStat key={i} {...props} />;
@@ -128,13 +172,14 @@ export function WidgetRenderer({
     case 'bars':
       body = (
         <div className="space-y-2.5">
-          {widget.channels.map((ref, i) => {
+          {widget.channels.map((layoutRef, i) => {
+            const { ref, unitChanged, onClick } = view(layoutRef);
             const v = read(ref);
             const min = ref.min ?? 0;
             const max = ref.max ?? 100;
             const fraction = v === undefined || max <= min ? undefined : Math.max(0, Math.min(1, (v - min) / (max - min)));
             return (
-              <BarRow key={i} label={label(ref)} value={displayValue(ref, v)} unit={unit(ref)} fraction={fraction} tone={toneFor(ref, v)} />
+              <BarRow key={i} label={label(ref)} value={displayValue(ref, v)} unit={unit(ref)} fraction={fraction} tone={toneFor(ref, v)} unitChanged={unitChanged} onClick={onClick} />
             );
           })}
         </div>
@@ -170,17 +215,19 @@ export function WidgetRenderer({
         </p>
       ) : (
         <div style={gridStyle(widget.columns, 96)} className="!gap-1.5">
-          {entries.map(([name, val]) => {
-            const ref = { name };
+          {entries.map(([name]) => {
+            const { ref, unitChanged, onClick } = view({ name });
+            const val = read(ref);
             return (
               <div
                 key={name}
-                className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5"
+                {...clickableProps(onClick)}
+                className={`rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5 ${onClick ? CLICKABLE : ''}`}
               >
                 <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={name}>{name}</p>
                 <p className="text-sm font-semibold tabular mt-0.5 text-foreground">
                   {displayValue(ref, val)}
-                  {unit(ref) && <span className="text-[9px] text-muted-foreground font-normal ml-1">{unit(ref)}</span>}
+                  {unit(ref) && <span className={`text-[9px] font-normal ml-1 ${unitTone(unitChanged)}`}>{unit(ref)}</span>}
                 </p>
               </div>
             );

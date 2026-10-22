@@ -7,6 +7,7 @@ import {
 import { BUILTIN_CHANNELS, BUILTIN_UNITS, vehicleKind, type VehicleKind } from './live/live-channels';
 import { useLiveStream } from './live/useLiveStream';
 import { useLiveLayouts } from './live/useLiveLayouts';
+import { useUnitOverrides } from './live/useUnitOverrides';
 import { LiveDashboard } from './live/LiveDashboard';
 import { WidgetConfigDialog } from './live/WidgetConfigDialog';
 import { type ChannelSources } from './live/ChannelPicker';
@@ -74,6 +75,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const layouts = useLiveLayouts(connectedKind, draft !== null);
+  const units = useUnitOverrides();
   const shown = draft ?? layouts.current;
   const dirty = draft !== null && JSON.stringify(draft) !== draftOrigin.current;
   const mismatch = connectedKind !== null && shown.vehicle !== connectedKind;
@@ -443,6 +445,8 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
             onGridChange={(grid) => draft && setDraft({ ...draft, grid })}
             onEditWidget={setEditingWidgetId}
             onRemoveWidget={removeWidget}
+            unitOverrides={units.overrides}
+            onCycleUnit={units.cycle}
           />
         </div>
       </main>

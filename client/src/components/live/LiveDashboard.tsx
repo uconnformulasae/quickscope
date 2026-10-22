@@ -7,6 +7,7 @@ import { extractChannelNames } from '../../lib/formula-engine';
 import { type Snapshot } from './live-channels';
 import { GRID_COLS, usedChannels, type GridItem, type LiveLayout, type WidgetConfig } from './layout-schema';
 import { WidgetRenderer } from './WidgetRenderer';
+import { type UnitOverrides } from './useUnitOverrides';
 
 const ResponsiveGrid = WidthProvider(Responsive);
 
@@ -37,6 +38,8 @@ export function LiveDashboard({
   onGridChange,
   onEditWidget,
   onRemoveWidget,
+  unitOverrides,
+  onCycleUnit,
 }: {
   layout: LiveLayout;
   latest: Snapshot | null;
@@ -47,10 +50,17 @@ export function LiveDashboard({
   onGridChange: (grid: GridItem[]) => void;
   onEditWidget: (id: string) => void;
   onRemoveWidget: (id: string) => void;
+  /** Click-to-switch units; ignored while editing (a click there starts a drag). */
+  unitOverrides: UnitOverrides;
+  onCycleUnit: (key: string, units: string[]) => void;
 }) {
   const used = useMemo(() => usedChannels(layout, extractChannelNames), [layout]);
   const layouts: Layouts = useMemo(() => ({ lg: layout.grid }), [layout.grid]);
   const wide = useIsWide();
+  const unitSwitch = useMemo(
+    () => (editing ? undefined : { layoutId: layout.id, overrides: unitOverrides, cycle: onCycleUnit }),
+    [editing, layout.id, unitOverrides, onCycleUnit],
+  );
 
   const handleLayoutChange = (current: Layout[]) => {
     if (!editing) return;
@@ -72,7 +82,7 @@ export function LiveDashboard({
 
   const renderWidget = (w: WidgetConfig) => (
     <>
-      <WidgetRenderer widget={w} latest={latest} totalReceived={totalReceived} usedChannels={used} />
+      <WidgetRenderer widget={w} latest={latest} totalReceived={totalReceived} usedChannels={used} unitSwitch={unitSwitch} />
       {editing && (
         <div className="no-drag absolute top-1.5 right-1.5 flex gap-1">
           <button

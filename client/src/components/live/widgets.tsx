@@ -37,6 +37,39 @@ const BAR_TONE: Record<StatTone, string> = {
   muted: 'bg-muted-foreground/50',
 };
 
+export const CLICKABLE =
+  'cursor-pointer select-none transition-shadow hover:ring-1 hover:ring-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60';
+
+/** Makes a value switch units on click / Enter / Space; nothing when `onClick` is absent. */
+export function clickableProps(onClick: (() => void) | undefined): React.HTMLAttributes<HTMLElement> {
+  if (!onClick) return {};
+  return {
+    role: 'button',
+    tabIndex: 0,
+    title: 'Click to switch unit',
+    onClick,
+    onKeyDown: (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      onClick();
+    },
+  };
+}
+
+/** A unit the viewer switched away from the layout's is tinted so a stray tap is noticeable. */
+export function unitTone(changed: boolean | undefined): string {
+  return changed ? 'text-primary' : 'text-muted-foreground';
+}
+
+interface StatProps {
+  label: string;
+  value: string;
+  unit: string;
+  tone?: StatTone;
+  unitChanged?: boolean;
+  onClick?: () => void;
+}
+
 // Panels fill their grid cell; the body scrolls if a user shrinks the widget
 // below its content height.
 export function Panel({
@@ -69,57 +102,46 @@ export function Panel({
   );
 }
 
-export function BigStat({
-  label,
-  value,
-  unit,
-  tone,
-}: {
-  label: string;
-  value: string;
-  unit: string;
-  tone?: StatTone;
-}) {
+export function BigStat({ label, value, unit, tone, unitChanged, onClick }: StatProps) {
   return (
-    <div className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-3 py-2">
+    <div
+      {...clickableProps(onClick)}
+      className={`rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-3 py-2 ${onClick ? CLICKABLE : ''}`}
+    >
       <p className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{label}</p>
       <p className={`text-2xl font-bold tabular mt-0.5 ${TEXT_TONE[tone ?? 'primary']}`}>
         {value}
-        <span className="text-xs text-muted-foreground font-normal ml-1">{unit}</span>
+        <span className={`text-xs font-normal ml-1 ${unitTone(unitChanged)}`}>{unit}</span>
       </p>
     </div>
   );
 }
 
-export function CoolStat({
-  label,
-  value,
-  unit,
-  tone,
-}: {
-  label: string;
-  value: string;
-  unit: string;
-  tone?: StatTone;
-}) {
+export function CoolStat({ label, value, unit, tone, unitChanged, onClick }: StatProps) {
   return (
-    <div className={`rounded-md border ${BORDER_TONE[tone ?? 'muted']} bg-background/60 dark:bg-background/30 px-2.5 py-2`}>
+    <div
+      {...clickableProps(onClick)}
+      className={`rounded-md border ${BORDER_TONE[tone ?? 'muted']} bg-background/60 dark:bg-background/30 px-2.5 py-2 ${onClick ? CLICKABLE : ''}`}
+    >
       <p className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{label}</p>
       <p className="text-base font-bold tabular mt-0.5 text-foreground">
         {value}
-        <span className="text-[10px] text-muted-foreground font-normal ml-1">{unit}</span>
+        <span className={`text-[10px] font-normal ml-1 ${unitTone(unitChanged)}`}>{unit}</span>
       </p>
     </div>
   );
 }
 
-export function VehicleStat({ label, value, unit, tone }: { label: string; value: string; unit: string; tone?: StatTone }) {
+export function VehicleStat({ label, value, unit, tone, unitChanged, onClick }: StatProps) {
   return (
-    <div className="rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5 text-center">
+    <div
+      {...clickableProps(onClick)}
+      className={`rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5 text-center ${onClick ? CLICKABLE : ''}`}
+    >
       <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={label}>{label}</p>
       <p className={`text-sm font-bold tabular mt-0.5 ${tone && tone !== 'muted' ? TEXT_TONE[tone] : 'text-foreground'}`}>
         {value}
-        {unit && <span className="text-[9px] text-muted-foreground font-normal ml-0.5">{unit}</span>}
+        {unit && <span className={`text-[9px] font-normal ml-0.5 ${unitTone(unitChanged)}`}>{unit}</span>}
       </p>
     </div>
   );
@@ -132,20 +154,16 @@ export function BarRow({
   unit,
   fraction,
   tone,
-}: {
-  label: string;
-  value: string;
-  unit: string;
-  fraction: number | undefined;
-  tone?: StatTone;
-}) {
+  unitChanged,
+  onClick,
+}: StatProps & { fraction: number | undefined }) {
   return (
-    <div>
+    <div {...clickableProps(onClick)} className={onClick ? `rounded-sm ${CLICKABLE}` : undefined}>
       <div className="flex items-baseline justify-between text-[10px] mb-1 gap-2">
         <span className="font-medium text-muted-foreground truncate">{label}</span>
         <span className={`tabular font-semibold ${TEXT_TONE[tone ?? 'primary']}`}>
           {value}
-          {unit && <span className="text-muted-foreground font-normal ml-0.5">{unit}</span>}
+          {unit && <span className={`font-normal ml-0.5 ${unitTone(unitChanged)}`}>{unit}</span>}
         </span>
       </div>
       <div className="h-1.5 bg-muted/50 rounded-full overflow-hidden">

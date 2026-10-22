@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compatibleUnits, convertUnit } from './units';
+import { compatibleUnits, convertUnit, nextUnit, unitCycle } from './units';
 
 describe('convertUnit', () => {
   it('converts temperature both ways', () => {
@@ -39,5 +39,34 @@ describe('compatibleUnits', () => {
     expect(compatibleUnits('rpm')).toEqual([]);
     expect(compatibleUnits('%')).toEqual([]);
     expect(compatibleUnits('')).toEqual([]);
+  });
+});
+
+describe('unitCycle', () => {
+  it('starts at the layout unit and covers the whole family', () => {
+    expect(unitCycle('°C', '°C')).toEqual(['°C', '°F']);
+    expect(unitCycle('bar', 'psi')).toEqual(['psi', 'kPa', 'bar']);
+  });
+
+  it('keeps a label-only layout unit reachable', () => {
+    expect(unitCycle('km/h', 'kph')).toEqual(['kph', 'km/h', 'mph']);
+  });
+
+  it('is empty when there is nothing to switch to', () => {
+    expect(unitCycle('rpm', 'rpm')).toEqual([]);
+    expect(unitCycle(undefined, 'kV')).toEqual([]);
+  });
+});
+
+describe('nextUnit', () => {
+  it('steps forward and wraps back to the layout unit', () => {
+    const cycle = unitCycle('bar', 'bar');
+    expect(nextUnit(cycle, 'bar')).toBe('psi');
+    expect(nextUnit(cycle, 'psi')).toBe('kPa');
+    expect(nextUnit(cycle, 'kPa')).toBe('bar');
+  });
+
+  it('treats a unit outside the cycle as the layout unit, so nothing is stuck', () => {
+    expect(nextUnit(['°C', '°F'], 'psi')).toBe('°F');
   });
 });

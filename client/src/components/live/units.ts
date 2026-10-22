@@ -35,3 +35,20 @@ export function compatibleUnits(unit: string): string[] {
   if (!entry) return [];
   return [unit, ...entry.family.map((d) => d[0]).filter((u) => u !== unit)];
 }
+
+/**
+ * Units a tile steps through when clicked, `home` (the layout's unit) first; empty
+ * when there's nothing to switch to. A `home` that's only a label stays in the cycle
+ * so clicking can always get back to it.
+ */
+export function unitCycle(sourceUnit: string | undefined, home: string): string[] {
+  const family = sourceUnit ? compatibleUnits(sourceUnit) : [];
+  if (family.length === 0) return [];
+  const at = family.indexOf(home);
+  return at < 0 ? [home, ...family] : [...family.slice(at), ...family.slice(0, at)];
+}
+
+/** The unit after `current` in `cycle`, wrapping; a `current` not in it counts as the first. */
+export function nextUnit(cycle: string[], current: string): string {
+  return cycle[(Math.max(0, cycle.indexOf(current)) + 1) % cycle.length];
+}

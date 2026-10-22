@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readValue } from './WidgetRenderer';
+import { readValue, withDisplayUnit } from './WidgetRenderer';
 
 describe('readValue', () => {
   const ch = { Pack_Voltage: 400, Pack_Current: 50, '0TC01': -1000, '0TC02': 31.5 };
@@ -40,5 +40,31 @@ describe('readValue with a chosen unit', () => {
   it('applies the no-data floor in the tile unit', () => {
     expect(readValue({ name: 'S8_ect1', unit: '°F', invalidBelow: 200 }, ch, units)).toBeCloseTo(212);
     expect(readValue({ name: 'S8_ect1', unit: '°F', invalidBelow: 220 }, ch, units)).toBeUndefined();
+  });
+});
+
+describe('withDisplayUnit', () => {
+  it('converts thresholds and the bar range into the new unit', () => {
+    const ref = withDisplayUnit({ name: 'S8_ect1', warn: 100, crit: 110, invalidBelow: -40 }, '°F', '°C');
+    expect(ref.unit).toBe('°F');
+    expect(ref.warn).toBeCloseTo(212);
+    expect(ref.crit).toBeCloseTo(230);
+    expect(ref.invalidBelow).toBeCloseTo(-40);
+    const bar = withDisplayUnit({ name: 'S8_eop', unit: 'bar', min: 0, max: 10 }, 'psi', 'bar');
+    expect(bar.min).toBeCloseTo(0);
+    expect(bar.max).toBeCloseTo(145.038, 2);
+  });
+
+  it('converts from the layout unit, not the logger unit', () => {
+    expect(withDisplayUnit({ name: 'x', unit: 'psi', crit: 14.5038 }, 'kPa', 'bar').crit).toBeCloseTo(100, 2);
+  });
+
+  it('treats a label-only layout unit as the logger unit', () => {
+    expect(withDisplayUnit({ name: 'x', unit: 'kph', crit: 100 }, 'mph', 'km/h').crit).toBeCloseTo(62.137, 2);
+  });
+
+  it('leaves unset fields unset', () => {
+    const ref = withDisplayUnit({ name: 'x' }, '°F', '°C');
+    expect('warn' in ref || 'crit' in ref || 'min' in ref).toBe(false);
   });
 });
