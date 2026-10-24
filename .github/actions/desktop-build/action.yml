@@ -28,26 +28,32 @@ runs:
         export ARCH="${{ inputs.arch }}"
         export NOTARIZE="${{ inputs.notarize }}"
         # package.json lists arm64+x64 targets; this overlay limits the job to one arch.
+        # electron-builder ignores package.json "build" entirely when --config is passed,
+        # so the overlay must start from it (otherwise files/extraResources are lost and
+        # the whole repo gets packed into app.asar without the backend).
         CFG="${RUNNER_TEMP}/electron-builder-mac-${ARCH}.json"
         export CFG
         node -e "
           const fs = require('fs');
           const arch = process.env.ARCH;
           const notarize = process.env.NOTARIZE === 'true';
-          const version = require('./package.json').version;
+          const pkg = require('./package.json');
+          const base = pkg.build;
           fs.writeFileSync(
             process.env.CFG,
             JSON.stringify(
               {
-                directories: { output: 'release' },
+                ...base,
+                directories: { ...base.directories, output: 'release' },
                 mac: {
+                  ...base.mac,
                   target: [
                     { target: 'dmg', arch: [arch] },
                     { target: 'zip', arch: [arch] },
                   ],
                   notarize,
                 },
-                dmg: { title: 'QuickScope ' + version + ' ' + arch },
+                dmg: { ...base.dmg, title: 'QuickScope ' + pkg.version + ' ' + arch },
               },
               null,
               2,
@@ -62,6 +68,11 @@ runs:
           echo "::error::No .dmg or .zip under release/ after electron-builder"
           exit 1
         fi
+        if ! compgen -G 'release/mac*/QuickScope.app/Contents/Resources/backend/quickscope-backend' > /dev/null; then
+          echo "::error::Frozen backend missing from QuickScope.app (extraResources not applied?)"
+          exit 1
+        fi
+        du -sh release/mac*/QuickScope.app release/*.dmg || true
 
     - name: Build Windows installer
       if: inputs.platform == 'win'
