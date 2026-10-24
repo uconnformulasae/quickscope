@@ -217,3 +217,17 @@
     border-radius: var(--radius);
   }
 }
+
+/* Live dashboard grid (react-grid-layout) — theme the library's edit chrome. */
+.react-grid-item.react-grid-placeholder {
+  background: hsl(var(--primary));
+  opacity: 0.15;
+  border-radius: var(--radius);
+}
+.live-grid-editing .react-grid-item > section {
+  outline: 1px dashed hsl(var(--primary) / 0.5);
+  outline-offset: 2px;
+}
+.react-grid-item > .react-resizable-handle::after {
+  border-color: hsl(var(--muted-foreground));
+}

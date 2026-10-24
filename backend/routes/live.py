@@ -16,7 +16,7 @@ from origins import is_allowed_origin
 from services.aim_primary_hub import get_aim_primary_hub
 from services.aim_discovery import DEFAULT_DEVICE_IP
 from services.aim_device_cache import get_cached
-from services import aim_live
+from services import aim_live, live_channel_cache
 from services.aim_live import user_visible_error
 from services.aim_live_trace import AimLiveTrace
 from services.settings_store import load as load_settings
@@ -157,7 +157,10 @@ async def _stream_session(
     queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX)
     _SENTINEL = None
 
+    sent_units: dict[str, str] | None = None
+
     def _snapshot_message(snap) -> dict:
+        nonlocal sent_units
         msg = {
             "type": "snapshot",
             "seq": client._snapshots_yielded,
@@ -165,6 +168,11 @@ async def _stream_session(
             "subsystem": snap.subsystem,
             "channels": snap.channels,
         }
+        # Units only change with the channel layout, so send them on the
+        # first snapshot and again only after a new layout arrives.
+        if client.channel_units is not sent_units:
+            sent_units = client.channel_units
+            msg["units"] = sent_units
         if send_raw:
             msg["raw"] = snap.raw_b64
         return msg
@@ -194,13 +202,34 @@ async def _stream_session(
                 pass
         queue.put_nowait(item)
 
+    # Channel names seen this session, cached for the offline layout editor.
+    # Only a snapshot carrying a never-before-seen name triggers a write, and
+    # the write runs in a worker thread so the device pump never waits on disk.
+    seen_channels: set[str] = set()
+    identity = client.identity
+
+    def _record_channels(names: set[str], units: dict[str, str]) -> None:
+        try:
+            live_channel_cache.record(
+                identity.vehicle if identity else None,
+                identity.serial if identity else None,
+                names,
+                units,
+            )
+        except Exception:
+            logger.warning("Live WS: failed to cache channel list", exc_info=True)
+
     async def _pump_device() -> None:
         nonlocal device_dropped
+        loop = asyncio.get_running_loop()
         try:
             async for snap in client.stream():
                 if stop.is_set():
                     break
                 _enqueue(_snapshot_message(snap))
+                if snap.channels and not seen_channels.issuperset(snap.channels):
+                    seen_channels.update(snap.channels)
+                    loop.run_in_executor(None, _record_channels, set(seen_channels), client.channel_units)
         except ConnectionError as exc:
             device_dropped = True
             logger.info("Live WS: device closed TCP during stream: %s", exc)

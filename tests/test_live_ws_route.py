@@ -36,6 +36,7 @@ class _FakeIdentity:
 
 class _FakeLiveClient:
     identity = _FakeIdentity()
+    channel_units = {"RPM": "rpm"}
     _snapshots_yielded = 0
     _poll_a_timeouts = 0
 
@@ -178,3 +179,38 @@ def test_live_ws_accepts_the_app_and_dev_origins():
             with client.websocket_connect("/api/live/ws", headers={"origin": origin}) as ws:
                 assert ws.receive_json()["type"] == "connected"
                 ws.send_text("stop")
+
+
+def test_live_ws_caches_seen_channel_names_for_the_offline_editor():
+    import time
+
+    from services import live_channel_cache
+
+    with patch("routes.live.get_aim_primary_hub", return_value=_FakeHub()):
+        with client.websocket_connect("/api/live/ws") as ws:
+            ws.receive_json()  # connected
+            ws.receive_json()  # first snapshot / batch
+            ws.send_text("stop")
+
+    # The cache write runs in a worker thread off the device pump.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not live_channel_cache.get("ev")["channels"]:
+        time.sleep(0.02)
+    cached = live_channel_cache.get("ev")
+    assert cached["channels"] == ["RPM"]
+    assert cached["vehicle"] == "CT17"
+    assert cached["serial"] == "123"
+
+
+def test_live_ws_sends_channel_units_once_per_layout():
+    with patch("routes.live.get_aim_primary_hub", return_value=_FakeHub()):
+        with client.websocket_connect("/api/live/ws") as ws:
+            ws.receive_json()  # connected
+            msg = ws.receive_json()
+            snaps = msg["messages"] if msg["type"] == "batch" else [msg]
+            while len(snaps) < 2:
+                nxt = ws.receive_json()
+                snaps += nxt["messages"] if nxt["type"] == "batch" else [nxt]
+            ws.send_text("stop")
+    assert snaps[0]["units"] == {"RPM": "rpm"}
+    assert all("units" not in s for s in snaps[1:])

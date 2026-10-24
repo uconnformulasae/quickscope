@@ -78,7 +78,7 @@ describe('useLiveStream', () => {
     expect(result.current.device).toEqual(device);
 
     ws.receive({ type: 'snapshot', ts: 5, subsystem: 'Syst', channels: { RPM: 1000 } });
-    expect(result.current.latest).toEqual({ ts: 5, subsystem: 'Syst', raw: '', channels: { RPM: 1000 } });
+    expect(result.current.latest).toEqual({ ts: 5, subsystem: 'Syst', raw: '', channels: { RPM: 1000 }, units: {} });
     expect(result.current.totalReceived).toBe(1);
   });
 
@@ -95,7 +95,16 @@ describe('useLiveStream', () => {
       ],
     });
     expect(result.current.totalReceived).toBe(2);
-    expect(result.current.latest).toEqual({ ts: 2, subsystem: 'Syst', raw: 'AAAA', channels: { RPM: 2 } });
+    expect(result.current.latest).toEqual({ ts: 2, subsystem: 'Syst', raw: 'AAAA', channels: { RPM: 2 }, units: {} });
+  });
+
+  it('carries the last units onto snapshots that arrive without them', () => {
+    const { result } = renderHook(() => useLiveStream());
+    const ws = latestWs();
+    ws.receive({ type: 'connected', device });
+    ws.receive({ type: 'snapshot', ts: 1, subsystem: 'Syst', channels: { RPM: 1 }, units: { RPM: 'rpm' } });
+    ws.receive({ type: 'snapshot', ts: 2, subsystem: 'Syst', channels: { RPM: 2 } });
+    expect(result.current.latest?.units).toEqual({ RPM: 'rpm' });
   });
 
   it('flags device reconnects without clearing the last values', () => {
@@ -162,7 +171,7 @@ describe('useLiveStream', () => {
     expect(result.current.totalReceived).toBe(1);
   });
 
-  it('disconnect sends stop, closes and resets counters', () => {
+  it('disconnect sends stop and closes, keeping the last values until the next connect', () => {
     const { result } = renderHook(() => useLiveStream());
     const ws = latestWs();
     ws.open();
@@ -171,7 +180,12 @@ describe('useLiveStream', () => {
     act(() => result.current.disconnect());
     expect(ws.sent).toEqual(['stop']);
     expect(ws.closed).toBe(true);
-    expect(result.current).toMatchObject({ status: 'idle', totalReceived: 0, latest: null });
+    // The dashboard shows the last values dimmed after a disconnect.
+    expect(result.current).toMatchObject({ status: 'idle', totalReceived: 1 });
+    expect(result.current.latest?.ts).toBe(1);
+
+    act(() => result.current.connect());
+    expect(result.current.totalReceived).toBe(0);
   });
 
   it('connect is a no-op while a socket is already open, and reconnects after disconnect', () => {

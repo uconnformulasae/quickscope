@@ -452,6 +452,9 @@ class AimLiveClient:
         self._snapshots_yielded = 0
         self._decode_resync_bytes = 0
         self._channel_fields: list[ChannelField] = []
+        # Channel name -> display unit from the current layout; replaced (not
+        # mutated) on each layout so callers can detect a change by identity.
+        self.channel_units: dict[str, str] = {}
         # Guards the physical socket write so the reader task's immediate
         # Q-ack and the pump task's STNC/fallback-ack never interleave.
         self._write_lock = asyncio.Lock()
@@ -1170,6 +1173,7 @@ class AimLiveClient:
             logger.warning("AiM live: channel layout parse returned 0 fields (%s)", phase)
             return
         self._channel_fields = fields
+        self.channel_units = {f.name: f.unit for f in fields if f.unit}
         self._emit_trace("channel_layout", phase=phase, blob_bytes=len(blob), field_count=len(fields))
         logger.info(
             "AiM live: channel layout loaded (%d fields, %d bytes, phase=%s)",

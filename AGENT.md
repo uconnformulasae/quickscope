@@ -98,6 +98,16 @@ Users can create computed channels using math expressions (`Spd1 * 0.621371`) or
 
 Derived channel data lives in `derivedSamplesMap` (separate from `session.samples`). Both the chart and analysis panel check both maps when resolving channel data.
 
+### Live view (components/LiveView.tsx + components/live/)
+
+The live dashboard always renders, connected or not; the header pill and a slim banner carry connection state, and the last snapshot stays on screen (dimmed) after a disconnect.
+
+- **Layouts are data, not components.** `live/layout-schema.ts` defines `LiveLayout` (widgets + react-grid-layout positions) and `validateLayout`, which everything loaded from disk or imported goes through. `live/default-layouts.ts` holds the read-only built-in EV and IC layouts; editing one saves a copy.
+- **Rendering:** `LiveDashboard.tsx` places widgets on a 12-column `react-grid-layout` grid (single stacked column below 768 px); `WidgetRenderer.tsx` draws one widget. Widget types: `stats`, `bars`, `boolGroup`, `gForce`, `otherChannels`, `streamHealth`, `note`. A channel can be a formula (formula-engine syntax, evaluated per snapshot).
+- **Selection:** `useLiveLayouts.ts` — offline shows the last-used layout; on connect it switches to that car's last-used layout (`vehicleKind(device.vehicle)`) unless a layout is pinned. Rules are pure functions in `layout-schema.ts`.
+- **Persistence:** user layouts + selection in `backend/data/live_layouts.json` (`services/live_layout_store.py`); channels each car has sent in `backend/data/live_channels.json` (`services/live_channel_cache.py`, written from the live WS route) so the editor's channel picker works offline. Routes: `GET /api/live/layouts`, `PUT|DELETE /api/live/layouts/{id}`, `PUT /api/live/layout-selection`, `GET /api/live/channels?vehicle=ev|ic`.
+- Layouts export/import as `*.qslayout.json` for sharing between laptops.
+
 ## Common tasks
 
 ### Adding a new API endpoint
@@ -160,6 +170,7 @@ npm run build
 - React 18 + Vite 7 + TypeScript
 - Tailwind CSS 3 + shadcn/ui components
 - lucide-react for icons
+- react-grid-layout for the live dashboard grid
 - No charting library (custom Canvas)
 - No state management library (custom hook)
 

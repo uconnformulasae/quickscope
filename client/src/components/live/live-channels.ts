@@ -3,6 +3,8 @@ export interface Snapshot {
   subsystem: string;
   raw: string;
   channels?: Record<string, number>;  // populated in preview mode; real frames decode this client-side later
+  /** Display unit per channel, from the logger's channel layout. */
+  units?: Record<string, string>;
 }
 
 export interface ChannelMeta {
@@ -18,13 +20,6 @@ export interface ChannelMeta {
 // 103-channel record list). When the real-device decoder lands, channels
 // arrive in `snap.channels` keyed by exactly these names — no translation
 // layer.
-//
-// Constants below are CT-17 EV: 100s4p pack, 5 modules of 20s4p, 4.15 V/
-// cell ESF cap → pack max 415 V, nominal 370 V (per
-// CT17_EV_Powertrain_Binder_Context).
-export const PACK_V_MAX = 415;
-export const PACK_V_NOMINAL = 370;
-export const PACK_TEMP_DERATE = 45;
 
 export const CHANNEL_META: ChannelMeta[] = [
   // Vehicle dynamics
@@ -109,35 +104,6 @@ export const BOOL_CHANNELS: BoolChannelMeta[] = [
   { name: 'CANCommandLost',      label: 'CAN Cmd Lost',        kind: 'fault' },
 ];
 
-// CT-17 has 5 modules of 20s4p (80 cells/module). Per-module data is NOT
-// in the AiM live stream — Orion BMS broadcasts pack-level aggregates only
-// (Pack_Voltage, Pack_Temp, Min_Cell_Voltage, SOC). The Accumulator panel
-// is structured around those plus BMS state channels.
-export const NUM_MODULES = 5;
-
-// Channels rendered by an explicit panel. The "Other" panel filters
-// everything NOT in this set so newly-added device channels (e.g. the ~70
-// fault/alarm bits, launch-control telemetry, lap timing) appear
-// automatically without layout edits.
-export const PANEL_OWNED_CHANNELS = new Set<string>([
-  // Pack hero
-  'Pack_Voltage', 'Pack_Current', 'State_of_Charge',
-  // Accumulator (Orion-exposed)
-  'Pack_Temp', 'Min_Cell_Voltage', 'BMS_Disch_Lim', 'BMS_Disch_Enable', 'BMS_LV_input',
-  // Cooling
-  'Motor_Temp', 'Logger Temperature',
-  // Vehicle dynamics
-  'Throttle_Pos', 'TPS_1', 'TPS_2', 'BSE_Voltage', 'LFspeed', 'RPM', 'YawRate', 'RollRate', 'PitchRate',
-  'LateralAcc', 'InlineAcc', 'VerticalAcc',
-  'FrBrakePressure', 'RBrkPressure', 'BrakeBias', 'Direction',
-  // Inverter / motor
-  'Torque_Command', 'Torque_Feedback', 'MCU_Torque_Limit', 'MCU_DC_Current',
-  'Phase_A_Current', 'Phase_B_Current', 'Phase_C_Current',
-  'Id_Feeback', 'Iq_Feedback', 'InverterEnable',
-  // Boolean state + fault channels (rendered in the Status & Faults panel)
-  ...BOOL_CHANNELS.map((b) => b.name),
-]);
-
 // ── Vehicle profile ─────────────────────────────────────────────────────────
 // The logger's discovery reply names the car ("UConn-EV" / "UConn-IC"). The
 // channel set differs completely between them (the IC layout is 85 channels
@@ -180,13 +146,25 @@ export const IC_TIRE_TEMPS = ['0TC01', '0TC02', '0TC03', '0TC04'] as const;
 // A disconnected thermocouple input reads this raw floor on the wire.
 export const IC_TC_DISCONNECTED = -1000;
 
-export const IC_PANEL_OWNED_CHANNELS = new Set<string>([
-  ...IC_ENGINE_STATS.map((s) => s.name),
-  ...IC_WHEEL_SPEEDS,
-  ...IC_ENGINE_FLAGS.map((f) => f.name),
-  ...IC_BRAKE_TEMPS,
-  ...IC_TIRE_TEMPS,
-  'LateralAcc', 'InlineAcc', 'VerticalAcc', 'YawRate', 'RollRate', 'PitchRate',
-  'FBrakePressCorr', 'RBrakePressCorr', 'Brake_Bias',
-  'External Voltage',
-]);
+// Channels each car is known to send — the "Built-in" source in the
+// layout editor's channel picker, available before the car has ever
+// connected to this laptop.
+export const BUILTIN_CHANNELS: Record<VehicleKind, string[]> = {
+  ev: [...new Set([...CHANNEL_META.map((m) => m.name), ...BOOL_CHANNELS.map((b) => b.name)])],
+  ic: [
+    ...IC_ENGINE_STATS.map((s) => s.name),
+    ...IC_WHEEL_SPEEDS,
+    ...IC_ENGINE_FLAGS.map((f) => f.name),
+    ...IC_BRAKE_TEMPS,
+    ...IC_TIRE_TEMPS,
+    'LateralAcc', 'InlineAcc', 'VerticalAcc', 'YawRate', 'RollRate', 'PitchRate',
+    'FBrakePressCorr', 'RBrakePressCorr', 'Brake_Bias',
+    'External Voltage',
+  ],
+};
+
+// Fallback unit per channel when the logger hasn't told us (offline / before
+// the first snapshot). The logger's own units win whenever they're known.
+export const BUILTIN_UNITS: Record<string, string> = Object.fromEntries(
+  [...CHANNEL_META, ...IC_ENGINE_STATS].filter((m) => m.unit).map((m) => [m.name, m.unit]),
+);

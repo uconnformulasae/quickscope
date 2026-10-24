@@ -48,7 +48,8 @@ if (-not $hasLibxrk -or (Test-Stale $pyStamp @("backend/requirements.txt"))) {
     Write-Host "Installing Python dependencies..."
     & $venvPy -m pip install --upgrade pip
     & $venvPy -m pip install -r backend/requirements.txt
-    New-Item -ItemType File -Path $pyStamp -Force | Out-Null
+    # Only mark deps installed when pip succeeded, so a failed install retries next run.
+    if ($LASTEXITCODE -eq 0) { New-Item -ItemType File -Path $pyStamp -Force | Out-Null }
 }
 
 # Install Node deps if missing or package.json / package-lock.json changed since the last install
@@ -57,7 +58,7 @@ $nodeStamp = "node_modules/.package-lock.json"
 if (Test-Stale $nodeStamp @("package.json", "package-lock.json")) {
     Write-Host "Installing Node dependencies..."
     npm install
-    (Get-Item $nodeStamp).LastWriteTime = Get-Date
+    if ($LASTEXITCODE -eq 0) { (Get-Item $nodeStamp).LastWriteTime = Get-Date }
 }
 
 # npm 11+ warns on devdir injected by some tooling (e.g. Cursor); not a valid npm config key.
