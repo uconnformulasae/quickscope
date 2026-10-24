@@ -433,6 +433,8 @@ export type LiveSnapshotMessage = {
   /** Opt-in only (connect with `?raw=1`) -- omitted by default to save ~1 KB/snapshot. */
   raw?: string;
   channels?: Record<string, number>;
+  /** Channel name -> display unit; sent on the first snapshot and again only when the channel layout changes. */
+  units?: Record<string, string>;
 };
 
 export type LiveWSMessage =
@@ -452,6 +454,73 @@ export function liveWebSocketUrl(): string {
   // Replace http(s) with ws(s) for the live endpoint.
   const wsBase = API_BASE.replace(/^http/, 'ws');
   return `${wsBase}/api/live/ws`;
+}
+
+// ─── Live dashboard layouts ─────────────────────────────────────────────────
+// Layout bodies are opaque here; the client validates them with
+// components/live/layout-schema.ts `validateLayout`.
+
+export interface LiveLayoutSelectionDTO {
+  active: Partial<Record<'ev' | 'ic', string>>;
+  pinned: string | null;
+  last_used: string | null;
+}
+
+export interface LiveLayoutsResponse {
+  layouts: unknown[];
+  selection: LiveLayoutSelectionDTO;
+}
+
+export interface LiveChannelCache {
+  vehicle_kind: 'ev' | 'ic';
+  vehicle: string | null;
+  serial: string | null;
+  seen_at: string | null;
+  channels: string[];
+  /** Unit the logger declared for each channel. */
+  units?: Record<string, string>;
+}
+
+async function detailError(res: Response, fallback: string): Promise<Error> {
+  const err = await res.json().catch(() => ({ detail: res.statusText }));
+  return new Error(err.detail || `${fallback}: ${res.status}`);
+}
+
+export async function fetchLiveLayouts(): Promise<LiveLayoutsResponse> {
+  const res = await fetch(`${API_BASE}/api/live/layouts`);
+  if (!res.ok) throw await detailError(res, 'Failed to load layouts');
+  return res.json();
+}
+
+export async function saveLiveLayout(layout: { id: string }): Promise<unknown> {
+  const res = await fetch(`${API_BASE}/api/live/layouts/${encodeURIComponent(layout.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(layout),
+  });
+  if (!res.ok) throw await detailError(res, 'Failed to save layout');
+  return res.json();
+}
+
+export async function deleteLiveLayout(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/live/layouts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw await detailError(res, 'Failed to delete layout');
+}
+
+export async function saveLiveLayoutSelection(selection: LiveLayoutSelectionDTO): Promise<LiveLayoutSelectionDTO> {
+  const res = await fetch(`${API_BASE}/api/live/layout-selection`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(selection),
+  });
+  if (!res.ok) throw await detailError(res, 'Failed to save layout selection');
+  return res.json();
+}
+
+export async function fetchLiveChannels(vehicle: 'ev' | 'ic'): Promise<LiveChannelCache> {
+  const res = await fetch(`${API_BASE}/api/live/channels?vehicle=${vehicle}`);
+  if (!res.ok) throw await detailError(res, 'Failed to load cached channels');
+  return res.json();
 }
 
 export async function exportCSV(channels: string[]): Promise<Blob> {

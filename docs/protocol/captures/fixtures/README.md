@@ -34,6 +34,7 @@ cut from captures too large to commit. They let the layout/snapshot tests in
 | `oct1_live_trimmed_follow_raw.txt` | `oct1livetest1.pcapng` | 595 B | UConn EV |
 | `ic_rs3_live_trimmed_follow_raw.txt` | `IC_RS3_live.pcapng` | 494 B | UConn IC (85 ch) |
 | `ictestoct1_live_trimmed_follow_raw.txt` | `ictestoct1.pcapng` | 494 B | UConn IC (85 ch) |
+| `rs3_long_live_trimmed_follow_raw.txt` | `RS3_long_live.pcapng` | 595 B | UConn EV, parked, BMS on (all 3 TCP sessions, 20 frames each) |
 
 Regenerate with:
 
@@ -41,6 +42,12 @@ Regenerate with:
 python scripts/trim_live_capture.py ~/Downloads/oct1livetest1.pcapng docs/protocol/captures/fixtures/oct1_live_trimmed_follow_raw.txt --live-size 595
 python scripts/trim_live_capture.py ~/Downloads/IC_RS3_live.pcapng docs/protocol/captures/fixtures/ic_rs3_live_trimmed_follow_raw.txt --live-size 494
 python scripts/trim_live_capture.py ~/Downloads/ictestoct1.pcapng docs/protocol/captures/fixtures/ictestoct1_live_trimmed_follow_raw.txt --live-size 494
+python scripts/trim_live_capture.py ~/Downloads/RS3_long_live.pcapng docs/protocol/captures/fixtures/rs3_long_live_trimmed_follow_raw.txt --live-size 595 --all-streams
 ```
+
+`--all-streams` keeps every reconnect, each starting with the device's 8 B hello
+frame (`payload[4:6] == 06 19`) so tests can split the sessions. In
+`RS3_long_live` only the first session carries the layout: Race Studio's
+reconnects go straight to polling without redoing setup.
 
 **Steady-state server STCP payload lengths:** 64 (acks), 691 (live snapshot), 12 (`kkk` heartbeat). No 547-byte snapshots on this logger config.

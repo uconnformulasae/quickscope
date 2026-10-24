@@ -14,6 +14,7 @@ Built for UConn Formula SAE Electric.
 - CSV export with cross-channel interpolation
 - Session management with local persistence
 - Direct AiM device connectivity over WiFi (macOS and Windows)
+- Live dashboard with customizable, shareable layouts (separate EV / IC setups), viewable offline
 
 ## Architecture
 

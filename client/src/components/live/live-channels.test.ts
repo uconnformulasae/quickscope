@@ -1,14 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   BOOL_CHANNELS,
+  BUILTIN_CHANNELS,
   CHANNEL_META,
   IC_ENGINE_FLAGS,
   IC_ENGINE_STATS,
-  IC_PANEL_OWNED_CHANNELS,
   IC_WHEEL_SPEEDS,
-  PACK_V_MAX,
-  PACK_V_NOMINAL,
-  PANEL_OWNED_CHANNELS,
   vehicleKind,
 } from './live-channels';
 
@@ -42,23 +39,24 @@ describe('channel tables', () => {
     for (const b of BOOL_CHANNELS) expect(['state', 'fault']).toContain(b.kind);
   });
 
-  it('marks every boolean channel as panel-owned so it is not duplicated under "Other"', () => {
-    for (const b of BOOL_CHANNELS) expect(PANEL_OWNED_CHANNELS.has(b.name)).toBe(true);
+  it('offers every boolean channel in the EV channel picker', () => {
+    for (const b of BOOL_CHANNELS) expect(BUILTIN_CHANNELS.ev).toContain(b.name);
   });
 
-  it('marks the pack hero channels as panel-owned', () => {
+  it('offers the pack hero channels in the EV channel picker', () => {
     for (const name of ['Pack_Voltage', 'Pack_Current', 'State_of_Charge']) {
-      expect(PANEL_OWNED_CHANNELS.has(name)).toBe(true);
+      expect(BUILTIN_CHANNELS.ev).toContain(name);
     }
   });
 
-  it('keeps nominal pack voltage below the maximum', () => {
-    expect(PACK_V_NOMINAL).toBeLessThan(PACK_V_MAX);
+  it('offers every IC dashboard channel in the IC channel picker', () => {
+    for (const s of IC_ENGINE_STATS) expect(BUILTIN_CHANNELS.ic).toContain(s.name);
+    for (const f of IC_ENGINE_FLAGS) expect(BUILTIN_CHANNELS.ic).toContain(f.name);
+    for (const w of IC_WHEEL_SPEEDS) expect(BUILTIN_CHANNELS.ic).toContain(w);
   });
 
-  it('marks every IC dashboard channel as IC panel-owned', () => {
-    for (const s of IC_ENGINE_STATS) expect(IC_PANEL_OWNED_CHANNELS.has(s.name)).toBe(true);
-    for (const f of IC_ENGINE_FLAGS) expect(IC_PANEL_OWNED_CHANNELS.has(f.name)).toBe(true);
-    for (const w of IC_WHEEL_SPEEDS) expect(IC_PANEL_OWNED_CHANNELS.has(w)).toBe(true);
+  it('only offers channels the backend can decode (no live GPS)', () => {
+    expect(CHANNEL_META.filter((m) => m.name.startsWith('GPS_'))).toEqual([]);
+    expect([...BUILTIN_CHANNELS.ev, ...BUILTIN_CHANNELS.ic].filter((n) => n.startsWith('GPS_'))).toEqual([]);
   });
 });

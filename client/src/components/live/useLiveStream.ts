@@ -43,6 +43,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   const [reconnecting, setReconnecting] = useState(false);
   const [latest, setLatest] = useState<Snapshot | null>(null);
   const [totalReceived, setTotalReceived] = useState(0);
+  /** Wall-clock ms of the last snapshot (for "last values · Ns ago" while offline). */
+  const [receivedAt, setReceivedAt] = useState<number | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const pausedRef = useRef(false);
@@ -50,6 +52,8 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   const retryingRef = useRef(false);
   const retryAttemptRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The backend only sends units when they change, so carry the last set onto every snapshot.
+  const unitsRef = useRef<Record<string, string>>({});
 
   const cancelRetry = () => {
     if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -60,9 +64,12 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
 
   const openSocket = useCallback(() => {
     if (wsRef.current) return;
+    // An automatic re-open after a drop keeps the status, error and count
+    // as they are; only a fresh connect starts them over.
     if (!retryingRef.current) {
       setStatus('connecting');
       setError(null);
+      setTotalReceived(0);
     }
     const ws = new WebSocket(liveWebSocketUrl());
     wsRef.current = ws;
@@ -71,14 +78,17 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     // Applies one logical message. `batch` (sent when the WS sender fell
     // behind the device pump) unpacks into a call of this per snapshot.
     const applySnapshot = (msg: LiveSnapshotMessage) => {
+      if (msg.units) unitsRef.current = msg.units;
       if (pausedRef.current) return;
       const snap: Snapshot = {
         ts: msg.ts,
         subsystem: msg.subsystem,
         raw: msg.raw ?? '',
         channels: msg.channels,
+        units: unitsRef.current,
       };
       setLatest(snap);
+      setReceivedAt(Date.now());
       setTotalReceived((n) => n + 1);
     };
 
@@ -172,11 +182,12 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
     return closeIntentionally;
   }, [deviceKey, connect]);
 
+  // Keeps `latest` so the dashboard can show the last values (dimmed) after
+  // a disconnect; the next connect starts the counters over.
   const disconnect = () => {
     closeIntentionally();
     setReconnecting(false);
-    setTotalReceived(0);
-    setLatest(null);
+    pausedRef.current = false;
     setStatus('idle');
   };
 
@@ -186,7 +197,7 @@ export function useLiveStream(aimDevice: AimStatus['device'] = null) {
   };
 
   return {
-    status, device, error, reconnecting, latest, totalReceived,
+    status, device, error, reconnecting, latest, totalReceived, receivedAt,
     connect, disconnect, togglePause,
   };
 }

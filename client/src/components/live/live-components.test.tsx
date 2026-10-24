@@ -1,12 +1,49 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directionLabel, fmt } from './widgets';
-import { EVDashboard } from './EVDashboard';
-import { ICDashboard } from './ICDashboard';
+import { LiveDashboard } from './LiveDashboard';
+import { EV_DEFAULT_LAYOUT, IC_DEFAULT_LAYOUT } from './default-layouts';
+import { type LiveLayout } from './layout-schema';
+import { type Snapshot } from './live-channels';
 import { LiveView } from '../LiveView';
 
 afterEach(cleanup);
+
+// jsdom has no matchMedia; report a narrow window so LiveDashboard stacks the
+// widgets instead of measuring a react-grid-layout grid.
+beforeEach(() => {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+});
+
+afterEach(() => vi.unstubAllGlobals());
+
+function renderDashboard(layout: LiveLayout, latest: Snapshot | null, totalReceived = 1) {
+  return render(
+    <LiveDashboard
+      layout={layout}
+      latest={latest}
+      totalReceived={totalReceived}
+      stale={false}
+      editing={false}
+      onGridChange={() => {}}
+      onEditWidget={() => {}}
+      onRemoveWidget={() => {}}
+      unitOverrides={{}}
+      onCycleUnit={() => {}}
+    />,
+  );
+}
+
+/** The panel whose heading is `title`. */
+function panel(title: string): HTMLElement {
+  return screen.getByText(title).closest('section, div[class*="rounded"]') as HTMLElement;
+}
 
 describe('widget helpers', () => {
   it('fmt formats finite numbers and dashes missing ones', () => {
@@ -25,8 +62,8 @@ describe('widget helpers', () => {
   });
 });
 
-describe('EVDashboard', () => {
-  const snap = {
+describe('EV default layout', () => {
+  const snap: Snapshot = {
     ts: 12_340,
     subsystem: 'Syst',
     raw: '',
@@ -45,9 +82,9 @@ describe('EVDashboard', () => {
   };
 
   it('renders pack summary, power and stream health from a snapshot', () => {
-    render(<EVDashboard latest={snap} totalReceived={42} />);
+    renderDashboard(EV_DEFAULT_LAYOUT, snap, 42);
     expect(screen.getAllByText('380.0').length).toBeGreaterThan(0);
-    expect(screen.getByText('100.0')).toBeTruthy();
+    expect(screen.getAllByText('100.0').length).toBeGreaterThan(0);
     expect(screen.getByText('87.5')).toBeTruthy();
     expect(screen.getByText('38.0')).toBeTruthy(); // 380 V × 100 A = 38 kW
     expect(screen.getByText('55.3')).toBeTruthy();
@@ -58,65 +95,81 @@ describe('EVDashboard', () => {
   });
 
   it('shows enabled discharge and inverter states', () => {
-    render(<EVDashboard latest={snap} totalReceived={1} />);
+    renderDashboard(EV_DEFAULT_LAYOUT, snap);
     expect(screen.getAllByText('ENABLED')).toHaveLength(2);
   });
 
+  it('flags discharge DISABLED only when the device actually reports 0', () => {
+    renderDashboard(EV_DEFAULT_LAYOUT, { ...snap, channels: { BMS_Disch_Enable: 0 } });
+    expect(screen.getByText('DISABLED')).toBeTruthy();
+  });
+
+  it('shows no reading instead of a red DISABLED alarm or a fake 0.0 kW', () => {
+    renderDashboard(EV_DEFAULT_LAYOUT, null, 0);
+    expect(screen.queryByText('DISABLED')).toBeNull();
+    expect(screen.queryByText('ENABLED')).toBeNull();
+    expect(screen.queryByText('0.0')).toBeNull();
+  });
+
+  it('computes pack power only once both inputs have arrived', () => {
+    renderDashboard(EV_DEFAULT_LAYOUT, { ...snap, channels: { Pack_Voltage: 400, Pack_Current: 50 } });
+    expect(screen.getByText('20.0')).toBeTruthy(); // 400 V × 50 A = 20 kW
+    cleanup();
+    renderDashboard(EV_DEFAULT_LAYOUT, { ...snap, channels: { Pack_Voltage: 400 } });
+    expect(screen.queryByText('0.0')).toBeNull();
+  });
+
   it('marks state channels ON/OFF and missing ones with a dash', () => {
-    render(<EVDashboard latest={snap} totalReceived={1} />);
+    renderDashboard(EV_DEFAULT_LAYOUT, snap);
     expect(screen.getByTitle('BMS_Disch_Enable = 1 (1 = on, 0 = off)').textContent).toContain('ON');
     expect(screen.getByTitle('lc_enabled = — (1 = on, 0 = off)').textContent).toContain('—');
   });
 
   it('flags active faults in red and healthy ones in green', () => {
-    render(<EVDashboard latest={snap} totalReceived={1} />);
-    expect(screen.getByTitle('RTD_Fault = 1').className).toContain('red');
-    expect(screen.getByTitle('BSE_Fault = 0').className).toContain('emerald');
+    renderDashboard(EV_DEFAULT_LAYOUT, snap);
+    expect(screen.getByTitle(/^RTD_Fault = 1 /).className).toContain('red');
+    expect(screen.getByTitle(/^BSE_Fault = 0 /).className).toContain('emerald');
   });
 
-  it('lists channels no panel owns under "Other channels"', () => {
-    render(<EVDashboard latest={snap} totalReceived={1} />);
+  it('lists channels no widget shows under "Other channels"', () => {
+    renderDashboard(EV_DEFAULT_LAYOUT, snap);
     expect(screen.getByTitle('Mystery_Channel')).toBeTruthy();
     expect(screen.getByText('1235')).toBeTruthy();
   });
 
   it('explains an empty "Other channels" panel', () => {
-    render(<EVDashboard latest={{ ...snap, channels: { Pack_Voltage: 1 } }} totalReceived={1} />);
-    expect(screen.getByText(/No other channels in this snapshot/)).toBeTruthy();
+    renderDashboard(EV_DEFAULT_LAYOUT, { ...snap, channels: { Pack_Voltage: 1 } });
+    expect(screen.getByText(/Every channel in this snapshot is already on the dashboard/)).toBeTruthy();
   });
 });
 
-describe('ICDashboard', () => {
+describe('IC default layout', () => {
   it('waits for the first snapshot', () => {
-    render(<ICDashboard latest={null} totalReceived={0} />);
-    expect(screen.getByText('waiting…')).toBeTruthy();
+    renderDashboard(IC_DEFAULT_LAYOUT, null, 0);
+    expect(screen.getByText(/no other widget shows will appear here/)).toBeTruthy();
+    expect(screen.queryByText('no data')).toBeNull();
   });
 
   it('shows ECU data when engine channels are present', () => {
-    render(
-      <ICDashboard
-        latest={{
-          ts: 1000,
-          subsystem: 'kkk',
-          raw: '',
-          channels: { S8_RPM: 6500, S8_gear: 3, S8_lam1: 0.98, S8_revCutActive: 1, S8_engineEnable: 1, '0TC01': 85.25, '0TC02': -1000, Other_X: 1.5 },
-        }}
-        totalReceived={5}
-      />,
-    );
-    expect(screen.getByText('ECU data live')).toBeTruthy();
+    renderDashboard(IC_DEFAULT_LAYOUT, {
+      ts: 1000,
+      subsystem: 'kkk',
+      raw: '',
+      channels: { S8_RPM: 6500, S8_gear: 3, S8_lam1: 0.98, S8_revCutActive: 1, S8_engineEnable: 1, '0TC01': 85.25, '0TC02': -1000, Other_X: 1.5 },
+    }, 5);
+    expect(within(panel('Engine · ECU')).queryByText('no data')).toBeNull();
     expect(screen.getByText('6500')).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy();
     expect(screen.getByText('0.98')).toBeTruthy();
     expect(screen.getByText('85.3')).toBeTruthy();
-    expect(screen.getByTitle('S8_revCutActive = 1').className).toContain('red');
-    expect(screen.getByTitle('S8_engineEnable = 1').className).toContain('emerald');
+    expect(screen.getByTitle(/^S8_revCutActive = 1 /).className).toContain('red');
+    expect(screen.getByTitle(/^S8_engineEnable = 1 /).className).toContain('emerald');
     expect(screen.getByTitle('Other_X')).toBeTruthy();
   });
 
   it('explains when the ECU is silent', () => {
-    render(<ICDashboard latest={{ ts: 1000, subsystem: 'kkk', raw: '', channels: { LateralAcc: 0.5 } }} totalReceived={1} />);
-    expect(screen.getByText('ECU not transmitting')).toBeTruthy();
+    renderDashboard(IC_DEFAULT_LAYOUT, { ts: 1000, subsystem: 'kkk', raw: '', channels: { LateralAcc: 0.5 } });
+    expect(within(panel('Engine · ECU')).getByText('no data')).toBeTruthy();
     expect(screen.getByText(/ECU CAN feed/)).toBeTruthy();
   });
 });
@@ -140,15 +193,20 @@ describe('LiveView', () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
+    // No saved layouts or cached channels: LiveView falls back to the built-ins.
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => (String(url).includes('/layouts')
+        ? { layouts: [], selection: {} }
+        : { vehicle: 'ev', channels: [], units: {} }),
+    })));
   });
-
-  afterEach(() => vi.unstubAllGlobals());
 
   const ws = () => FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
 
   it('shows the connecting state with the discovered device', () => {
     render(<LiveView onBack={() => {}} aimDevice={{ ip: '10.0.0.1', ssid: '', device_name: '', vehicle: 'UConn-EV', model: 'EVO5' }} />);
-    expect(screen.getByText('Opening live stream')).toBeTruthy();
+    expect(screen.getByText('Connecting')).toBeTruthy();
     expect(screen.getByText('Connecting to UConn-EV at 10.0.0.1…')).toBeTruthy();
   });
 
@@ -160,7 +218,7 @@ describe('LiveView', () => {
     expect(screen.getByText('Streaming')).toBeTruthy();
     expect(screen.getByText('AiM EVO5')).toBeTruthy();
     expect(screen.getByText('Received 1')).toBeTruthy();
-    expect(screen.getByText('Pack · 100s4p · max 415 V')).toBeTruthy();
+    expect(screen.getByText(EV_DEFAULT_LAYOUT.widgets[0].title!)).toBeTruthy();
 
     fireEvent.click(screen.getByText('Pause'));
     expect(screen.getByText('Paused')).toBeTruthy();
@@ -168,10 +226,11 @@ describe('LiveView', () => {
     expect(screen.getByText('Streaming')).toBeTruthy();
   });
 
-  it('renders the IC dashboard for an IC car', () => {
+  it('switches to the IC dashboard for an IC car', async () => {
     render(<LiveView onBack={() => {}} />);
     ws().receive({ type: 'connected', device: { ip: '10.0.0.1', model: 'EVO5', serial: '1', vehicle: 'UConn-IC' } });
-    expect(screen.getByText('Engine · ECU')).toBeTruthy();
+    // The auto-switch waits for the saved layouts to load.
+    expect(await screen.findByText('Engine · ECU')).toBeTruthy();
   });
 
   it('shows the reconnecting banner during a device drop', () => {
@@ -184,8 +243,8 @@ describe('LiveView', () => {
   it('shows connection errors with a Retry button that reconnects', () => {
     render(<LiveView onBack={() => {}} />);
     ws().receive({ type: 'error', message: 'device refused' });
-    expect(screen.getByText('Connection error')).toBeTruthy();
-    expect(screen.getByText('device refused')).toBeTruthy();
+    expect(screen.getByText('Connection error.')).toBeTruthy();
+    expect(screen.getByText(/device refused/)).toBeTruthy();
 
     fireEvent.click(screen.getByText('Retry'));
     expect(FakeWebSocket.instances).toHaveLength(2);
@@ -197,7 +256,7 @@ describe('LiveView', () => {
     first.receive({ type: 'connected', device: { ip: '10.0.0.1', model: 'EVO5', serial: '1', vehicle: 'EV' } });
     fireEvent.click(screen.getByText('Disconnect'));
     expect(first.sent).toEqual(['stop']);
-    expect(screen.getByText('Live stream stopped')).toBeTruthy();
+    expect(screen.getByText('Disconnected')).toBeTruthy();
     expect(screen.getByText('Connect')).toBeTruthy();
   });
 

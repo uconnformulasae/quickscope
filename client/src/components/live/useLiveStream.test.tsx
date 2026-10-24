@@ -77,6 +77,8 @@ describe('useLiveStream', () => {
     });
     expect(hook.result.current.status).toBe('streaming');
     expect(hook.result.current.reconnecting).toBe(false);
+    // An automatic re-open is not a fresh connect: the count carries on.
+    expect(hook.result.current.totalReceived).toBe(1);
   });
 
   it('backs off between failed reconnect attempts', () => {

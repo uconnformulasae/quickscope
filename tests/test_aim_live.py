@@ -3,6 +3,7 @@
 Ground-truth pcaps (Race Studio 3):
   Live.pcapng  (stream 1)
   live_pedal.pcapng  (stream 45)
+  RS3_long_live.pcapng  (all 3 TCP sessions, trimmed -- parked UConn-EV, 1 Oct 2026)
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ FIXTURE_PEDAL = CAPTURES / "fixtures" / "live_pedal_2026_follow_raw.txt"
 FIXTURE_OCT1 = CAPTURES / "fixtures" / "oct1_live_trimmed_follow_raw.txt"
 FIXTURE_IC_RS3 = CAPTURES / "fixtures" / "ic_rs3_live_trimmed_follow_raw.txt"
 FIXTURE_ICTEST = CAPTURES / "fixtures" / "ictestoct1_live_trimmed_follow_raw.txt"
+FIXTURE_LONG_LIVE = CAPTURES / "fixtures" / "rs3_long_live_trimmed_follow_raw.txt"
 
 
 def test_stnc_system_payload_matches_live_capture() -> None:
@@ -313,7 +315,16 @@ def test_oct1_capture_595_frames_decode_with_layout() -> None:
             live.append(f.payload)
     fields = parse_channel_layout(blob, live_frame_len=1 << 16)
     assert live and all(_is_live_snapshot_payload(p, fields) for p in live)
-    assert any(parse_live_snapshot(p, fields).channels for p in live)
+    # Same car, same day, same logger config as RS3_long_live.pcapng...
+    assert blob == _long_live_sessions()[0][0]
+    # ...but the BMS was not on the CAN bus yet, so its 8 channels are no-data
+    # here (72 of the 80 the long-live capture decodes).
+    bms = {"Pack_Voltage", "Pack_Current", "Pack_Temp", "Min_Cell_Voltage", "State_of_Charge",
+           "BMS_Disch_Enable", "BMS_Disch_Lim", "BMS_LV_input"}
+    for p in live:
+        ch = parse_live_snapshot(p, fields).channels
+        assert len(ch) == 72
+        assert not bms & set(ch)
 
 
 def test_ic_capture_494_frames_decode_ic_channels() -> None:
@@ -376,3 +387,127 @@ def test_ictestoct1_capture_layout_detected_and_decoded() -> None:
     fields = parse_channel_layout(layouts[0], live_frame_len=1 << 16)
     assert len(fields) == 85
     assert parse_live_snapshot(live[5], fields).channels
+
+
+def test_ic_snapshot_timestamp_falls_back_to_master_clk() -> None:
+    """IC `kkk` live frames leave bytes 8-11 zero; the time is in Master Clk."""
+    from parse_aim_stream import load_stream, parse_frames
+    from services.aim_live import parse_live_snapshot
+    from services.aim_live_layout import parse_channel_layout
+
+    _, s2c = load_stream(CAPTURES / "fixtures" / "live_ic_494b_follow_raw.txt")
+    sframes = parse_frames(s2c, "S")
+    layout = next(f.payload for f in sframes if f.cmd == b"STCP" and len(f.payload) == 11232)
+    live = [f.payload for f in sframes if f.cmd == b"STCP" and len(f.payload) == 494 and f.payload[4:7] == b"kkk"]
+    fields = parse_channel_layout(layout, live_frame_len=1 << 16)
+
+    stamps = [parse_live_snapshot(p, fields).timestamp_ms for p in live]
+    assert all(s > 0 for s in stamps)
+    assert stamps == sorted(stamps)
+
+
+# --- RS3_long_live.pcapng: real UConn-EV live view, parked, 3 TCP sessions ---
+#
+# Race Studio held the live view for 149 s, then reconnected twice (67 s, 11 s)
+# without redoing setup, so only the first session carries the layout. The
+# fixture keeps the device's 8 B hello at the start of each session plus the
+# first 20 live frames of each (scripts/trim_live_capture.py --all-streams).
+
+# Inverter disabled while parked: the logger sends -inf ("no data") for these.
+LONG_LIVE_INVERTER_OFF = (
+    "Motor_Temp", "RPM", "Phase_A_Current", "MCU_DC_Current",
+    "Torque_Command", "Torque_Feedback", "MCU_Torque_Limit",
+    "lc_state", "lc_torq", "lc_vspeed",
+)
+
+
+def _long_live_sessions() -> list[tuple[bytes | None, list[bytes]]]:
+    """``(layout, live payloads)`` per TCP session, split on the device hello."""
+    _, buf = load_stream(FIXTURE_LONG_LIVE)
+    sessions: list[tuple[bytes | None, list[bytes]]] = []
+    for f in parse_frames(buf, "S"):
+        if len(f.payload) == 8 and f.payload[4:6] == b"\x06\x19":
+            sessions.append((None, []))
+        elif f.payload[4:8] == b"hhh\x01" and len(f.payload) > 2000:
+            layout, live = sessions[-1]
+            sessions[-1] = (layout or f.payload, live)
+        elif f.payload[4:8] == b"kkk\x01" and len(f.payload) == 595:
+            sessions[-1][1].append(f.payload)
+    return sessions
+
+
+def _long_live_fields():
+    from services.aim_live_layout import parse_channel_layout
+
+    return parse_channel_layout(_long_live_sessions()[0][0], live_frame_len=1 << 16)
+
+
+def test_long_live_only_first_session_carries_layout() -> None:
+    """RS3 reconnects skip setup, so the device never re-sends the layout --
+    the client must keep the first session's (see `_reset_stream_state`)."""
+    sessions = _long_live_sessions()
+    assert [layout is not None for layout, _ in sessions] == [True, False, False]
+    assert [len(live) for _, live in sessions] == [20, 20, 20]
+    assert len(_long_live_fields()) == 118
+
+
+def test_long_live_every_frame_decodes_same_80_channels() -> None:
+    fields = _long_live_fields()
+    live = [p for _, frames in _long_live_sessions() for p in frames]
+    assert all(_is_live_snapshot_payload(p, fields) for p in live)
+    assert all(_is_live_snapshot_payload(p) for p in live)  # even before layout loads
+    names = {frozenset(parse_live_snapshot(p, fields).channels) for p in live}
+    assert len(names) == 1
+    assert len(next(iter(names))) == 80
+
+
+def test_long_live_parked_car_values() -> None:
+    """Physical values of the parked, charged EV match what the car reported."""
+    fields = _long_live_fields()
+    live = [p for _, frames in _long_live_sessions() for p in frames]
+    for p in live:
+        ch = parse_live_snapshot(p, fields).channels
+        assert 407.5 < ch["Pack_Voltage"] < 408.2
+        assert 4.0 < ch["Min_Cell_Voltage"] < 4.01
+        assert 91.0 < ch["KF_SOC"] < 91.5
+        assert ch["State_of_Charge"] == 95
+        assert ch["Pack_Temp"] == 28
+        assert ch["Pack_Current"] == 0
+        assert 12.3 < ch["External Voltage"] < 12.5
+        assert 25 < ch["Logger Temperature"] < 30
+        assert -1.02 < ch["VerticalAcc"] < -1.0  # 1 g at rest
+        assert abs(ch["InlineAcc"]) < 0.05 and abs(ch["LateralAcc"]) < 0.15
+        assert ch["LFspeed"] == 0 and ch["Throttle_Pos"] == 0
+        # Boolean state flags (f32 0.0/1.0 on the wire).
+        assert ch["InverterEnable"] == 0
+        assert ch["Direction"] == 1
+        assert ch["BMS_Disch_Enable"] == 1
+        assert ch["StartRec"] == 1
+        assert all(v == 0 for k, v in ch.items() if k.endswith(("_Fault", "_Alarm")))
+
+
+def test_long_live_inverter_channels_are_no_data_when_off() -> None:
+    """Motor/inverter/launch-control slots carry -inf (0xff800000) while the
+    inverter is off; they must be absent, not -inf or a bogus number."""
+    fields = {f.name: f for f in _long_live_fields()}
+    for _, frames in _long_live_sessions():
+        for p in frames:
+            ch = parse_live_snapshot(p, list(fields.values())).channels
+            for name in LONG_LIVE_INVERTER_OFF:
+                f = fields[name]
+                assert p[f.live_offset : f.live_offset + 4] == b"\x00\x00\x80\xff", name
+                assert name not in ch
+
+
+def test_long_live_timestamps_continue_across_reconnects() -> None:
+    """Snapshots arrive every ~350 ms; the logger clock keeps running across
+    reconnects, so each session picks up after the previous one."""
+    fields = _long_live_fields()
+    prev_last = 0
+    for _, frames in _long_live_sessions():
+        stamps = [parse_live_snapshot(p, fields).timestamp_ms for p in frames]
+        assert stamps[0] > prev_last
+        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        assert all(g > 0 for g in gaps)
+        assert 300 <= sorted(gaps)[len(gaps) // 2] <= 400
+        prev_last = stamps[-1]

@@ -21,7 +21,14 @@ def isolated_data_dir(tmp_path, monkeypatch):
     Without this, route tests read and write the developer's real
     ``backend/data`` (sessions.json, settings.json, session files).
     """
-    from services import aim_download_trace, aim_live_trace, session_store, settings_store
+    from services import (
+        aim_download_trace,
+        aim_live_trace,
+        live_channel_cache,
+        live_layout_store,
+        session_store,
+        settings_store,
+    )
 
     data_dir = tmp_path / "qs_data"
     sessions_dir = data_dir / "sessions"
@@ -31,6 +38,10 @@ def isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(session_store, "SESSIONS_DIR", sessions_dir)
     monkeypatch.setattr(settings_store, "DATA_DIR", data_dir)
     monkeypatch.setattr(settings_store, "SETTINGS_FILE", data_dir / "settings.json")
+    monkeypatch.setattr(live_layout_store, "DATA_DIR", data_dir)
+    monkeypatch.setattr(live_layout_store, "LAYOUTS_FILE", data_dir / "live_layouts.json")
+    monkeypatch.setattr(live_channel_cache, "DATA_DIR", data_dir)
+    monkeypatch.setattr(live_channel_cache, "CHANNELS_FILE", data_dir / "live_channels.json")
     # Trace logs resolve their dirs from DATA_DIR at import time; keep them out
     # of the real data dir too.
     monkeypatch.setattr(aim_live_trace, "_SESSION_DIR", data_dir / "logs" / "aim_live" / "sessions")
