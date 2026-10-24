@@ -21,11 +21,11 @@ flow:
    each (~125 ms). UConn 113-channel logger uses **707 B** ``Syst`` frames
    (``Q:703``), not only 691 B (``RS3-5-47.pcapng``).
 
-This module is intentionally separate from `aim_connector.py`. That file
-implements the **session-list-download** flow (different STNC sub-cmds,
-different lifecycle) and we keep it untouched. Live streaming is purely
-read-only — we never tell the device to start/stop logging, and we never
-write anything to its filesystem.
+The same client also lists sessions and downloads log files on this socket
+(``fetch_session_list`` / ``download_file``, RS3_PULL_241/242); the file
+receive state machine itself lives in ``aim_connector.AimFileReceiver`` so the
+fallback download TCP shares it. Everything here is read-only — we never tell
+the device to start/stop logging, and we never write to its filesystem.
 
 Field-level decoding uses the channel-layout frame from setup (see ``aim_live_layout``).
 """
@@ -43,6 +43,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Optional
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+    from services.aim_download_trace import AimDownloadTrace
     from services.aim_live_trace import AimLiveTrace
 
 from services.aim_discovery import (
@@ -201,6 +204,14 @@ _STCP_OP_Q = ord("Q")
 _STCP_OP_E = ord("E")
 
 
+_STCP_CONTROL_OPS = frozenset((_STCP_OP_A, _STCP_OP_H, _STCP_OP_I, _STCP_OP_Q, _STCP_OP_E))
+
+
+def _stnc_sub_cmd(stcp64_payload: bytes) -> int:
+    """The STNC sub-cmd a 64 B STCP control reply echoes at payload[8:12]."""
+    return struct.unpack_from("<I", stcp64_payload, 8)[0]
+
+
 def _stnc_payload(sub_cmd: int) -> bytes:
     """Build a 64-byte STNC payload with the given sub-cmd at offset 8."""
     p = bytearray(64)
@@ -220,6 +231,7 @@ STNC_LIVE_POLL_B = 0x00020053
 # Session list on primary TCP (connect.pcapng / 116 stream 37 after live handshake)
 STNC_PREP_SESSIONS = 0x00020051
 STNC_GET_SESSIONS = 0x00020024
+_STNC_FILE_REQUEST = 0x00040002  # RS3_PULL_241/242: path at payload[0x20:0x40]
 STNC_SETUP_FINAL = 0x00020008  # Live.pcapng: no driver micro after this STNC before steady poll
 STNC_SETUP_SELECTORS = (
     0x00060024,
@@ -1298,9 +1310,16 @@ class AimLiveClient:
         await self._send_stcp(_STCP_4BYTE_ACK)
 
         collected = bytearray()
+        # The Q reply to GET_SESSIONS announces the CSV byte count
+        # (RS3_PULL_241: 0x51cd == the 20,941 B list block), so the list is
+        # done the moment that many data bytes land -- no idle wait needed.
+        csv_len = 0
+        csv_received = 0
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while loop.time() < deadline:
+            if csv_len and csv_received >= csv_len:
+                break
             if b"name,size,date,hour," in collected and loop.time() > deadline - 2.0:
                 break
             try:
@@ -1318,12 +1337,16 @@ class AimLiveClient:
             pl = frame.payload
             if len(pl) == 4:
                 await self._send_stcp(_STCP_4BYTE_ACK)
-            elif len(pl) == 64 and len(pl) > 24:
+            elif len(pl) == 64 and len(pl) > 24 and pl[24] in _STCP_CONTROL_OPS:
+                if pl[24] == _STCP_OP_Q and _stnc_sub_cmd(pl) == STNC_GET_SESSIONS:
+                    csv_len = struct.unpack_from("<I", pl, 16)[0]
                 await self._respond_stcp64(
                     pl,
                     phase="session-list",
                     post_date_ack=False,
                 )
+            elif csv_len and len(pl) > 4:
+                csv_received += len(pl) - 4
 
         csv_text = _extract_session_csv(bytes(collected))
         if csv_text is None:
@@ -1334,6 +1357,131 @@ class AimLiveClient:
         self._emit_trace("session_list_ok", session_count=len(rows))
         logger.info("AiM primary: session list ok (%d sessions)", len(rows))
         return rows
+
+    async def download_file(
+        self,
+        filename: str,
+        dest_dir: "Path",
+        expected_size: int = 0,
+        on_progress: Callable[[int, int], None] | None = None,
+        *,
+        info_timeout: float = 10.0,
+    ) -> "Path":
+        """Download one log file on this (primary) TCP, as RS3 does.
+
+        RS3_PULL_241/242: after the session list, RS3 sends the STNC
+        ``0x00040002`` file request directly (no new hello/handshake), the
+        device answers ``I`` then ``Q`` (size at payload[16:20]), RS3 sends one
+        4 B ack and the device streams batches acked at 982,320 B boundaries.
+        """
+        from services import aim_connector
+        from services.aim_download_trace import AimDownloadTrace
+
+        if not self._handshake_done or not self.connected:
+            raise RuntimeError("primary handshake must complete before a file download")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        out_path = dest_dir / filename
+        if aim_connector.reuse_local_file(out_path, expected_size, on_progress):
+            return out_path
+
+        trace = AimDownloadTrace(filename, expected_size or 0)
+        trace.log("connect", device_ip=self.host, port=self.port, transport="primary")
+        try:
+            file_data = await self._receive_file(
+                filename, expected_size, trace, on_progress, info_timeout=info_timeout,
+            )
+        except BaseException as exc:
+            trace.close(status="error", error=str(exc) or type(exc).__name__)
+            raise
+        trace.close(status="ok", bytes=len(file_data))
+        logger.info("AiM primary: downloaded %s (%d bytes)", filename, len(file_data))
+        aim_connector.write_file_atomically(out_path, file_data)
+        return out_path
+
+    async def _receive_file(
+        self,
+        filename: str,
+        expected_size: int,
+        trace: "AimDownloadTrace",
+        on_progress: Callable[[int, int], None] | None,
+        *,
+        info_timeout: float,
+    ) -> bytes:
+        from services import aim_connector
+
+        assert self._reader is not None and self._writer is not None
+        request = aim_connector.build_download_request(filename)
+        async with self._write_lock:
+            self._writer.write(request)
+            await self._writer.drain()
+        trace.log("file_request_sent", request_bytes=len(request))
+
+        total_file_size = await self._await_file_size(filename, timeout=info_timeout)
+        trace.log("file_size", total_file_size=total_file_size)
+        if total_file_size <= 0 and expected_size > 0:
+            total_file_size = expected_size
+            trace.log("file_size_from_session_list", total_file_size=total_file_size)
+        if total_file_size <= 0:
+            raise RuntimeError(f"Device reported no size for {filename}")
+
+        await self._send_stcp(_STCP_4BYTE_ACK)
+        trace.log("initial_ack_sent")
+
+        sink = aim_connector.BufferedSink()
+        receiver = aim_connector.AimFileReceiver(total_file_size, sink, trace, on_progress)
+        pending = bytes(self._buf)
+        self._buf.clear()
+        if pending:
+            receiver.feed(pending)
+        while not receiver.is_complete:
+            await self._flush_sink(sink)
+            if receiver.idle_expired():
+                break
+            try:
+                chunk = await asyncio.wait_for(self._reader.read(262144), timeout=0.5)
+            except TimeoutError:
+                receiver.on_silence()
+                continue
+            except ConnectionResetError as exc:
+                raise receiver.connection_reset_error() from exc
+            if not chunk:
+                receiver.on_eof()
+                break
+            self._last_rx_at = asyncio.get_running_loop().time()
+            receiver.feed(chunk)
+        await self._flush_sink(sink)
+        # Anything after the last block (e.g. a device reply we did not ask
+        # for) belongs to the next exchange on this socket, not to the file.
+        self._buf.extend(receiver.frame_buffer)
+        return receiver.result()
+
+    async def _await_file_size(self, filename: str, *, timeout: float) -> int:
+        """Wait for the device's ``Q`` reply to the file request; return its size."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError(f"AiM device did not acknowledge file request for {filename}")
+            frame = await asyncio.wait_for(self._read_one_frame(), timeout=remaining)
+            pl = frame.payload
+            if frame.cmd != b"STCP" or len(pl) != 64:
+                continue
+            if _stnc_sub_cmd(pl) != _STNC_FILE_REQUEST:
+                continue
+            if pl[24] == _STCP_OP_E:
+                raise RuntimeError(f"AiM device rejected file request for {filename}")
+            if pl[24] == _STCP_OP_Q:
+                return struct.unpack_from("<I", pl, 16)[0]
+
+    async def _flush_sink(self, sink) -> None:  # noqa: ANN001
+        data = sink.take()
+        if not data:
+            return
+        assert self._writer is not None
+        async with self._write_lock:
+            self._writer.write(data)
+            await self._writer.drain()
 
     async def close(self) -> None:
         self._closed = True

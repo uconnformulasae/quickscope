@@ -20,6 +20,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol
 
 from services.aim_discovery import (
     DATA_PORT,
@@ -393,177 +394,325 @@ def _prompt_next_batch(
     return boundary, 1
 
 
-def _receive_file_data(
+def _drain_download_frames(
     sock: socket.socket,
-    total_file_size: int,
+    frame_buffer: bytes,
     trace: AimDownloadTrace | None = None,
-    on_progress: Callable[[int, int], None] | None = None,
-) -> bytes:
-    """Read STCP file blocks until the whole file is covered.
+    *,
+    reply_to_control: bool = True,
+) -> tuple[bytes, int]:
+    """Parse all complete frames in frame_buffer; optionally send live micro-acks."""
+    micro_acks_sent = 0
+    while True:
+        try:
+            frame, consumed = decode_frame(frame_buffer)
+        except ValueError as exc:
+            if trace is not None:
+                trace.log("frame_resync", error=str(exc), buffer_len=len(frame_buffer))
+            resync = frame_buffer.find(b"<h", 1)
+            if resync == -1:
+                frame_buffer = b""
+                break
+            frame_buffer = frame_buffer[resync:]
+            continue
+        if frame is None or consumed == 0:
+            break
+        frame_buffer = frame_buffer[consumed:]
+        if _process_download_frame(
+            sock, frame, trace, reply_to_control=reply_to_control
+        ):
+            micro_acks_sent += 1
+        elif trace is not None and frame.cmd == b"STCP" and len(frame.payload) <= 64:
+            trace.log_frame(frame, ack_sent=False)
+    return frame_buffer, micro_acks_sent
+
+
+class _SendSink(Protocol):
+    def sendall(self, data: bytes) -> None: ...
+
+
+class BufferedSink:
+    """Collects outbound frames so an async transport can write + drain them."""
+
+    def __init__(self) -> None:
+        self._pending: list[bytes] = []
+
+    def sendall(self, data: bytes) -> None:
+        self._pending.append(data)
+
+    def take(self) -> bytes:
+        data, self._pending = b"".join(self._pending), []
+        return data
+
+
+class AimFileReceiver:
+    """Transport-agnostic STCP file receive state machine.
+
+    The caller owns the I/O: it calls ``idle_expired()`` before each read,
+    ``feed()`` with received bytes, ``on_silence()`` when a short read timeout
+    elapses with nothing, and ``on_eof()`` when the peer closes. ACKs go to
+    ``sink.sendall`` (a socket, or a ``BufferedSink`` for asyncio).
 
     Blocks are placed by absolute offset; the device is ACKed only at batch
     boundaries (RS3 behaviour). A pause is normally the device's own TCP
     retransmit after WiFi loss, so it is waited out -- only a long dead
     silence triggers a resume ACK for the contiguous prefix.
     """
-    raw_data = bytearray()
-    frame_buffer = b""
-    reassembler = _IncrementalReassembler()
-    extracted_size = 0
-    micro_acks_sent = 0
-    resume_acks = 0
-    recv_count = 0
-    acked_through = 0
-    idle_limit_s = 60 + max(0, total_file_size // 100_000)
-    idle_deadline = time.monotonic() + idle_limit_s
-    last_rx = time.monotonic()
-    last_progress_size = 0
-    sock.settimeout(0.5)
 
-    if trace is not None:
-        trace.log("receive_start", total_file_size=total_file_size)
+    def __init__(
+        self,
+        total_file_size: int,
+        sink: _SendSink,
+        trace: AimDownloadTrace | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
+        self.total_file_size = total_file_size
+        self._sink = sink
+        self._trace = trace
+        self._on_progress = on_progress
+        self._raw_data = bytearray()
+        self.frame_buffer = b""
+        self._reassembler = _IncrementalReassembler()
+        self._extracted_size = 0
+        self._micro_acks_sent = 0
+        self._resume_acks = 0
+        self._recv_count = 0
+        self._acked_through = 0
+        idle_limit_s = 60 + max(0, total_file_size // 100_000)
+        self._idle_deadline = time.monotonic() + idle_limit_s
+        self._last_rx = time.monotonic()
+        self._last_progress_size = 0
+        if trace is not None:
+            trace.log("receive_start", total_file_size=total_file_size)
 
-    while True:
-        if reassembler.is_complete(total_file_size):
-            break
-        now = time.monotonic()
-        if now > idle_deadline:
-            if trace is not None:
-                trace.log(
-                    "idle_timeout",
-                    raw_bytes=len(raw_data),
-                    extracted_bytes=extracted_size,
-                    covered_bytes=reassembler.covered,
-                    expected_bytes=total_file_size,
-                    micro_acks_sent=micro_acks_sent,
-                    resume_acks=resume_acks,
-                    recv_count=recv_count,
-                    frame_buffer_len=len(frame_buffer),
-                )
-            logger.warning(
-                "Download idle timeout: contiguous=%d covered=%d/%d acks=%d resumes=%d recv=%d",
-                extracted_size,
-                reassembler.covered,
-                total_file_size,
-                micro_acks_sent,
-                resume_acks,
-                recv_count,
+    @property
+    def is_complete(self) -> bool:
+        return self._reassembler.is_complete(self.total_file_size)
+
+    def idle_expired(self) -> bool:
+        """True (and logged) once no new contiguous bytes arrived for too long."""
+        if time.monotonic() <= self._idle_deadline:
+            return False
+        if self._trace is not None:
+            self._trace.log(
+                "idle_timeout",
+                raw_bytes=len(self._raw_data),
+                extracted_bytes=self._extracted_size,
+                covered_bytes=self._reassembler.covered,
+                expected_bytes=self.total_file_size,
+                micro_acks_sent=self._micro_acks_sent,
+                resume_acks=self._resume_acks,
+                recv_count=self._recv_count,
+                frame_buffer_len=len(self.frame_buffer),
             )
-            break
+        logger.warning(
+            "Download idle timeout: contiguous=%d covered=%d/%d acks=%d resumes=%d recv=%d",
+            self._extracted_size,
+            self._reassembler.covered,
+            self.total_file_size,
+            self._micro_acks_sent,
+            self._resume_acks,
+            self._recv_count,
+        )
+        return True
 
-        try:
-            chunk = sock.recv(262144)
-        except ConnectionResetError as exc:
-            if trace is not None:
-                trace.log(
-                    "connection_reset",
-                    raw_bytes=len(raw_data),
-                    extracted_bytes=extracted_size,
-                    expected_bytes=total_file_size,
-                    acked_through=acked_through,
-                    micro_acks_sent=micro_acks_sent,
-                    resume_acks=resume_acks,
-                )
-            raise RuntimeError(
-                f"Device closed download connection after {extracted_size} contiguous bytes "
-                f"(expected {total_file_size}, acked_through={acked_through})"
-            ) from exc
-        except socket.timeout:
-            silent_s = time.monotonic() - last_rx
-            if (
-                extracted_size > 0
-                and total_file_size > 0
-                and extracted_size < total_file_size
-                and silent_s >= _STALL_RESUME_S
-            ):
-                # Dead silence well past any TCP retransmit: ask the device to
-                # resume from the contiguous prefix. Safe because replayed
-                # blocks are written at their absolute offsets.
-                _send_download_progress_ack(sock, extracted_size)
-                acked_through = extracted_size
-                resume_acks += 1
-                micro_acks_sent += 1
-                # Restart only the silence clock -- NOT idle_deadline, or a dead
-                # device would be re-prompted forever instead of timing out.
-                last_rx = time.monotonic()
-                if trace is not None:
-                    trace.log(
-                        "resume_ack_sent",
-                        silent_s=round(silent_s, 2),
-                        ack_payload_bytes=extracted_size,
-                        covered_bytes=reassembler.covered,
-                        expected_bytes=total_file_size,
-                    )
-            continue
+    def on_silence(self) -> None:
+        silent_s = time.monotonic() - self._last_rx
+        if not (
+            self._extracted_size > 0
+            and self.total_file_size > 0
+            and self._extracted_size < self.total_file_size
+            and silent_s >= _STALL_RESUME_S
+        ):
+            return
+        # Dead silence well past any TCP retransmit: ask the device to resume
+        # from the contiguous prefix. Safe because replayed blocks are written
+        # at their absolute offsets.
+        _send_download_progress_ack(self._sink, self._extracted_size)
+        self._acked_through = self._extracted_size
+        self._resume_acks += 1
+        self._micro_acks_sent += 1
+        # Restart only the silence clock -- NOT idle_deadline, or a dead device
+        # would be re-prompted forever instead of timing out.
+        self._last_rx = time.monotonic()
+        if self._trace is not None:
+            self._trace.log(
+                "resume_ack_sent",
+                silent_s=round(silent_s, 2),
+                ack_payload_bytes=self._extracted_size,
+                covered_bytes=self._reassembler.covered,
+                expected_bytes=self.total_file_size,
+            )
 
-        if not chunk:
-            if trace is not None:
-                trace.log("recv_eof", raw_bytes=len(raw_data), extracted_bytes=extracted_size)
-            break
+    def on_eof(self) -> None:
+        if self._trace is not None:
+            self._trace.log(
+                "recv_eof", raw_bytes=len(self._raw_data), extracted_bytes=self._extracted_size
+            )
 
-        last_rx = time.monotonic()
-        recv_count += 1
-        raw_data.extend(chunk)
-        frame_buffer += chunk
-        frame_buffer = _drain_download_frames_incremental(
-            frame_buffer, reassembler, trace, total_file_size
+    def connection_reset_error(self) -> RuntimeError:
+        if self._trace is not None:
+            self._trace.log(
+                "connection_reset",
+                raw_bytes=len(self._raw_data),
+                extracted_bytes=self._extracted_size,
+                expected_bytes=self.total_file_size,
+                acked_through=self._acked_through,
+                micro_acks_sent=self._micro_acks_sent,
+                resume_acks=self._resume_acks,
+            )
+        return RuntimeError(
+            f"Device closed download connection after {self._extracted_size} contiguous bytes "
+            f"(expected {self.total_file_size}, acked_through={self._acked_through})"
         )
 
-        extracted_size = len(reassembler)
-        acked_through, batch_sent = _prompt_next_batch(
-            sock,
+    def feed(self, chunk: bytes) -> None:
+        self._last_rx = time.monotonic()
+        self._recv_count += 1
+        self._raw_data.extend(chunk)
+        self.frame_buffer = _drain_download_frames_incremental(
+            self.frame_buffer + chunk, self._reassembler, self._trace, self.total_file_size
+        )
+
+        extracted_size = self._extracted_size = len(self._reassembler)
+        self._acked_through, batch_sent = _prompt_next_batch(
+            self._sink,
             extracted_size=extracted_size,
-            acked_through=acked_through,
-            total_file_size=total_file_size,
-            trace=trace,
+            acked_through=self._acked_through,
+            total_file_size=self.total_file_size,
+            trace=self._trace,
         )
-        micro_acks_sent += batch_sent
+        self._micro_acks_sent += batch_sent
+        trace = self._trace
         if trace is not None and (
-            extracted_size > last_progress_size or recv_count == 1 or recv_count % 50 == 0
+            extracted_size > self._last_progress_size
+            or self._recv_count == 1
+            or self._recv_count % 50 == 0
         ):
             trace.log(
                 "recv_chunk",
                 chunk_bytes=len(chunk),
-                raw_bytes=len(raw_data),
+                raw_bytes=len(self._raw_data),
                 extracted_bytes=extracted_size,
-                frame_buffer_remainder=len(frame_buffer),
-                recv_count=recv_count,
+                frame_buffer_remainder=len(self.frame_buffer),
+                recv_count=self._recv_count,
             )
-        if extracted_size > last_progress_size:
-            last_progress_size = extracted_size
-            idle_deadline = last_rx + _PROGRESS_IDLE_S
-            if on_progress is not None and total_file_size > 0:
-                on_progress(extracted_size, total_file_size)
+        if extracted_size <= self._last_progress_size:
+            return
+        self._last_progress_size = extracted_size
+        self._idle_deadline = self._last_rx + _PROGRESS_IDLE_S
+        if self._on_progress is not None and self.total_file_size > 0:
+            self._on_progress(extracted_size, self.total_file_size)
+        if trace is not None:
+            trace.log(
+                "progress",
+                extracted_bytes=extracted_size,
+                expected_bytes=self.total_file_size,
+                micro_acks_sent=self._micro_acks_sent,
+            )
+
+    def result(self) -> bytes:
+        """The complete file, or ``RuntimeError`` describing what is missing."""
+        trace = self._trace
+        reassembler = self._reassembler
+        total = self.total_file_size
+        covered = reassembler.covered
+        if covered == 0:
             if trace is not None:
-                trace.log(
-                    "progress",
-                    extracted_bytes=extracted_size,
-                    expected_bytes=total_file_size,
-                    micro_acks_sent=micro_acks_sent,
+                trace.analyze_raw_stream(self._raw_data, extracted=0, expected=total)
+            raise RuntimeError(f"No data blocks found in {len(self._raw_data)} bytes of response")
+
+        if reassembler.conflicts and trace is not None:
+            trace.log("replay_conflicts", count=reassembler.conflicts)
+        if total > 0 and not reassembler.is_complete(total):
+            if trace is not None:
+                trace.analyze_raw_stream(
+                    self._raw_data, extracted=self._extracted_size, expected=total
                 )
+            trace_hint = f" trace={trace.path}" if trace is not None else ""
+            raise RuntimeError(
+                f"Incomplete download: contiguous {self._extracted_size} / covered {covered} bytes, "
+                f"expected {total} (raw={len(self._raw_data)}, acks={self._micro_acks_sent}, "
+                f"resumes={self._resume_acks}, recv_chunks={self._recv_count}){trace_hint}"
+            )
 
-    covered = reassembler.covered
-    if covered == 0:
-        if trace is not None:
-            trace.analyze_raw_stream(raw_data, extracted=0, expected=total_file_size)
-        raise RuntimeError(f"No data blocks found in {len(raw_data)} bytes of response")
+        file_data = reassembler.file_data
+        if total > 0 and len(file_data) > total:
+            return bytes(file_data[:total])
+        return bytes(file_data)
 
-    if reassembler.conflicts and trace is not None:
-        trace.log("replay_conflicts", count=reassembler.conflicts)
-    if total_file_size > 0 and not reassembler.is_complete(total_file_size):
-        if trace is not None:
-            trace.analyze_raw_stream(raw_data, extracted=extracted_size, expected=total_file_size)
-        trace_hint = f" trace={trace.path}" if trace is not None else ""
-        raise RuntimeError(
-            f"Incomplete download: contiguous {extracted_size} / covered {covered} bytes, "
-            f"expected {total_file_size} (raw={len(raw_data)}, acks={micro_acks_sent}, "
-            f"resumes={resume_acks}, recv_chunks={recv_count}){trace_hint}"
+
+def _receive_file_data(
+    sock: socket.socket,
+    total_file_size: int,
+    trace: AimDownloadTrace | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> bytes:
+    """Read STCP file blocks from a blocking socket until the whole file is covered."""
+    receiver = AimFileReceiver(total_file_size, sock, trace, on_progress)
+    sock.settimeout(0.5)
+    while not receiver.is_complete:
+        if receiver.idle_expired():
+            break
+        try:
+            chunk = sock.recv(262144)
+        except ConnectionResetError as exc:
+            raise receiver.connection_reset_error() from exc
+        except socket.timeout:
+            receiver.on_silence()
+            continue
+        if not chunk:
+            receiver.on_eof()
+            break
+        receiver.feed(chunk)
+    return receiver.result()
+
+
+def device_file_path(filename: str) -> str:
+    return f"1:/mem/{filename}"
+
+
+def build_download_request(filename: str) -> bytes:
+    """STNC ``0x00040002`` file request (RS3_PULL_241/242: sent as-is on the list TCP)."""
+    return _build_download_request(device_file_path(filename))
+
+
+def file_size_from_info_payload(payload: bytes) -> int:
+    """Device-reported size from the 64 B ``Q`` reply to a file request (payload[16:20])."""
+    if len(payload) < 20:
+        return 0
+    return struct.unpack_from("<I", payload, 0x10)[0]
+
+
+def reuse_local_file(
+    out_path: Path,
+    expected_size: int,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> bool:
+    """True when ``out_path`` is already complete locally; deletes a short leftover."""
+    if not out_path.exists():
+        return False
+    local_size = out_path.stat().st_size
+    if expected_size > 0 and local_size < expected_size:
+        logger.warning(
+            "Session %s exists but is incomplete (%d/%d bytes); re-downloading.",
+            out_path.name,
+            local_size,
+            expected_size,
         )
+        out_path.unlink()
+        return False
+    logger.debug("Session %s already exists locally, skipping.", out_path.name)
+    if on_progress is not None:
+        total = expected_size if expected_size > 0 else local_size
+        on_progress(total, total if total > 0 else 1)
+    return True
 
-    file_data = reassembler.file_data
-    if total_file_size > 0 and len(file_data) > total_file_size:
-        return bytes(file_data[:total_file_size])
-    return bytes(file_data)
+
+def write_file_atomically(out_path: Path, file_data: bytes) -> None:
+    tmp_path = out_path.with_name(f"{out_path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_bytes(file_data)
+    os.replace(tmp_path, out_path)
 
 
 def download_aim_session(
@@ -572,32 +721,19 @@ def download_aim_session(
     expected_size: int = 0,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> Path:
-    """Download one log file over a **dedicated** TCP session (RS3 stream 38 in 116CaptureWireshark.pcapng).
+    """Download one log file over a **dedicated** TCP session (legacy fallback).
 
-    Session list and live view share the primary hub TCP; downloads do not.
+    The normal path downloads on the primary hub TCP like RS3
+    (``AimLiveClient.download_file``); this one opens its own socket and must
+    only run after the primary is closed (``116CaptureWireshark`` stream 38).
     """
-    """Download a single session file from the AiM device via TCP protocol."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     out_path = dest_dir / filename
 
-    if out_path.exists():
-        local_size = out_path.stat().st_size
-        if expected_size > 0 and local_size < expected_size:
-            logger.warning(
-                "Session %s exists but is incomplete (%d/%d bytes); re-downloading.",
-                filename,
-                local_size,
-                expected_size,
-            )
-            out_path.unlink()
-        else:
-            logger.debug("Session %s already exists locally, skipping.", filename)
-            if on_progress is not None:
-                total = expected_size if expected_size > 0 else local_size
-                on_progress(total, total if total > 0 else 1)
-            return out_path
+    if reuse_local_file(out_path, expected_size, on_progress):
+        return out_path
 
-    filepath = f"1:/mem/{filename}"
+    filepath = device_file_path(filename)
     port = _get_data_port()
     logger.info("Downloading %s via AiM device port %d ...", filepath, port)
 
@@ -633,7 +769,7 @@ def download_aim_session(
         # Extract total file size from second info response
         total_file_size = 0
         if len(info_data) >= 168:
-            total_file_size = struct.unpack_from("<I", info_data, 84 + 12 + 0x10)[0]
+            total_file_size = file_size_from_info_payload(info_data[84 + 12 : 84 + 12 + 64])
             logger.info("File size from device: %d bytes", total_file_size)
             trace.log("file_size", total_file_size=total_file_size)
         if total_file_size <= 0 and expected_size > 0:
@@ -668,7 +804,5 @@ def download_aim_session(
         f" (expected {total_file_size})" if total_file_size else "",
     )
 
-    tmp_path = out_path.with_name(f"{out_path.name}.{uuid.uuid4().hex}.tmp")
-    tmp_path.write_bytes(file_data)
-    os.replace(tmp_path, out_path)
+    write_file_atomically(out_path, file_data)
     return out_path

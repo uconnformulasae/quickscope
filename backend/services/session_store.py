@@ -91,6 +91,7 @@ def add_session(
     duration_s: float = 0,
     lap_count: int = 0,
     local_path: Optional[str] = None,
+    index_status: Optional[str] = None,
 ) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     entry = {
@@ -108,6 +109,8 @@ def add_session(
         "created_at": now,
         "updated_at": now,
     }
+    if index_status is not None:
+        entry["index_status"] = index_status
     with _lock:
         sessions = _load()
         sessions.append(entry)

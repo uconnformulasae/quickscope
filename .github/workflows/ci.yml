@@ -95,6 +95,10 @@ jobs:
         if: matrix.id == 'ubuntu'
         run: npm ci
 
+      - name: npm audit
+        if: matrix.id == 'ubuntu'
+        run: npm audit --audit-level=moderate
+
       - name: TypeScript check
         if: matrix.id == 'ubuntu'
         run: npm run check

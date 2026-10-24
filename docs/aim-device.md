@@ -11,15 +11,16 @@ Default device IP is `10.0.0.1` (override in Settings or `aim_device_ip` in `set
 
 ## Connection model (match Race Studio)
 
-Race Studio uses **one primary TCP** for connect, live enumeration, live polling, and browsing the on-device session list. **Log download** opens a **second** TCP only for the file transfer.
+Race Studio uses **one TCP** for connect, live enumeration, live polling, browsing the on-device session list, and downloading log files (`RS3_PULL_241/242.pcapng`).
 
-QuickScope mirrors that split:
+QuickScope mirrors that:
 
 | Component | Module | Responsibility |
 |-----------|--------|----------------|
-| Primary TCP | `aim_primary_hub.py` + `aim_live.py` | Connect, 3-pass enumeration, live poll, session list on one socket |
-| Download TCP | `aim_connector.download_aim_session` | Pull `.xrz` / `.xrk` bytes only |
-| UDP keep-alive | `aim_keepalive.py` | Send `aim-ka` about every 1 s for the whole life of the primary TCP, and during pull downloads |
+| Primary TCP | `aim_primary_hub.py` + `aim_live.py` | Connect, 3-pass enumeration, live poll, session list, and file download (`AimLiveClient.download_file`) on one socket |
+| Fallback download TCP | `aim_connector.download_aim_session` | Only if the primary fails mid-pull: one fresh socket per remaining file |
+| UDP keep-alive | `aim_keepalive.py` | Send `aim-ka` about every 1 s for the whole life of the primary TCP, and during fallback downloads |
+| Background indexer | `aim_pull_indexer.py` | Parse pulled files and fill in session metadata after the device is released |
 
 Without UDP keep-alive, EVO5 firmware closes the primary TCP roughly 30 s after connect even when the live poll loop is correct. Race Studio sends the same probe continuously; see [protocol/captures/SOURCE_CAPTURES.md](protocol/captures/SOURCE_CAPTURES.md).
 
@@ -29,7 +30,7 @@ Without UDP keep-alive, EVO5 firmware closes the primary TCP roughly 30 s after 
 
 1. Join the AiM WiFi SSID (configure name in Settings).
 2. Confirm the green AiM indicator in the session browser.
-3. **Pull from AiM** — list and download sessions (primary TCP for list; download TCP per file).
+3. **Pull from AiM** — list and download sessions on the primary TCP. The bar tracks device bytes only; rows then show **indexing** while laps and metadata are parsed in the background.
 4. **Live view** — WebSocket at `/api/live/ws` drives `AimLiveClient.stream()` on the primary TCP.
 
 Downloaded files land in `backend/data/sessions/` and are indexed in `sessions.json`.
@@ -50,16 +51,16 @@ Full byte-level spec: [protocol/aim-live-protocol.md](protocol/aim-live-protocol
 
 `POST /api/aim/pull` sequence (mirrors `RS3_PULL_241/242.pcapng`):
 
-1. Session list (sizes, device dates) via `aim_primary_hub.list_sessions` **on the primary TCP**. Never open a separate list TCP here: the device ignores a second port-2000 connection while the primary is open, which cost ~37 s per pull before this was fixed (`QS_Pull_241/242.pcapng`).
-2. `release_for_download()` closes the primary TCP.
-3. Start `AimKeepalive`; it runs for the whole download loop and stops in a `finally`.
-4. Per file, `download_aim_session` opens a fresh TCP: handshake → file request → two 84 B info frames (file size) → ack `0` → data.
+1. `aim_primary_hub.download_sessions` takes the primary lock once. It reuses the session list the picker fetched on the same socket (sizes, device dates), or lists again if the primary was reconnected. Never open a separate list TCP: the device ignores a second port-2000 connection while the primary is open, which cost ~37 s per pull (`QS_Pull_241/242.pcapng`).
+2. Per file, on the primary: STNC `0x00040002` file request → `I` + `Q` (file size) → ack `0` → data. Then a bare `0x00020024` re-list, as RS3 does after every download. The primary's own `aim-ka` keeps running throughout and the TCP stays open afterwards.
+3. Each landed file is registered in `sessions.json` with `index_status: "pending"` and queued on `aim_pull_indexer`. The HTTP response returns once the bytes are on disk; parsing never holds the device.
+4. **Fallback:** if the primary fails, the hub closes it and the route retries the remaining files with `download_aim_session` (fresh TCP per file: handshake → file request → two 84 B info frames → ack `0` → data), with `AimKeepalive` running for that loop.
 
 Batch acks: the device sends 982,320 B (30 × 32,744 B blocks) then waits. The client acks the **exact** boundary (`982320`, `1964640`, …); each ack queues the next batch *starting at that offset*, so a mid-batch ack makes the device replay. Short pauses (~1.5–3 s) are WiFi TCP retransmits and are waited out; only 8 s of silence triggers a resume ack at the contiguous prefix. Live streaming uses zero-byte micro-ACKs only in the poll loop above.
 
 Expected throughput on the UConn EVO5: ~210 KB/s (≈15 s for a 3 MB file).
 
-Regression: `pytest tests/test_aim_download.py tests/test_aim_pull_sequence.py`. Capture replays (A116, RS3_PULL_241/242, QS_Pull_241/242) run when the pcaps are in `QUICKSCOPE_AIM_CAPTURES`, the repo root, or `~/Downloads`; no tshark needed (`scripts/aim_pcapng.py`).
+Regression: `pytest tests/test_aim_download.py tests/test_aim_primary_download.py tests/test_aim_pull_sequence.py tests/test_aim_pull_indexer.py`. Capture replays (A116, RS3_PULL_241/242, QS_Pull_241/242) run when the pcaps are in `QUICKSCOPE_AIM_CAPTURES`, the repo root, or `~/Downloads`; no tshark needed (`scripts/aim_pcapng.py`).
 
 ## Debug logs
 

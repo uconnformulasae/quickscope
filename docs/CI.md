@@ -13,7 +13,7 @@ QuickScope uses **GitHub-hosted runners** for all CI.
 
 | Job | Runner | What it proves |
 |-----|--------|----------------|
-| `test / ubuntu` | `ubuntu-latest` | `pytest -m "not dll"`, TypeScript (`npm run check`), Vitest |
+| `test / ubuntu` | `ubuntu-latest` | `pytest -m "not dll"`, `npm audit`, TypeScript (`npm run check`), Vitest |
 | `test / windows` | `windows-latest` | `pytest -m dll` (MatLabXRK DLL + fixtures) |
 | `docker` | `ubuntu-latest` | `docker compose build` + backend `/docs` healthcheck |
 | `desktop / win-x64` | `windows-latest` | PyInstaller + Electron NSIS (x64) |

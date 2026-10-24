@@ -65,6 +65,25 @@ def _reset_session_state(isolated_data_dir):
     session_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def sync_aim_indexer(request, monkeypatch):
+    """Index pulled files inline so route tests can assert on the result.
+
+    Tests marked ``real_aim_indexer`` keep the background worker thread.
+    """
+    from services import aim_pull_indexer, aim_pull_progress
+
+    def _enqueue_inline(job):
+        aim_pull_progress.set_index_status(job.filename, "pending")
+        aim_pull_indexer.index_one(job)
+
+    if request.node.get_closest_marker("real_aim_indexer") is None:
+        monkeypatch.setattr(aim_pull_indexer, "enqueue", _enqueue_inline)
+    aim_pull_progress.clear_indexing()
+    yield
+    aim_pull_progress.clear_indexing()
+
+
 class FakeKeepalive:
     """Stands in for ``AimKeepalive`` so route tests never open UDP sockets."""
 
@@ -91,11 +110,27 @@ def fake_keepalive(monkeypatch):
 
 
 class FakePullHub:
-    """Minimal ``AimPrimaryHub`` for ``/api/aim/pull`` route tests."""
+    """Minimal ``AimPrimaryHub`` for ``/api/aim/pull`` route tests.
 
-    def __init__(self, sessions=None, list_error: Exception | None = None) -> None:
+    ``download_sessions`` mimics the primary-TCP pull: it writes
+    ``primary_bytes`` per file, or stops with ``primary_error`` before
+    ``fail_primary_at`` (1-based) so the route falls back to the legacy TCP.
+    """
+
+    def __init__(
+        self,
+        sessions=None,
+        list_error: Exception | None = None,
+        *,
+        primary_error: Exception | None = None,
+        fail_primary_at: int = 1,
+        primary_bytes: bytes = b"x" * 500,
+    ) -> None:
         self.sessions = sessions or []
         self.list_error = list_error
+        self.primary_error = primary_error
+        self.fail_primary_at = fail_primary_at
+        self.primary_bytes = primary_bytes
         self.calls: list[str] = []
 
     async def list_sessions(self, host=None):  # noqa: ANN001
@@ -103,6 +138,43 @@ class FakePullHub:
         if self.list_error is not None:
             raise self.list_error
         return self.sessions
+
+    async def download_sessions(
+        self,
+        filenames,
+        dest_dir_for,
+        *,
+        host=None,
+        on_file_start=None,
+        on_progress=None,
+        on_file_done=None,
+    ):  # noqa: ANN001
+        from services.aim_primary_hub import PrimaryPullResult
+
+        result = PrimaryPullResult(remaining=list(filenames))
+        try:
+            self.calls.append("list_sessions")
+            if self.list_error is not None:
+                raise self.list_error
+            result.device_meta_by_file = {s["filename"]: s for s in self.sessions}
+            for index, name in enumerate(filenames, start=1):
+                if self.primary_error is not None and index >= self.fail_primary_at:
+                    raise self.primary_error
+                meta = result.device_meta_by_file.get(name, {})
+                if on_file_start is not None:
+                    on_file_start(index, name, int(meta.get("size", 0) or 0))
+                self.calls.append(f"primary_download:{name}")
+                path = dest_dir_for(name) / name
+                path.write_bytes(self.primary_bytes)
+                if on_progress is not None:
+                    on_progress(len(self.primary_bytes), len(self.primary_bytes))
+                result.remaining.remove(name)
+                result.downloaded.append(name)
+                if on_file_done is not None:
+                    on_file_done(name, path, 0.01, meta)
+        except (ConnectionError, TimeoutError, RuntimeError, OSError) as exc:
+            result.error = exc
+        return result
 
     async def release_for_download(self) -> None:
         self.calls.append("release_for_download")

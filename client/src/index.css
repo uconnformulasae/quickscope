@@ -1,6 +1,7 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
+@plugin "tailwindcss-animate";
+@custom-variant dark (&:where(.dark, .dark *));
 
 /* =========================================================
    QuickScope Design System — Dark Motorsport Telemetry Aesthetic
