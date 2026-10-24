@@ -125,7 +125,7 @@ def test_stnc_poll_payload_has_no_enum_marker():
 
 
 def _field(offset: int, width: int) -> ChannelField:
-    return ChannelField(name="X", live_offset=offset, width=width, scale=1.0, offset=0.0, type_code=0)
+    return ChannelField(name="X", live_offset=offset, width=width, scale=1.0, type_code=0)
 
 
 def test_live_min_len_without_layout_uses_floor():

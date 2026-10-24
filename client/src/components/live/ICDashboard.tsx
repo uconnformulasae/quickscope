@@ -41,7 +41,7 @@ export function ICDashboard({
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <BigStat label="RPM"  value={fmt(ch['S8_RPM'], 0)}  unit="rpm" tone="primary" />
           <BigStat label="Gear" value={fmt(ch['S8_gear'], 0)} unit="" tone="emerald" />
-          <BigStat label="TPS"  value={fmt(ch['S8_tps1'], 1)} unit="" tone="amber" />
+          <BigStat label="TPS"  value={fmt(ch['S8_tps1'], 1)} unit="%" tone="amber" />
           <BigStat label="Lambda" value={fmt(ch['S8_lam1'], 2)} unit="" tone="primary" />
         </div>
         <div className="mt-2 grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-8 gap-2">
@@ -69,16 +69,16 @@ export function ICDashboard({
         <p className="mt-2.5 mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">Wheel speed</p>
         <div className="grid grid-cols-4 gap-2">
           {IC_WHEEL_SPEEDS.map((n, i) => (
-            <VehicleStat key={n} label={['LF', 'RF', 'LR', 'RR'][i]} value={fmt(ch[n], 1)} unit="" />
+            <VehicleStat key={n} label={['LF', 'RF', 'LR', 'RR'][i]} value={fmt(ch[n], 1)} unit="km/h" />
           ))}
         </div>
       </Panel>
 
       <Panel title="Brakes" className="lg:col-span-4">
         <div className="grid grid-cols-3 gap-2">
-          <VehicleStat label="Front" value={fmt(ch['FBrakePressCorr'], 1)} unit="" />
-          <VehicleStat label="Rear"  value={fmt(ch['RBrakePressCorr'], 1)} unit="" />
-          <VehicleStat label="Bias"  value={fmt(ch['Brake_Bias'], 1)}      unit="" />
+          <VehicleStat label="Front" value={fmt(ch['FBrakePressCorr'], 1)} unit="bar" />
+          <VehicleStat label="Rear"  value={fmt(ch['RBrakePressCorr'], 1)} unit="bar" />
+          <VehicleStat label="Bias"  value={fmt(ch['Brake_Bias'], 1)}      unit="%" />
         </div>
         <p className="mt-2.5 mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">LF rotor temp (CH1–4)</p>
         <div className="grid grid-cols-4 gap-2">
@@ -91,7 +91,7 @@ export function ICDashboard({
       <Panel title="Tires · Electrical" className="lg:col-span-3">
         <div className="grid grid-cols-4 gap-2">
           {IC_TIRE_TEMPS.map((n, i) => (
-            <VehicleStat key={n} label={`TC${i + 1}`} value={tireTemp(n)} unit="" />
+            <VehicleStat key={n} label={`TC${i + 1}`} value={tireTemp(n)} unit="°C" />
           ))}
         </div>
         <div className="mt-2.5 grid grid-cols-2 gap-2">

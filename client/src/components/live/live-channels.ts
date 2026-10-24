@@ -29,7 +29,7 @@ export const PACK_TEMP_DERATE = 45;
 export const CHANNEL_META: ChannelMeta[] = [
   // Vehicle dynamics
   { name: 'RPM',                unit: 'rpm', precision: 0 },
-  { name: 'LFspeed',            unit: 'kph', precision: 1 },
+  { name: 'LFspeed',            unit: 'km/h', precision: 1 },
   { name: 'Throttle_Pos',       unit: '%',   precision: 0 },
   { name: 'TPS_1',              unit: '%',   precision: 1 },
   { name: 'TPS_2',              unit: '%',   precision: 1 },
@@ -44,8 +44,8 @@ export const CHANNEL_META: ChannelMeta[] = [
   { name: 'RollRate',           unit: '°/s', precision: 1 },
   { name: 'PitchRate',          unit: '°/s', precision: 1 },
   // Brake pressure
-  { name: 'FrBrakePressure',    unit: 'psi', precision: 0 },
-  { name: 'RBrkPressure',       unit: 'psi', precision: 0 },
+  { name: 'FrBrakePressure',    unit: 'bar', precision: 0 },
+  { name: 'RBrkPressure',       unit: 'bar', precision: 0 },
   // Pack (Orion BMS aggregates — only what the live stream carries)
   { name: 'Pack_Voltage',       unit: 'V',   precision: 1 },
   { name: 'Pack_Current',       unit: 'A',   precision: 1 },
@@ -150,19 +150,20 @@ export function vehicleKind(vehicle: string | undefined): VehicleKind {
 }
 
 // IC channels (names verbatim from the UConn-IC layout, IC_RS3_live.pcapng).
+// Units match what the logger declares for each (oct20livetest.pcapng).
 export const IC_ENGINE_STATS: { name: string; label: string; unit: string; precision: number }[] = [
   { name: 'S8_RPM',      label: 'RPM',         unit: 'rpm', precision: 0 },
   { name: 'S8_gear',     label: 'Gear',        unit: '',    precision: 0 },
-  { name: 'S8_tps1',     label: 'TPS',         unit: '',    precision: 1 },
-  { name: 'S8_map1',     label: 'MAP',         unit: '',    precision: 1 },
-  { name: 'S8_ect1',     label: 'Coolant',     unit: '',    precision: 1 },
-  { name: 'S8_eot',      label: 'Oil Temp',    unit: '',    precision: 1 },
-  { name: 'S8_eop',      label: 'Oil Press',   unit: '',    precision: 1 },
-  { name: 'S8_fp1',      label: 'Fuel Press',  unit: '',    precision: 1 },
+  { name: 'S8_tps1',     label: 'TPS',         unit: '%',   precision: 1 },
+  { name: 'S8_map1',     label: 'MAP',         unit: 'bar', precision: 2 },
+  { name: 'S8_ect1',     label: 'Coolant',     unit: '°C',  precision: 1 },
+  { name: 'S8_eot',      label: 'Oil Temp',    unit: '°C',  precision: 1 },
+  { name: 'S8_eop',      label: 'Oil Press',   unit: 'bar', precision: 2 },
+  { name: 'S8_fp1',      label: 'Fuel Press',  unit: 'bar', precision: 2 },
   { name: 'S8_lam1',     label: 'Lambda',      unit: '',    precision: 2 },
-  { name: 'S8_vbat',     label: 'ECU Batt',    unit: '',    precision: 2 },
-  { name: 'S8_ignFinal1',label: 'Ign Final',   unit: '',    precision: 1 },
-  { name: 'S8_fuelFinalPri1', label: 'Fuel Final', unit: '', precision: 2 },
+  { name: 'S8_vbat',     label: 'ECU Batt',    unit: 'V',   precision: 2 },
+  { name: 'S8_ignFinal1',label: 'Ign Final',   unit: '°',   precision: 1 },
+  { name: 'S8_fuelFinalPri1', label: 'Fuel Final', unit: 'ms', precision: 2 },
 ];
 export const IC_WHEEL_SPEEDS = ['S8_lfSpeed', 'S8_rfspeed', 'S8_lrSpeed', 'S8_rrSpeed'] as const;
 export const IC_ENGINE_FLAGS: { name: string; label: string; kind: BoolKind }[] = [

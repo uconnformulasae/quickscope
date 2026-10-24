@@ -14,6 +14,15 @@ from services.aim_live_layout import decode_live_channels, parse_channel_layout 
 
 FIXTURE = ROOT / "docs" / "protocol" / "captures" / "fixtures" / "live_2026_follow_raw.txt"
 FIXTURE_707B = ROOT / "docs" / "protocol" / "captures" / "fixtures" / "live_707b_evo5_follow_raw.txt"
+FIXTURE_IC = ROOT / "docs" / "protocol" / "captures" / "fixtures" / "live_ic_494b_follow_raw.txt"
+
+
+def _layout_and_live(fixture: Path, live_len: int) -> tuple[list, bytes]:
+    _, s2c = load_stream(fixture)
+    sframes = parse_frames(s2c, "S")
+    layout = next(f.payload for f in sframes if f.cmd == b"STCP" and len(f.payload) >= 11000)
+    live = next(f.payload for f in sframes if f.cmd == b"STCP" and len(f.payload) == live_len)
+    return parse_channel_layout(layout, live_frame_len=1 << 16), live
 
 
 def test_live_fixture_decodes_channels_from_layout() -> None:
@@ -119,3 +128,55 @@ def test_707b_snapshot_decodes_bool_state_and_fault_channels() -> None:
     # The unmodeled 56 B GPS composite (type 65536) must stay excluded rather
     # than emit a garbage scalar under the "GPS" key.
     assert "GPS" not in channels
+
+
+def test_two_byte_channels_are_half_floats_on_both_cars() -> None:
+    """Regression test: 2-byte type 2/6 channels are IEEE f16, not int16.
+    Read as int16 (x0.0001 for type 6, x0.001 for "*Voltage"), a parked car
+    showed -2.4 g lateral / -1.74 g vertical, a 29.2 V External Voltage and a
+    20008 C logger. As f16 the IMU reads gravity on Z only."""
+    for fixture, live_len in ((FIXTURE_707B, 707), (FIXTURE_IC, 494)):
+        fields, live = _layout_and_live(fixture, live_len)
+        ch = decode_live_channels(live, fields)
+        assert -1.05 < ch["VerticalAcc"] < -0.95, fixture.name
+        assert abs(ch["LateralAcc"]) < 0.2 and abs(ch["InlineAcc"]) < 0.2, fixture.name
+        assert abs(ch["YawRate"]) < 2.0, fixture.name
+        # +104 in the record is the display range minimum (-99.9), not an offset.
+        assert 10.0 < ch["Logger Temperature"] < 45.0, fixture.name
+        assert 11.0 < ch["External Voltage"] < 15.0, fixture.name
+
+
+def test_channel_units_come_from_the_layout_quantity_code() -> None:
+    fields, live = _layout_and_live(FIXTURE_IC, 494)
+    units = {f.name: f.unit for f in fields}
+    assert units["VerticalAcc"] == "g"
+    assert units["YawRate"] == "°/s"
+    assert units["S8_RPM"] == "rpm"
+    assert units["S8_map1"] == "bar"
+    assert units["S8_ect1"] == "°C"
+    assert units["S8_tps1"] == "%"
+    assert units["S8_vbat"] == "V"
+    assert units["S8_lfSpeed"] == "km/h"
+    assert units["S8_gear"] == ""
+
+    # Quantity 0x15 voltages arrive in mV and are shown in V.
+    ch = decode_live_channels(live, fields)
+    assert 11.0 < ch["S8_vbat"] < 15.0
+    assert 0.0 <= ch["S8_ft1V"] < 5.0
+
+    ev_fields, _ = _layout_and_live(FIXTURE_707B, 707)
+    ev_units = {f.name: f.unit for f in ev_fields}
+    # The pack is its own quantity, already in V -- must not be rescaled.
+    assert ev_units["Pack_Voltage"] == "V"
+    assert ev_units["Min_Cell_Voltage"] == "V"
+    assert ev_units["Pack_Current"] == "A"
+    assert ev_units["Torque_Command"] == "Nm"
+
+
+def test_unplugged_sensors_decode_as_no_data() -> None:
+    """AiM sends -inf for a missing sensor (f16 0xfc00 thermocouples, f32
+    0xff800000 rotor temps); those must be absent, not -1024 or -inf."""
+    fields, live = _layout_and_live(FIXTURE_IC, 494)
+    ch = decode_live_channels(live, fields)
+    for name in ("0TC01", "0TC04", "LF_BRKTempCH1"):
+        assert name not in ch

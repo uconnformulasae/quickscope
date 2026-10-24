@@ -108,8 +108,8 @@ export function EVDashboard({
           </div>
 
           <div className="grid grid-cols-2 gap-2">
-            <VehicleStat label="Speed"  value={fmt(ch['LFspeed'], 0)}  unit="kph" />
-            <VehicleStat label="RPM"    value={fmt(ch['RPM'], 0)}      unit="" />
+            <VehicleStat label="Speed"  value={fmt(ch['LFspeed'], 0)}  unit="km/h" />
+            <VehicleStat label="RPM"    value={fmt(ch['RPM'], 0)}      unit="rpm" />
             <VehicleStat label="Yaw"    value={fmt(ch['YawRate'], 1)}  unit="°/s" />
             <VehicleStat label="Roll"   value={fmt(ch['RollRate'], 1)} unit="°/s" />
             <VehicleStat label="Pitch"  value={fmt(ch['PitchRate'], 1)} unit="°/s" />
