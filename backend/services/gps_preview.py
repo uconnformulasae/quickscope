@@ -22,6 +22,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 
+import numpy as np
+
 from parsers.parse_gate import PRIORITY_PREVIEW
 from services import session_store
 from services.session_cache import session_cache
@@ -161,28 +163,27 @@ def _preview_from_log(log) -> Optional[GPSPreview]:
     if not lat_name or not lon_name:
         return None
 
-    lat_table = channels[lat_name].to_pandas()
-    lon_table = channels[lon_name].to_pandas()
-
-    n = min(len(lat_table), len(lon_table))
-    valid: list[tuple[float, float]] = []
-    for i in range(n):
-        la = float(lat_table[lat_name].iloc[i])
-        lo = float(lon_table[lon_name].iloc[i])
-        if (
-            math.isfinite(la)
-            and math.isfinite(lo)
-            and abs(la) > 0.1
-            and abs(lo) > 0.1
-        ):
-            valid.append((la, lo))
-    if len(valid) < 4:
+    # Vectorised over the Arrow buffers: thumbnails cover tens of thousands
+    # of fixes, far too many for a per-row Python loop.
+    lats = channels[lat_name][lat_name].to_numpy().astype(np.float64)
+    lons = channels[lon_name][lon_name].to_numpy().astype(np.float64)
+    n = min(len(lats), len(lons))
+    lats, lons = lats[:n], lons[:n]
+    mask = (
+        np.isfinite(lats)
+        & np.isfinite(lons)
+        & (np.abs(lats) > 0.1)
+        & (np.abs(lons) > 0.1)
+    )
+    lats, lons = lats[mask], lons[mask]
+    if len(lats) < 4:
         return None
+    valid: list[tuple[float, float]] = list(zip(lats.tolist(), lons.tolist()))
 
-    min_lat = min(v[0] for v in valid)
-    max_lat = max(v[0] for v in valid)
-    min_lon = min(v[1] for v in valid)
-    max_lon = max(v[1] for v in valid)
+    min_lat = float(lats.min())
+    max_lat = float(lats.max())
+    min_lon = float(lons.min())
+    max_lon = float(lons.max())
     lat_span = max_lat - min_lat
     lon_span = max_lon - min_lon
     if lat_span < 1e-7 or lon_span < 1e-7:

@@ -29,7 +29,6 @@ export function TableView({
   // Build channel info for columns
   const columns = useMemo(() => {
     return activeChannels
-      .filter(ac => ac.visible)
       .map(ac => {
         const isDerived = ac.channelId >= 10000;
         const channelDef = session.channels.get(ac.channelId);
@@ -59,11 +58,11 @@ export function TableView({
 
   // Build table data
   const channelIds = useMemo(() => columns.map(c => c.channelId), [columns]);
-  const rows = useMemo(() => buildTableData(channelIds, allSamplesMap), [channelIds, allSamplesMap]);
+  const table = useMemo(() => buildTableData(channelIds, allSamplesMap), [channelIds, allSamplesMap]);
 
   // Virtualizer
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: table.rowCount,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 20,
@@ -87,10 +86,10 @@ export function TableView({
     const seconds = parseFloat(searchValue);
     if (isNaN(seconds)) return;
     const ms = seconds * 1000;
-    const idx = findRowByTimestamp(rows, ms);
+    const idx = findRowByTimestamp(table.timestamps, ms);
     setHighlightedRow(idx);
     virtualizer.scrollToIndex(idx, { align: 'center' });
-  }, [searchValue, rows, virtualizer]);
+  }, [searchValue, table, virtualizer]);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch();
@@ -120,7 +119,7 @@ export function TableView({
         />
         <span className="text-[10px] text-muted-foreground/40 font-mono">Ctrl+G</span>
         <span className="ml-auto text-[11px] text-muted-foreground">
-          {rows.length.toLocaleString()} rows
+          {table.rowCount.toLocaleString()} rows
         </span>
       </div>
 
@@ -158,12 +157,15 @@ export function TableView({
             }}
           >
             {virtualizer.getVirtualItems().map((virtualRow) => {
-              const row = rows[virtualRow.index];
+              // The virtualizer can still hold indices from before the table
+              // shrank (channel toggled, session switched) for one render.
+              if (virtualRow.index >= table.rowCount) return null;
+              const row = table.rowAt(virtualRow.index);
               const isEven = virtualRow.index % 2 === 0;
               const isHighlighted = virtualRow.index === highlightedRow;
               return (
                 <div
-                  key={virtualRow.index}
+                  key={virtualRow.key}
                   className={`flex absolute left-0 right-0 ${
                     isHighlighted
                       ? 'bg-primary/15 ring-1 ring-inset ring-primary/30'

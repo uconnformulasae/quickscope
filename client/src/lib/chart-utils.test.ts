@@ -33,7 +33,8 @@ describe('interpolateValue', () => {
   });
   it('handles empty input and duplicate timestamps', () => {
     expect(interpolateValue([], 5)).toBeNull();
-    expect(interpolateValue([s(0, 1), s(100, 2), s(100, 3), s(200, 4)], 100)).toBeDefined();
+    // At a duplicated timestamp, the first sample there wins.
+    expect(interpolateValue([s(0, 1), s(100, 2), s(100, 3), s(200, 4)], 100)).toBe(2);
   });
 });
 
@@ -84,12 +85,24 @@ describe('formatting', () => {
     expect(formatTimeSec(75.5)).toBe('1:15.5');
     expect(formatTimeSec(605, 1)).toBe('10:05.0');
   });
+
+  it('formatTimeSec never shows negative zero', () => {
+    expect(formatTimeSec(-0.0001)).toBe('0.0s');
+    expect(formatTimeSec(-0.0004, 0.01)).toBe('0.000s');
+    expect(formatTimeSec(-0.5)).toBe('-0.5s');
+  });
 });
 
 describe('brightenColor', () => {
   it('moves toward white and stays a valid hex', () => {
     expect(brightenColor('#000000', 0)).toBe('#000000');
     expect(brightenColor('#000000', 1)).toBe('#ffffff');
+  });
+
+  it('expands shorthand #rgb before brightening', () => {
+    expect(brightenColor('#fff', 0)).toBe('#ffffff');
+    expect(brightenColor('#000', 0.5)).toBe('#808080');
+    expect(brightenColor('#f00', 0)).toBe('#ff0000');
     expect(brightenColor('#ff0000', 0.5)).toBe('#ff8080');
   });
 });

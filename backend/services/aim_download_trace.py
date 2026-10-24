@@ -1,7 +1,7 @@
 """
 Persistent trace log for AiM file downloads.
 
-Writes a human-readable timeline to backend/data/logs/aim_download/ so we can
+Writes a human-readable timeline to <data dir>/logs/aim_download/ so we can
 diagnose truncated transfers without relying on console scrollback alone.
 """
 
@@ -12,9 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from services.aim_live import decode_frame
+from services.settings_store import DATA_DIR
 from services.trace_file import open_unique
 
-_LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_download"
+_LOG_DIR = DATA_DIR / "logs" / "aim_download"
 
 
 class AimDownloadTrace:

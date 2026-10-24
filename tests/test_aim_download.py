@@ -4,27 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import itertools
-import os
 import struct
-from pathlib import Path
 from unittest.mock import patch
 
-import aim_pcapng
 import pytest
+
+from conftest import aim_capture_stream
 
 from services.aim_connector import (
     _BATCH_PAYLOAD_BYTES,
     _IncrementalReassembler,
-    _STCP_MICRO_ACK,
-    _STCP_Q_ACK_OPCODE,
-    _STCP_Q_ACK_OPCODE_OFFSET,
-    _drain_download_frames,
-    _extract_data_blocks,
     _make_download_progress_ack,
-    _process_download_frame,
     _prompt_next_batch,
     _receive_file_data,
-    _try_extract_file_size,
 )
 from services.aim_download_trace import AimDownloadTrace
 from services.aim_live import decode_frame, encode_frame
@@ -63,25 +55,6 @@ class _RecordingSocket:
             return header + payload + trailer
         self.timeouts_before_data += 1
         raise TimeoutError("timed out")
-
-
-def test_try_extract_file_size_returns_zero_without_blocks():
-    assert _try_extract_file_size(b"not-a-protocol-stream") == 0
-
-
-def test_extract_data_blocks_places_blocks_by_absolute_offset():
-    raw = _file_block(100, b"b" * 50) + _file_block(0, b"a" * 100) + _file_block(150, b"c" * 30)
-
-    result = _extract_data_blocks(raw)
-
-    assert result == b"a" * 100 + b"b" * 50 + b"c" * 30
-
-
-def test_extract_data_blocks_trims_to_expected_size():
-    raw = _file_block(0, b"x" * 200)
-    assert len(_extract_data_blocks(raw, expected_size=150)) == 150
-
-
 def test_replayed_blocks_after_resume_do_not_shift_or_corrupt_the_file():
     """QS_Pull_242.pcapng: a mid-batch ACK made the device replay from an
     earlier offset. Replays must overwrite the same bytes, not append."""
@@ -113,7 +86,7 @@ def test_reassembler_tracks_gaps_and_contiguous_prefix():
 def test_make_download_progress_ack_encodes_byte_count():
     ack = _make_download_progress_ack(982320)
     assert _ack_payload_bytes(ack) == 982320
-    assert ack != _STCP_MICRO_ACK
+    assert ack != encode_frame(b"STCP", b"\x00\x00\x00\x00")  # not the zero live micro-ACK
 
 
 def test_prompt_next_batch_sends_progress_ack_at_exact_batch_boundary():
@@ -204,57 +177,6 @@ def test_prompt_next_batch_skips_ack_once_file_complete():
 
     assert (acked, sent) == (_BATCH_PAYLOAD_BYTES, 0)
     assert sock.sent == []
-
-
-def test_process_download_frame_sends_micro_ack_on_q_ack_frame_in_live_mode():
-    sock = _RecordingSocket()
-    q_payload = bytearray(64)
-    q_payload[_STCP_Q_ACK_OPCODE_OFFSET] = _STCP_Q_ACK_OPCODE
-
-    class _Frame:
-        cmd = b"STCP"
-        payload = bytes(q_payload)
-
-    assert _process_download_frame(sock, _Frame(), reply_to_control=True) is True
-    assert sock.sent == [_STCP_MICRO_ACK]
-
-
-def test_process_download_frame_ignores_q_ack_during_download():
-    sock = _RecordingSocket()
-    q_payload = bytearray(64)
-    q_payload[_STCP_Q_ACK_OPCODE_OFFSET] = _STCP_Q_ACK_OPCODE
-
-    class _Frame:
-        cmd = b"STCP"
-        payload = bytes(q_payload)
-
-    assert _process_download_frame(sock, _Frame(), reply_to_control=False) is False
-    assert sock.sent == []
-
-
-def test_drain_download_frames_replies_to_q_ack_in_live_mode():
-    sock = _RecordingSocket()
-    q_payload = bytearray(64)
-    q_payload[_STCP_Q_ACK_OPCODE_OFFSET] = _STCP_Q_ACK_OPCODE
-    q_frame = encode_frame(b"STCP", bytes(q_payload))
-
-    remaining, acks = _drain_download_frames(sock, q_frame, reply_to_control=True)
-    assert remaining == b""
-    assert acks == 1
-
-
-def test_drain_download_frames_ignores_q_ack_during_download():
-    sock = _RecordingSocket()
-    q_payload = bytearray(64)
-    q_payload[_STCP_Q_ACK_OPCODE_OFFSET] = _STCP_Q_ACK_OPCODE
-    q_frame = encode_frame(b"STCP", bytes(q_payload))
-
-    remaining, acks = _drain_download_frames(sock, q_frame, reply_to_control=False)
-    assert remaining == b""
-    assert acks == 0
-    assert sock.sent == []
-
-
 def test_receive_file_data_short_pause_sends_no_mid_batch_ack(tmp_path, monkeypatch):
     """A pause shorter than _STALL_RESUME_S (normal after WiFi loss) must not
     ACK -- that is what corrupted QS_Pull_242."""
@@ -307,18 +229,6 @@ def test_receive_file_data_multi_batch_with_replay_yields_exact_file():
     assert acks and acks[0] == 600
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _find_capture(name: str) -> Path:
-    """Locate a Wireshark capture (large, never committed); skip the test if absent."""
-    roots = [os.environ.get("QUICKSCOPE_AIM_CAPTURES", ""), _REPO_ROOT, Path.home() / "Downloads"]
-    for root in roots:
-        if root and (Path(root) / name).is_file():
-            return Path(root) / name
-    pytest.skip(f"{name} not present (set QUICKSCOPE_AIM_CAPTURES)")
-
-
 def _stcp_4byte_values(stream: bytes) -> list[int]:
     return [
         struct.unpack("<I", frame.payload)[0]
@@ -345,15 +255,15 @@ def _iter_frames(stream: bytes):
 
 
 def test_wireshark_a0116_capture_uses_cumulative_progress_acks():
-    download = aim_pcapng.largest_stream(_find_capture("116CaptureWireshark.pcapng"))
+    client_stream = aim_capture_stream("116CaptureWireshark.pcapng", client_to_server=True)
 
-    ack_values = _stcp_4byte_values(download.reassemble(client_to_server=True))
+    ack_values = _stcp_4byte_values(client_stream)
 
     assert ack_values == [0, 982320, 1964640, 0]
 
 
 def _load_pcap_server_stream(name: str = "116CaptureWireshark.pcapng") -> bytes:
-    return aim_pcapng.largest_stream(_find_capture(name)).reassemble(client_to_server=False)
+    return aim_capture_stream(name)
 
 
 class _FixedChunkReplaySocket:
@@ -386,16 +296,14 @@ def test_receive_file_data_incremental_matches_legacy_reassembly(chunk_size):
     """Regression test for the incremental reassembler (perf fix): feed a
     synthetic multi-batch STCP file stream through `_receive_file_data()` in
     small chunks whose boundaries don't line up with frame boundaries, and
-    check the result is byte-identical to `_extract_data_blocks()` run once
-    over the whole stream -- the same algorithm, used as the final
-    authoritative check after the incremental hot path finishes.
+    check the result is byte-identical to the file the blocks encode.
     """
     batch_one = b"".join(
         _file_block(off, bytes([off % 251]) * 200) for off in range(0, 2000, 200)
     )
     batch_two = _file_block(2000, b"Z" * 300)
     raw = batch_one + batch_two
-    expected = _extract_data_blocks(raw)
+    expected = b"".join(bytes([off % 251]) * 200 for off in range(0, 2000, 200)) + b"Z" * 300
 
     sock = _FixedChunkReplaySocket(raw, chunk_size)
     file_data = _receive_file_data(sock, len(expected), trace=None)

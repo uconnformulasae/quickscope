@@ -1,8 +1,9 @@
 """``/api/aim/pull`` must follow the RS3 connection sequence (QS_Pull_241/242 vs RS3_PULL_*).
 
 List on the primary TCP -> release it -> aim-ka keep-alive for the whole
-download loop -> stop keep-alive. Never open the legacy list TCP: the device
-ignores it while the primary is open and the pull stalls ~37 s.
+download loop -> stop keep-alive. The list must come from the primary TCP:
+the device ignores a second list TCP while the primary is open and the pull
+stalls ~37 s.
 """
 
 from __future__ import annotations
@@ -35,13 +36,6 @@ def pull_env(tmp_path, monkeypatch, fake_keepalive):
     )
     monkeypatch.setattr("routes.sessions.parse_file", lambda path, *a, **k: object())
 
-    def _legacy_list_forbidden():
-        raise AssertionError("pull must not open the legacy session-list TCP")
-
-    monkeypatch.setattr(
-        "routes.sessions.aim_connector.list_aim_sessions", _legacy_list_forbidden
-    )
-
     hub = FakePullHub([{"filename": "a_0242.xrz", "size": 500, "date": "", "hour": ""}])
     monkeypatch.setattr("routes.sessions.get_aim_primary_hub", lambda: hub)
     aim_pull_log.clear()
@@ -52,7 +46,7 @@ def pull_env(tmp_path, monkeypatch, fake_keepalive):
 def _record_downloads(monkeypatch, hub, *, fail: bool = False):
     sizes: list[int] = []
 
-    def _fake_download(filename, dest_dir, expected_size=0):
+    def _fake_download(filename, dest_dir, expected_size=0, on_progress=None):
         keepalive = FakeKeepalive.instances[-1]
         hub.calls.append(
             f"download:{filename}:keepalive={'on' if keepalive.started and not keepalive.stopped else 'off'}"
@@ -124,7 +118,7 @@ def test_pull_proceeds_without_keepalive_when_udp_unavailable(monkeypatch, pull_
     hub = pull_env
     downloads: list[str] = []
 
-    def _fake_download(filename, dest_dir, expected_size=0):
+    def _fake_download(filename, dest_dir, expected_size=0, on_progress=None):
         downloads.append(filename)
         path = dest_dir / filename
         path.write_bytes(b"x" * 500)

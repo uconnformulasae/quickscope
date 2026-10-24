@@ -104,10 +104,32 @@ describe('signal functions', () => {
   });
 
   it('mavg() ramps up from zero at the start of the session (FSAE EV.3.4.1.a)', () => {
+    // Intentional: before the first sample the signal counts as 0, so a
+    // 200 ms window over a constant 4 reads 0, 2, then 4 once it's full.
     const flat: ChannelMap = { F: ch([0, 100, 200, 300, 400, 500], [4, 4, 4, 4, 4, 4]) };
     const { values } = ok('mavg(F, 200)', flat);
-    expect(values[0]).toBeLessThan(4);
-    expect(values[1]).toBeGreaterThan(values[0]);
+    expect(values[0]).toBeCloseTo(0);
+    expect(values[1]).toBeCloseTo(2);
+    expect(values.slice(2)).toEqual([4, 4, 4, 4]);
+  });
+
+  it('mavg() is a time average, so sample rate and pauses do not skew it', () => {
+    // 10 Hz, then a 60 s pause, then 100 Hz -- all at a constant 10. The old
+    // session-wide sample-count divisor read ~10x high in the 100 Hz part.
+    const ts = [
+      ...Array.from({ length: 50 }, (_, i) => i * 100),
+      ...Array.from({ length: 500 }, (_, i) => 65_000 + i * 10),
+    ];
+    const F: ChannelMap = { F: ch(ts, ts.map(() => 10)) };
+    const { values } = ok('mavg(F, 500)', F);
+    for (const v of values.slice(10)) expect(v).toBeCloseTo(10);
+  });
+
+  it('mavg() of a ramp lags it by half the window', () => {
+    const ts = Array.from({ length: 101 }, (_, i) => i * 10);
+    const R: ChannelMap = { R: ch(ts, ts) }; // value == time (ms)
+    const { values } = ok('mavg(R, 200)', R);
+    expect(values[100]).toBeCloseTo(1000 - 100); // mean of 800..1000
   });
 
   it('smooth() of a constant signal is that constant', () => {
@@ -181,6 +203,14 @@ describe('signal and arithmetic fixes', () => {
 
   it('channel-minus-channel without spaces works (Speed-Throttle)', () => {
     expect(ok('Speed-Throttle').values).toEqual([9, 18, 27]);
+  });
+
+  it('a scalar takes on the channel timestamps instead of adding a t=0 sample', () => {
+    const late: ChannelMap = { a: ch([5000, 6000], [10, 20]) };
+    expect(ok('a * 2', late)).toEqual({ timestamps: [5000, 6000], values: [20, 40] });
+    expect(ok('5 + a', late)).toEqual({ timestamps: [5000, 6000], values: [15, 25] });
+    expect(ok('min(a, 15)', late)).toEqual({ timestamps: [5000, 6000], values: [10, 15] });
+    expect(ok('max(12, a)', late)).toEqual({ timestamps: [5000, 6000], values: [12, 20] });
   });
 
   it('mavg() of a constant signal settles at that constant', () => {

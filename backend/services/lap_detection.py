@@ -3,15 +3,17 @@ Lap detection — three-tier fallback.
 
 1. Device markers from libxrk (state.log.laps). Source = "device".
 2. GPS close-the-loop detection. Source = "gps_auto".
-   The car's first valid GPS fix is taken as the start/finish point. We
-   detect a lap when the car returns within RETURN_RADIUS_M of the start
-   AFTER having travelled at least DEPARTURE_RADIUS_M away. A minimum
-   lap-time guard (MIN_LAP_S) prevents false positives at slow first
-   crossings.
+   The reference point is the track position the car passes most often --
+   NOT the first fix, which is usually the pit box or paddock the logger was
+   powered on in. A crossing is a return within RETURN_RADIUS_M of the
+   reference AFTER having travelled at least DEPARTURE_RADIUS_M away. Lap 1
+   starts at the first crossing, so the out-lap is not counted. A minimum
+   lap-time guard (MIN_LAP_S) prevents false positives at slow crossings.
 3. Beacon channel detection. Source = "beacon_auto".
    AiM devices often log a "Beacon" or "Lap Beacon" channel that pulses
-   at the start/finish line. Look for falling/rising edges — exact polarity
-   varies — and treat each pulse as a lap boundary.
+   at the start/finish line. Each rising edge is a line crossing; lap 1 runs
+   from the first pulse to the second (time before the first pulse is the
+   out-lap).
 
 Each result row is `{lapNumber, startTime, endTime, source}` so the frontend
 can label where each lap came from.
@@ -23,6 +25,8 @@ import logging
 import math
 from typing import Optional
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,6 +36,7 @@ DEPARTURE_RADIUS_M = 30.0   # must travel this far from start before a return co
 RETURN_RADIUS_M = 15.0      # then re-enter this radius to register a lap
 MIN_LAP_S = 10.0            # ignore "laps" shorter than this (debounce)
 EARTH_R_M = 6_371_000.0
+MAX_REFERENCE_CANDIDATES = 400  # trajectory points tried as start/finish
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -42,6 +47,57 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlmb = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlmb / 2) ** 2
     return 2 * EARTH_R_M * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _count_crossings(dist_m: np.ndarray, departure_m: float, return_m: float) -> int:
+    """How many depart-then-return passes a distance-to-reference series has."""
+    # 0 = inside the return radius, 2 = beyond the departure radius; the band
+    # in between never changes state, so drop it. A crossing is then a 2 -> 0.
+    codes = np.where(dist_m <= return_m, 0, np.where(dist_m > departure_m, 2, 1))
+    codes = codes[codes != 1]
+    if len(codes) < 2:
+        return 0
+    return int(np.count_nonzero((codes[:-1] == 2) & (codes[1:] == 0)))
+
+
+def _pick_reference(
+    valid: list[tuple[float, float, float]],
+    departure_m: float,
+    return_m: float,
+) -> tuple[float, float]:
+    """A start/finish reference point that lies on the racing line.
+
+    Candidates are spaced evenly by distance driven, so time parked in the
+    pits contributes one candidate rather than hundreds. Each candidate's
+    depart-and-return count is computed; points on the racing line share the
+    same count (one per lap), so the most common non-zero count is the lap
+    count. That deliberately ignores the maximum, which belongs to spots where
+    two parts of the track run within ``return_m`` of each other and would
+    split every lap in two. Among candidates with that count, the earliest
+    wins -- the first track point after leaving the pits.
+    """
+    lats = np.array([v[1] for v in valid])
+    lons = np.array([v[2] for v in valid])
+    # Equirectangular projection: plenty accurate at track scale.
+    k = math.radians(1.0) * EARTH_R_M
+    ys = lats * k
+    xs = lons * k * math.cos(math.radians(float(lats.mean())))
+
+    travelled = np.concatenate(([0.0], np.cumsum(np.hypot(np.diff(xs), np.diff(ys)))))
+    marks = np.linspace(0.0, travelled[-1], MAX_REFERENCE_CANDIDATES, endpoint=False)
+    candidates = np.unique(np.searchsorted(travelled, marks))
+
+    counts = [
+        _count_crossings(np.hypot(xs - xs[i], ys - ys[i]), departure_m, return_m)
+        for i in candidates
+    ]
+    nonzero = [c for c in counts if c > 0]
+    if not nonzero:
+        return valid[0][1], valid[0][2]
+    values, freq = np.unique(nonzero, return_counts=True)
+    lap_count = int(values[freq == freq.max()].max())
+    best = int(candidates[counts.index(lap_count)])
+    return valid[best][1], valid[best][2]
 
 
 def from_device(log) -> list[dict]:
@@ -83,15 +139,18 @@ def from_gps(
     if len(valid) < 10:
         return []
 
-    start_t, start_lat, start_lon = valid[0]
+    ref_lat, ref_lon = _pick_reference(valid, departure_m, return_m)
+    first_t, first_lat, first_lon = valid[0]
+    prev_dist = _haversine_m(ref_lat, ref_lon, first_lat, first_lon)
     has_departed = False
-    last_crossing_t = start_t
+    # Starting on the line counts as the first crossing; otherwise lap timing
+    # begins at the first crossing and everything before it is the out-lap.
+    last_crossing_t: Optional[float] = first_t if prev_dist <= return_m else None
     laps: list[dict] = []
     lap_num = 1
-    prev_dist = 0.0
 
     for t, la, lo in valid[1:]:
-        dist = _haversine_m(start_lat, start_lon, la, lo)
+        dist = _haversine_m(ref_lat, ref_lon, la, lo)
         if not has_departed:
             if dist > departure_m:
                 has_departed = True
@@ -99,6 +158,11 @@ def from_gps(
             # Look for a falling edge into the return-radius zone — i.e. the
             # sample where we cross from outside RETURN_RADIUS to inside.
             if prev_dist > return_m and dist <= return_m:
+                if last_crossing_t is None:
+                    last_crossing_t = t
+                    has_departed = False
+                    prev_dist = dist
+                    continue
                 lap_time_s = (t - last_crossing_t) / 1000.0
                 if lap_time_s >= min_lap_s:
                     laps.append({
@@ -125,7 +189,9 @@ def from_beacon(
 
     The channel is treated as binary around its midpoint (auto-thresholded if
     `threshold` is None). Each rising edge that occurs at least `min_lap_s`
-    after the previous one is treated as a lap boundary.
+    after the previous one is treated as a lap boundary. Timing starts at the
+    first edge -- the logger was usually switched on in the pits, so the time
+    before it is the out-lap, not lap 1.
     """
     clean: list[tuple[float, float]] = []
     for t, v in zip(timestamps_ms, values):
@@ -141,13 +207,17 @@ def from_beacon(
         threshold = lo + (hi - lo) * 0.5
 
     laps: list[dict] = []
-    last_t = clean[0][0]
+    last_t: Optional[float] = None
     lap_num = 1
     prev_high = clean[0][1] >= threshold
 
     for t, v in clean[1:]:
         is_high = v >= threshold
         if is_high and not prev_high:
+            if last_t is None:
+                last_t = t
+                prev_high = is_high
+                continue
             lap_time_s = (t - last_t) / 1000.0
             if lap_time_s >= min_lap_s:
                 laps.append({

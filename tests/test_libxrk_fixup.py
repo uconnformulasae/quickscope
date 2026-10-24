@@ -41,3 +41,25 @@ def test_normalize_libxrk_timestamps_rebases_epoch_gps():
     assert gps_tc[0] == 0
     assert gps_tc[1] == 50
     assert gps_tc[2] == 100
+
+
+def test_epoch_rebase_uses_one_offset_for_all_gps_channels():
+    """The offset used to come from whichever GPS channel dict order visited
+    first; a channel that started earlier then went negative."""
+    late = _EPOCH_GPS_MS + 5_000
+    log = LogFile(
+        channels={
+            # Visited first, but starts 5 s after GPS Speed.
+            "GPS Altitude": _channel_table("GPS Altitude", [late, late + 100], [10.0, 11.0]),
+            "GPS Speed": _channel_table(
+                "GPS Speed", [_EPOCH_GPS_MS, _EPOCH_GPS_MS + 100], [1.0, 2.0],
+            ),
+        },
+        laps=pa.table({"num": [], "start_time": [], "end_time": []}),
+        metadata={},
+        file_name="test.xrk",
+    )
+
+    normalized = normalize_libxrk_timestamps(log)
+    assert normalized.channels["GPS Speed"]["timecodes"].to_pylist() == [0, 100]
+    assert normalized.channels["GPS Altitude"]["timecodes"].to_pylist() == [5_000, 5_100]

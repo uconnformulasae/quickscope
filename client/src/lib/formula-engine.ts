@@ -84,28 +84,40 @@ function applyMavg(ch: ChannelData, windowMs: number): ChannelData {
   const n = ch.timestamps.length;
   if (n === 0 || windowMs <= 0) return ch;
 
-  // Expected sample count for a fully-populated window — used as the
-  // constant divisor so under-filled windows are zero-padded (FSAE EV.3.4.1.a:
-  // before the session starts, power = 0, so MAVG should ramp from 0).
-  const totalDuration = ch.timestamps[n - 1] - ch.timestamps[0];
-  const meanDt = n > 1 && totalDuration > 0 ? totalDuration / (n - 1) : windowMs;
-  const expectedCount = totalDuration > 0
-    ? Math.max(1, Math.round(windowMs / meanDt) + 1)
-    : 1;
+  // Time-weighted average over the trailing window [t - windowMs, t]: the
+  // trapezoidal integral of the signal divided by the window length. Time
+  // before the channel's first sample counts as 0, so the average ramps up
+  // from 0 at the start of the session (FSAE EV.3.4.1.a: before the session
+  // starts, power = 0). Integrating over time rather than counting samples
+  // keeps the result correct when the sample rate varies or the log pauses.
+  const ts = ch.timestamps;
+  const vs = ch.values;
+  // prefix[i] = integral of the signal from ts[0] to ts[i]
+  const prefix = new Array<number>(n);
+  prefix[0] = 0;
+  for (let i = 1; i < n; i++) {
+    prefix[i] = prefix[i - 1] + ((vs[i] + vs[i - 1]) / 2) * (ts[i] - ts[i - 1]);
+  }
 
   const values = new Array<number>(n);
-  let sum = 0;
-  let lo = 0;
+  let k = 0; // last index with ts[k] <= window start
   for (let i = 0; i < n; i++) {
-    const t = ch.timestamps[i];
-    sum += ch.values[i];
-    while (lo < i && ch.timestamps[lo] < t - windowMs) {
-      sum -= ch.values[lo];
-      lo++;
+    const start = ts[i] - windowMs;
+    let integral: number;
+    if (start <= ts[0]) {
+      integral = prefix[i];
+    } else {
+      while (k + 1 < i && ts[k + 1] <= start) k++;
+      const t0 = ts[k];
+      const t1 = ts[k + 1];
+      const vAtStart = t1 === t0 ? vs[k] : vs[k] + ((start - t0) / (t1 - t0)) * (vs[k + 1] - vs[k]);
+      // Integral from ts[k] to the window start, removed from the prefix.
+      const head = ((vs[k] + vAtStart) / 2) * (start - t0);
+      integral = prefix[i] - prefix[k] - head;
     }
-    values[i] = sum / expectedCount;
+    values[i] = integral / windowMs;
   }
-  return { timestamps: ch.timestamps, values };
+  return { timestamps: ts, values };
 }
 
 function applyDelay(ch: ChannelData, samples: number): ChannelData {
@@ -338,6 +350,26 @@ function ensureChannel(v: EvalResult, referenceTs?: number[]): ChannelData {
   return v;
 }
 
+/** Timestamps for combining two operands, at least one of them a channel.
+ *  A scalar takes on the channel's timestamps; it must never add samples of
+ *  its own (that would fabricate a point at t=0 before the channel starts). */
+function combinedTimestamps(a: EvalResult, b: EvalResult): number[] {
+  if (typeof a === 'number') return (b as ChannelData).timestamps;
+  if (typeof b === 'number') return a.timestamps;
+  return mergeTimestamps([a.timestamps, b.timestamps]);
+}
+
+/** Pointwise f over two operands on their combined timestamps. */
+function combine(a: EvalResult, b: EvalResult, f: (x: number, y: number) => number): ChannelData {
+  const ts = combinedTimestamps(a, b);
+  const values = ts.map(t => {
+    const av = typeof a === 'number' ? a : interpolateAt(a, t);
+    const bv = typeof b === 'number' ? b : interpolateAt(b, t);
+    return f(av, bv);
+  });
+  return { timestamps: ts, values };
+}
+
 function applyBinop(op: string, a: EvalResult, b: EvalResult): EvalResult {
   // Scalar × scalar
   if (typeof a === 'number' && typeof b === 'number') {
@@ -350,13 +382,8 @@ function applyBinop(op: string, a: EvalResult, b: EvalResult): EvalResult {
     }
   }
 
-  // At least one is a channel — interpolate to merged timestamps
-  const aCh = ensureChannel(a);
-  const bCh = ensureChannel(b);
-  const ts = mergeTimestamps([aCh.timestamps, bCh.timestamps]);
-  const values = ts.map(t => {
-    const av = typeof a === 'number' ? a : interpolateAt(aCh, t);
-    const bv = typeof b === 'number' ? b : interpolateAt(bCh, t);
+  // At least one is a channel — interpolate onto the combined timestamps
+  return combine(a, b, (av, bv) => {
     switch (op) {
       case '+': return av + bv;
       case '-': return av - bv;
@@ -366,7 +393,6 @@ function applyBinop(op: string, a: EvalResult, b: EvalResult): EvalResult {
       default: return NaN;
     }
   });
-  return { timestamps: ts, values };
 }
 
 function evalNode(node: ASTNode, channels: ChannelMap): EvalResult {
@@ -439,20 +465,14 @@ function evalNode(node: ASTNode, channels: ChannelMap): EvalResult {
         const a = evalNode(node.args[0], channels);
         const b = evalNode(node.args[1], channels);
         if (typeof a === 'number' && typeof b === 'number') return Math.min(a, b);
-        const aCh = ensureChannel(a);
-        const bCh = ensureChannel(b);
-        const ts = mergeTimestamps([aCh.timestamps, bCh.timestamps]);
-        return { timestamps: ts, values: ts.map(t => Math.min(interpolateAt(aCh, t), interpolateAt(bCh, t))) };
+        return combine(a, b, Math.min);
       }
 
       if (name === 'max' && node.args.length === 2) {
         const a = evalNode(node.args[0], channels);
         const b = evalNode(node.args[1], channels);
         if (typeof a === 'number' && typeof b === 'number') return Math.max(a, b);
-        const aCh = ensureChannel(a);
-        const bCh = ensureChannel(b);
-        const ts = mergeTimestamps([aCh.timestamps, bCh.timestamps]);
-        return { timestamps: ts, values: ts.map(t => Math.max(interpolateAt(aCh, t), interpolateAt(bCh, t))) };
+        return combine(a, b, Math.max);
       }
 
       // pow(a, b) - 2 args

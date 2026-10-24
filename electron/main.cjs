@@ -5,15 +5,31 @@
  * become ready, then opens a BrowserWindow loading the built Vite bundle.
  */
 
-const { app, BrowserWindow, shell, dialog, Menu } = require('electron');
+const { app, BrowserWindow, shell, dialog, Menu, protocol, net: electronNet } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const http = require('node:http');
+const { pathToFileURL } = require('node:url');
 
 const isDev = !app.isPackaged;
 const BACKEND_HOST = '127.0.0.1';
+
+// The built UI is served from app://quickscope/ rather than file://. Pages on
+// file:// send `Origin: null`, which any website can also produce (sandboxed
+// iframe), so the backend would have to trust every site. This origin is one
+// only this app can send; backend/origins.py allows exactly it.
+const APP_SCHEME = 'app';
+const APP_HOST = 'quickscope';
+const APP_INDEX_URL = `${APP_SCHEME}://${APP_HOST}/index.html`;
+const RENDERER_DIR = path.join(__dirname, '..', 'dist', 'public');
+
+// Must run before `ready`. `standard` gives the scheme a real origin;
+// `secure` + `supportFetchAPI` let the page use fetch/WebSocket like https.
+protocol.registerSchemesAsPrivileged([
+  { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
 
 let backendProcess = null;
 let backendPort = null;
@@ -113,8 +129,6 @@ async function startBackend() {
     QUICKSCOPE_HOST: BACKEND_HOST,
     QUICKSCOPE_PORT: String(backendPort),
     QUICKSCOPE_DATA_DIR: dataDir,
-    // The packaged renderer loads from file://, which browsers send as Origin: null.
-    QUICKSCOPE_ALLOW_NULL_ORIGIN: '1',
   };
 
   if (!isDev) {
@@ -165,6 +179,23 @@ function stopBackend() {
   }
 }
 
+// ─── Renderer protocol ────────────────────────────────────────────────────────
+
+/** Serve files under RENDERER_DIR for app://quickscope/<path>; nothing else. */
+function registerAppProtocol() {
+  protocol.handle(APP_SCHEME, (request) => {
+    const { host, pathname } = new URL(request.url);
+    if (host !== APP_HOST) return new Response('Not found', { status: 404 });
+    const relPath = decodeURIComponent(pathname) === '/' ? 'index.html' : decodeURIComponent(pathname);
+    const filePath = path.resolve(RENDERER_DIR, `.${path.posix.normalize(`/${relPath}`)}`);
+    const rel = path.relative(RENDERER_DIR, filePath);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+      return new Response('Forbidden', { status: 403 });
+    }
+    return electronNet.fetch(pathToFileURL(filePath).toString());
+  });
+}
+
 // ─── Window ───────────────────────────────────────────────────────────────────
 
 const SAFE_EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
@@ -207,9 +238,9 @@ function createWindow() {
     try {
       const target = new URL(url);
       const current = new URL(mainWindow.webContents.getURL());
-      const sameApp = target.protocol === 'file:'
-        ? current.protocol === 'file:' && target.pathname === current.pathname
-        : target.origin === current.origin;
+      // Compare scheme + host rather than URL.origin, which Node reports as
+      // "null" for non-special schemes like app:.
+      const sameApp = target.protocol === current.protocol && target.host === current.host;
       if (sameApp) return;
     } catch {
       // fall through and block
@@ -225,8 +256,7 @@ function createWindow() {
   if (isDev && process.env.QUICKSCOPE_DEV_URL) {
     mainWindow.loadURL(process.env.QUICKSCOPE_DEV_URL);
   } else {
-    const indexPath = path.join(__dirname, '..', 'dist', 'public', 'index.html');
-    mainWindow.loadFile(indexPath);
+    mainWindow.loadURL(APP_INDEX_URL);
   }
 
   mainWindow.on('closed', () => {
@@ -252,6 +282,7 @@ app.on('activate', () => {
 app.whenReady().then(async () => {
   // Standard app menu (copy/paste/DevTools/etc.)
   Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate()));
+  registerAppProtocol();
 
   try {
     await startBackend();

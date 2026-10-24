@@ -27,12 +27,14 @@ export function TelemetryChart({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
+  const [canScroll, setCanScroll] = useState(false); // separate mode with more strips than fit
   const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
 
   // ─── Refs for transient state (no React re-renders) ─────────────────────
   const cursorEmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const xRangeRef = useRef<[number, number] | null>(null); // seconds
   const cursorXRef = useRef<number | null>(null); // seconds (placed cursor A)
+  const clickedXRef = useRef<number | null>(null); // seconds (last click-placed cursor, survives mouse leave)
   const cursor2XRef = useRef<number | null>(null); // seconds (placed cursor B, delta mode)
   const hoverXRef = useRef<number | null>(null); // seconds (live mouse position, always tracks)
   const isDraggingRef = useRef(false);
@@ -42,6 +44,22 @@ export function TelemetryChart({
   const needsDrawRef = useRef(true);
   const deltaModeRef = useRef(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Frames are only scheduled while there is something to draw, so a static
+  // chart costs nothing. A draw that is still easing its Y-range sets
+  // needsDrawRef again, which keeps frames coming until it settles.
+  const drawRef = useRef<() => void>(() => {});
+  const frame = useCallback(() => {
+    rafIdRef.current = 0;
+    if (!needsDrawRef.current) return;
+    needsDrawRef.current = false;
+    drawRef.current();
+    if (needsDrawRef.current) rafIdRef.current = requestAnimationFrame(frame);
+  }, []);
+  const requestDraw = useCallback(() => {
+    needsDrawRef.current = true;
+    if (!rafIdRef.current) rafIdRef.current = requestAnimationFrame(frame);
+  }, [frame]);
 
   // Cache for global min/max per channel (recomputed when channelDataMap changes)
   const globalMinMaxCache = useRef<Map<number, { minSample: ChannelSample; maxSample: ChannelSample }>>(new Map());
@@ -53,10 +71,7 @@ export function TelemetryChart({
   const pinchStartRef = useRef<{ distance: number; xRange: [number, number]; centerX: number } | null>(null);
 
   // ─── Derived data ───────────────────────────────────────────────────────
-  const visibleChannels = useMemo(
-    () => activeChannels.filter(ac => ac.visible),
-    [activeChannels],
-  );
+  const visibleChannels = activeChannels;
 
   const sessionDuration = session.durationMs / 1000; // seconds
 
@@ -131,17 +146,18 @@ export function TelemetryChart({
     globalMinMaxCache.current = newCache;
     // Reset smoothed Y-ranges so new channels start without stale lerp state
     smoothedYRanges.current.clear();
-    needsDrawRef.current = true;
+    requestDraw();
   }, [channelDataMap]);
 
   // ─── Sync external cursorTime prop → internal cursorXRef ──────────────
   useEffect(() => {
     if (cursorTime !== undefined && cursorTime !== null) {
       cursorXRef.current = cursorTime;
-      needsDrawRef.current = true;
+      requestDraw();
     } else if (cursorTime === null) {
       cursorXRef.current = null;
-      needsDrawRef.current = true;
+      clickedXRef.current = null;
+      requestDraw();
     }
   }, [cursorTime]);
 
@@ -152,7 +168,7 @@ export function TelemetryChart({
     } else {
       xRangeRef.current = [viewRange.startMs / 1000, viewRange.endMs / 1000];
     }
-    needsDrawRef.current = true;
+    requestDraw();
   }, [viewRange]);
 
   // ─── Keep deltaMode ref in sync ────────────────────────────────────────
@@ -161,7 +177,7 @@ export function TelemetryChart({
     // When turning delta mode off, clear cursor2
     if (!deltaMode) {
       cursor2XRef.current = null;
-      needsDrawRef.current = true;
+      requestDraw();
     }
   }, [deltaMode]);
 
@@ -310,23 +326,16 @@ export function TelemetryChart({
   }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout]);
 
 
-  // ─── Animation loop ────────────────────────────────────────────────────
+  // ─── On-demand drawing ─────────────────────────────────────────────────
   useEffect(() => {
-    let running = true;
-    const loop = () => {
-      if (!running) return;
-      if (needsDrawRef.current) {
-        draw();
-        needsDrawRef.current = false;
-      }
-      rafIdRef.current = requestAnimationFrame(loop);
-    };
-    rafIdRef.current = requestAnimationFrame(loop);
-    return () => {
-      running = false;
-      cancelAnimationFrame(rafIdRef.current);
-    };
-  }, [draw]);
+    drawRef.current = draw;
+    requestDraw();
+  }, [draw, requestDraw]);
+
+  useEffect(() => () => {
+    cancelAnimationFrame(rafIdRef.current);
+    rafIdRef.current = 0;
+  }, []);
 
   // ─── Compute required canvas height for separate mode ─────────────────
   const numVisible = visibleChannels.length;
@@ -355,7 +364,8 @@ export function TelemetryChart({
       const ctx = canvas.getContext('2d');
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       canvasSizeRef.current = { w, h };
-      needsDrawRef.current = true;
+      setCanScroll(h > containerH);
+      requestDraw();
     };
 
     const ro = new ResizeObserver(resize);
@@ -367,7 +377,7 @@ export function TelemetryChart({
 
   // Trigger redraws when data or display mode changes
   useEffect(() => {
-    needsDrawRef.current = true;
+    requestDraw();
   }, [channelDataMap, visibleChannels, viewRange, chartMode]);
 
   // Clear smoothed Y-ranges when chart mode changes to avoid stale lerp state
@@ -392,6 +402,12 @@ export function TelemetryChart({
     if (!canvas) return;
 
     const onWheel = (e: WheelEvent) => {
+      // With more strips than fit, the container scrolls vertically: a plain
+      // wheel scrolls through channels and Ctrl/Cmd+wheel (or a trackpad
+      // pinch, which arrives as ctrlKey) zooms time instead.
+      const container = containerRef.current;
+      const scrollable = !!container && container.scrollHeight > container.clientHeight;
+      if (scrollable && !e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const { sessionDuration: dur, getEffectiveXRange: getXR, xToTime: x2t, emitViewRange: emit, leftMargin: lm, rightMargin: rm } = wheelDepsRef.current;
       const plotW = canvasSizeRef.current.w - lm - rm;
@@ -425,7 +441,7 @@ export function TelemetryChart({
         xRangeRef.current = [newStart, newEnd];
         emit([newStart, newEnd]);
       }
-      needsDrawRef.current = true;
+      requestDraw();
     };
 
     canvas.addEventListener('wheel', onWheel, { passive: false });
@@ -468,7 +484,7 @@ export function TelemetryChart({
 
       xRangeRef.current = [newStart, newEnd];
       emitViewRange([newStart, newEnd]);
-      needsDrawRef.current = true;
+      requestDraw();
     } else {
       // Update hover cursor (always, regardless of delta mode)
       const xRange = getEffectiveXRange();
@@ -485,7 +501,7 @@ export function TelemetryChart({
           }, 60);
         }
       }
-      needsDrawRef.current = true;
+      requestDraw();
     }
   }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin, onCursorTimeChange]);
 
@@ -507,6 +523,7 @@ export function TelemetryChart({
         const xRange = getEffectiveXRange();
         const t = clamp(xToTime(mouseX, xRange, plotW), xRange[0], xRange[1]);
 
+        let placedA = true;
         if (deltaModeRef.current) {
           if (e.shiftKey) {
             // Shift+Click → move cursor A
@@ -517,15 +534,26 @@ export function TelemetryChart({
           } else {
             // Subsequent clicks → set/move cursor B
             cursor2XRef.current = t;
+            placedA = false;
           }
         } else {
           cursorXRef.current = t;
         }
-        needsDrawRef.current = true;
+        if (placedA) {
+          // Publish the placed cursor right away (GPS marker, etc.) instead
+          // of waiting on the hover throttle, and remember it for mouse leave.
+          clickedXRef.current = t;
+          if (cursorEmitTimer.current) {
+            clearTimeout(cursorEmitTimer.current);
+            cursorEmitTimer.current = null;
+          }
+          onCursorTimeChange?.(t);
+        }
+        requestDraw();
       }
     }
     dragStartRef.current = null;
-  }, [getEffectiveXRange, xToTime, leftMargin, rightMargin]);
+  }, [getEffectiveXRange, xToTime, leftMargin, rightMargin, onCursorTimeChange]);
 
   const handleMouseLeave = useCallback(() => {
     isDraggingRef.current = false;
@@ -533,20 +561,22 @@ export function TelemetryChart({
     dragStartRef.current = null;
     hoverXRef.current = null;
     if (!deltaModeRef.current) {
-      cursorXRef.current = null;
+      // The hover cursor goes away with the mouse, but a click-placed cursor
+      // stays (and keeps the GPS marker where the user put it).
+      cursorXRef.current = clickedXRef.current;
       if (cursorEmitTimer.current) {
         clearTimeout(cursorEmitTimer.current);
         cursorEmitTimer.current = null;
       }
-      onCursorTimeChange?.(null);
+      onCursorTimeChange?.(clickedXRef.current);
     }
-    needsDrawRef.current = true;
+    requestDraw();
   }, [onCursorTimeChange]);
 
   const handleDoubleClick = useCallback(() => {
     xRangeRef.current = null;
     emitViewRange(null);
-    needsDrawRef.current = true;
+    requestDraw();
   }, [emitViewRange]);
 
   // ─── Touch event handlers ────────────────────────────────────
@@ -606,7 +636,7 @@ export function TelemetryChart({
       newEnd = Math.min(sessionDuration, newEnd);
       xRangeRef.current = [newStart, newEnd];
       emitViewRange([newStart, newEnd]);
-      needsDrawRef.current = true;
+      requestDraw();
     } else if (touches.length === 2 && pinchStartRef.current) {
       // Pinch zoom
       const t1 = touches[0];
@@ -635,7 +665,7 @@ export function TelemetryChart({
         xRangeRef.current = [newStart, newEnd];
         emitViewRange([newStart, newEnd]);
       }
-      needsDrawRef.current = true;
+      requestDraw();
     }
   }, [sessionDuration, xToTime, emitViewRange, leftMargin, rightMargin]);
 
@@ -664,7 +694,7 @@ export function TelemetryChart({
           const t = clamp(xToTime(endX, xRange, plotW), xRange[0], xRange[1]);
           cursorXRef.current = t;
           if (onCursorTimeChange) onCursorTimeChange(t);
-          needsDrawRef.current = true;
+          requestDraw();
         }
       }
       touchStartRef.current = null;
@@ -689,7 +719,7 @@ export function TelemetryChart({
     cursorXRef.current = null;
     cursor2XRef.current = null;
     emitViewRange(null);
-    needsDrawRef.current = true;
+    requestDraw();
   }, [emitViewRange]);
 
   // ─── Toggle delta mode ────────────────────────────────────────────────
@@ -747,7 +777,9 @@ export function TelemetryChart({
               Reset
             </button>
           )}
-          <span className="text-xs text-muted-foreground/40 ml-1">scroll to zoom · drag to pan</span>
+          <span className="text-xs text-muted-foreground/40 ml-1">
+            {canScroll ? 'scroll for channels · ⌘/Ctrl+scroll to zoom · drag to pan' : 'scroll to zoom · drag to pan'}
+          </span>
         </div>
       </div>
 

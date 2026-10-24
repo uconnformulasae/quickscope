@@ -6,7 +6,11 @@ import logging
 import logging.handlers
 from pathlib import Path
 
-_LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs" / "aim_live"
+from services.settings_store import DATA_DIR
+
+# Under the writable data dir (QUICKSCOPE_DATA_DIR in the packaged app), never
+# next to the code, which is read-only once installed.
+_LOG_DIR = DATA_DIR / "logs" / "aim_live"
 _AIM_LIVE_LOGGERS = (
     "services.aim_live",
     "services.aim_discovery",

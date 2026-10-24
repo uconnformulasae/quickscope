@@ -296,6 +296,32 @@ def test_export_interpolates_slower_channel_onto_timebase(client_with_synthetic_
     assert float(rows[2][2]) == pytest.approx(0.5, abs=1e-4)
 
 
+def test_export_matches_point_interpolation_and_blanks_outside_each_span(monkeypatch):
+    """The vectorised export must give exactly what state.interpolate gives
+    per row, and leave a channel blank outside its own time span."""
+    from conftest import make_log
+    from main import app
+    from state import interpolate
+
+    log = make_log({
+        "Fast": (list(range(0, 1001, 10)), [float(i % 7) for i in range(101)], ""),
+        "Slow": ([200, 450, 451, 700], [1.0, 5.0, 5.0, -3.0], ""),  # duplicate-ish edge
+    })
+    monkeypatch.setattr("routes.analysis.parse_file", lambda *a, **k: log)
+    with TestClient(app) as c:
+        upload(c)
+        _, rows = _export(c, "Fast,Slow")
+
+    slow_ts, slow_vs = [200, 450, 451, 700], [1.0, 5.0, 5.0, -3.0]
+    for row in rows[1:]:
+        t_ms = round(float(row[0]) * 1000)
+        if 200 <= t_ms <= 700:
+            assert float(row[2]) == pytest.approx(interpolate(slow_ts, slow_vs, t_ms), abs=1e-5)
+        else:
+            assert row[2] == ""
+    assert len(rows) - 1 == len({*range(0, 1001, 10), 200, 450, 451, 700})
+
+
 def test_export_errors(client_with_synthetic_log):
     upload(client_with_synthetic_log)
     c = client_with_synthetic_log
@@ -425,7 +451,8 @@ def test_load_session_with_missing_file_is_reported(client_with_synthetic_log, i
     (isolated_data_dir / "sessions" / "run1.xrk").unlink()
     session_cache.clear()
     res = client_with_synthetic_log.post(f"/api/sessions/{sid}/load")
-    assert res.status_code in (400, 404, 410)
+    assert res.status_code == 400
+    assert res.json()["detail"] == "Session file not available locally. Pull it first."
 
 
 def test_rename_moves_file_and_updates_index(client_with_synthetic_log, isolated_data_dir):
@@ -439,6 +466,22 @@ def test_rename_moves_file_and_updates_index(client_with_synthetic_log, isolated
     assert not (sessions_dir / "run1.xrk").exists()
     assert (sessions_dir / "Heat_2.xrk").read_bytes() == b"bytes"
     assert client_with_synthetic_log.get("/api/sessions").json()[0]["aim_session_id"] == "Heat_2"
+
+
+def test_rename_keeps_the_cache_pointing_at_the_renamed_file(
+    client_with_synthetic_log, isolated_data_dir
+):
+    """Renaming used to leave the cache fingerprinted on the old path, so the
+    next lookup evicted the session and dropped it as the active one."""
+    upload(client_with_synthetic_log)
+    sid = client_with_synthetic_log.get("/api/sessions").json()[0]["id"]
+
+    client_with_synthetic_log.post(f"/api/sessions/{sid}/rename", json={"filename": "Heat 2"})
+
+    new_path = isolated_data_dir / "sessions" / "Heat_2.xrk"
+    assert session_cache.get_valid(sid, new_path) is not None
+    assert state.session_id == sid
+    assert state.filename == "Heat_2.xrk"
 
 
 def test_rename_conflict_and_missing(client_with_synthetic_log):

@@ -58,6 +58,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements-dev.txt
 
+      # AiM protocol replay tests (tests/test_aim_live.py, tests/test_aim_download.py)
+      # need real device traffic. Extracted TCP streams live on the aim-streams-v1
+      # release (scripts/extract_aim_streams.py, docs/CI.md); without it those
+      # tests skip instead of failing.
+      - name: AiM capture streams
+        if: matrix.id == 'ubuntu'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p tests/fixtures/aim_streams
+          if gh release download aim-streams-v1 --repo "$REPO" \
+               --pattern '*.bin.gz' --dir tests/fixtures/aim_streams --skip-existing; then
+            echo "Downloaded $(ls tests/fixtures/aim_streams/*.bin.gz | wc -l) AiM stream file(s)."
+          else
+            echo "::notice::aim-streams-v1 release not found; AiM capture replay tests will skip."
+          fi
+
       - name: Pytest
         run: ${{ matrix.pytest }}
 

@@ -288,8 +288,12 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
     const xB = dc.timeToX(cursor.cursorB, xRange, plotW);
     const left = Math.max(lm, Math.min(xA, xB));
     const right = Math.min(w - rm, Math.max(xA, xB));
-    ctx.fillStyle = dc.colors.deltaFill;
-    ctx.fillRect(left, 0, right - left, axisY);
+    // Both cursors off the same side of the plot: nothing visible to shade
+    // (a negative width would paint backwards over the axis margin).
+    if (right > left) {
+      ctx.fillStyle = dc.colors.deltaFill;
+      ctx.fillRect(left, 0, right - left, axisY);
+    }
   }
 
   // Cursor A line + pills

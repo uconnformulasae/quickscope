@@ -60,21 +60,23 @@ fi
 
 VENV_PY=".venv/bin/python"
 
-# Install Python deps if libxrk missing inside the venv or requirements.txt changed
-PY_DEPS_STAMP=".venv/.requirements-installed"
-if ! "$VENV_PY" -c "import libxrk" 2>/dev/null || [ backend/requirements.txt -nt "$PY_DEPS_STAMP" ]; then
+# Install Python deps if missing or requirements.txt changed since the last install
+PY_STAMP=".venv/.requirements-installed"
+if [ ! -f "$PY_STAMP" ] || [ backend/requirements.txt -nt "$PY_STAMP" ] \
+    || ! "$VENV_PY" -c "import libxrk" 2>/dev/null; then
     echo "Installing Python dependencies..."
     "$VENV_PY" -m pip install --upgrade pip
     "$VENV_PY" -m pip install -r backend/requirements.txt
-    touch "$PY_DEPS_STAMP"
+    touch "$PY_STAMP"
 fi
 
-# Install Node deps if missing or package-lock.json changed since the last install
-NODE_DEPS_STAMP="node_modules/.package-lock.json"
-if [ ! -d "node_modules/.bin" ] || [ package-lock.json -nt "$NODE_DEPS_STAMP" ]; then
+# Install Node deps if missing or package.json / package-lock.json changed since the last install
+# (npm writes node_modules/.package-lock.json on every install)
+NODE_STAMP="node_modules/.package-lock.json"
+if [ ! -f "$NODE_STAMP" ] || [ package.json -nt "$NODE_STAMP" ] || [ package-lock.json -nt "$NODE_STAMP" ]; then
     echo "Installing Node dependencies..."
     npm install
-    touch "$NODE_DEPS_STAMP"
+    touch "$NODE_STAMP"
 fi
 
 # npm 11+ warns on devdir injected by some tooling (e.g. Cursor); not a valid npm config key.

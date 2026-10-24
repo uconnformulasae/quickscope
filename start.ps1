@@ -27,33 +27,38 @@ if (-not (Test-Path $venvPy)) {
     python -m venv .venv
 }
 
-# Install Python deps if needed
+# Install Python deps if missing or requirements.txt changed since the last install
+$pyStamp = Join-Path $PSScriptRoot ".venv\.requirements-installed"
 $hasLibxrk = $false
 try {
     & $venvPy -c "import libxrk" 2>$null
     if ($LASTEXITCODE -eq 0) { $hasLibxrk = $true }
 } catch {}
 
-# Returns $true when $Source was modified after $Stamp (or $Stamp doesn't exist)
-function Test-NewerThan($Source, $Stamp) {
+function Test-Stale([string]$Stamp, [string[]]$Sources) {
     if (-not (Test-Path $Stamp)) { return $true }
-    return (Get-Item $Source).LastWriteTime -gt (Get-Item $Stamp).LastWriteTime
+    $stampTime = (Get-Item $Stamp).LastWriteTime
+    foreach ($src in $Sources) {
+        if ((Get-Item $src).LastWriteTime -gt $stampTime) { return $true }
+    }
+    return $false
 }
 
-$pyDepsStamp = ".venv/.requirements-installed"
-if (-not $hasLibxrk -or (Test-NewerThan "backend/requirements.txt" $pyDepsStamp)) {
+if (-not $hasLibxrk -or (Test-Stale $pyStamp @("backend/requirements.txt"))) {
     Write-Host "Installing Python dependencies..."
     & $venvPy -m pip install --upgrade pip
     & $venvPy -m pip install -r backend/requirements.txt
-    if ($LASTEXITCODE -eq 0) { New-Item -ItemType File -Force $pyDepsStamp | Out-Null }
+    # Only mark deps installed when pip succeeded, so a failed install retries next run.
+    if ($LASTEXITCODE -eq 0) { New-Item -ItemType File -Path $pyStamp -Force | Out-Null }
 }
 
-# Install Node deps if missing or package-lock.json changed since the last install
-$nodeDepsStamp = "node_modules/.package-lock.json"
-if (-not (Test-Path "node_modules") -or (Test-NewerThan "package-lock.json" $nodeDepsStamp)) {
+# Install Node deps if missing or package.json / package-lock.json changed since the last install
+# (npm writes node_modules/.package-lock.json on every install)
+$nodeStamp = "node_modules/.package-lock.json"
+if (Test-Stale $nodeStamp @("package.json", "package-lock.json")) {
     Write-Host "Installing Node dependencies..."
     npm install
-    if ($LASTEXITCODE -eq 0) { (Get-Item $nodeDepsStamp).LastWriteTime = Get-Date }
+    if ($LASTEXITCODE -eq 0) { (Get-Item $nodeStamp).LastWriteTime = Get-Date }
 }
 
 # npm 11+ warns on devdir injected by some tooling (e.g. Cursor); not a valid npm config key.
