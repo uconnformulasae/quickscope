@@ -2,7 +2,7 @@
 
 ## What this is
 
-QuickScope is a racing telemetry analysis tool for AiM XRK log files. It has a Python backend that parses files using `libxrk` and a React frontend that renders channel data on a custom HTML5 Canvas chart engine.
+QuickScope is a racing telemetry analysis tool for AiM XRK log files. It has a Python backend that parses files using the **AiM Race Studio 3 DLL** (primary, Windows) with **libxrk** as fallback, and a React frontend that renders channel data on a custom HTML5 Canvas chart engine.
 
 It is a local-only single-user app. The backend holds one parsed session in memory. There is no database, no auth, no multi-user support.
 
@@ -10,8 +10,9 @@ It is a local-only single-user app. The backend holds one parsed session in memo
 
 ```
 start.sh                    ← Single entry point, starts both servers
-├── backend/main.py         ← FastAPI + libxrk (port 8000)
-└── client/                 ← React + Vite + Tailwind (port 5000)
+├── backend/main.py         ← FastAPI + XRK parsers (port 8000)
+│   └── parsers/            ← aim_dll (primary) + libxrk (fallback)
+└── client/                 ← React + Vite + Tailwind (port 5173)
     └── src/
         ├── App.tsx                     ← Root component, wires everything
         ├── lib/
@@ -32,7 +33,7 @@ start.sh                    ← Single entry point, starts both servers
 ## Data flow
 
 1. User clicks **Load File** → browser file picker → file uploaded via `POST /api/upload`
-2. Backend parses with `libxrk.aim_xrk()`, stores in memory, returns metadata + channel list
+2. Backend parses via `parsers.parse_xrk()` (AiM DLL on Windows when available, else libxrk), stores in memory, returns metadata + channel list
 3. Frontend builds a skeleton `XRKSession` object (channels defined but no sample data yet)
 4. When a channel is activated (clicked in sidebar), `GET /api/data?channels=Name` fetches its samples
 5. Sample data (`{timestamps: ms[], values: float[]}`) is stored in `session.samples` Map
@@ -52,9 +53,11 @@ All endpoints prefixed with `/api/`. Backend is stateful — one session at a ti
 | `/api/gps` | GET | GPS lat/lon/speed (filtered for valid fixes) |
 | `/api/export?channels=A,B` | GET | CSV download with interpolated timebase |
 
-`libxrk` returns channels as a `dict[str, pyarrow.Table]` where each table has columns `timecodes` (int64 ms) and the channel value column. Metadata is a plain dict. Laps is a PyArrow table with `num`, `start_time`, `end_time`.
+`parse_xrk()` returns a `LogFile` with channels as a `dict[str, pyarrow.Table]` where each table has columns `timecodes` (int64 ms) and the channel value column. Metadata is a plain dict. Laps is a PyArrow table with `num`, `start_time`, `end_time`.
 
-GPS timecodes from libxrk are in a different timebase (raw UTC) than regular channels (session-relative). The GPS endpoint offsets them by subtracting `min(timestamps)`.
+**Parser selection:** On Windows, QuickScope tries the official AiM `MatLabXRK` DLL first (`backend/vendor/MatLabXRK-2017-64-ReleaseU.dll` or `AIM_XRK_DLL`). If the DLL is missing or fails, it falls back to libxrk. Mac/Linux always use libxrk. Override via start-script flags (`./start.ps1 -Libxrk` / `-Dll`, or `./start.sh --libxrk` / `--dll`) or env `QUICKSCOPE_PARSER=libxrk|aim_dll`.
+
+GPS timecodes may differ between parsers; the `/api/gps` endpoint offsets them by subtracting `min(timestamps)`.
 
 ## Frontend key patterns
 
@@ -94,6 +97,16 @@ Users can create computed channels using math expressions (`Spd1 * 0.621371`) or
 - Cross-channel interpolation for different sample rates
 
 Derived channel data lives in `derivedSamplesMap` (separate from `session.samples`). Both the chart and analysis panel check both maps when resolving channel data.
+
+### Live view (components/LiveView.tsx + components/live/)
+
+The live dashboard always renders, connected or not; the header pill and a slim banner carry connection state, and the last snapshot stays on screen (dimmed) after a disconnect.
+
+- **Layouts are data, not components.** `live/layout-schema.ts` defines `LiveLayout` (widgets + react-grid-layout positions) and `validateLayout`, which everything loaded from disk or imported goes through. `live/default-layouts.ts` holds the read-only built-in EV and IC layouts; editing one saves a copy.
+- **Rendering:** `LiveDashboard.tsx` places widgets on a 12-column `react-grid-layout` grid (single stacked column below 768 px); `WidgetRenderer.tsx` draws one widget. Widget types: `stats`, `bars`, `boolGroup`, `gForce`, `otherChannels`, `streamHealth`, `note`. A channel can be a formula (formula-engine syntax, evaluated per snapshot).
+- **Selection:** `useLiveLayouts.ts` — offline shows the last-used layout; on connect it switches to that car's last-used layout (`vehicleKind(device.vehicle)`) unless a layout is pinned. Rules are pure functions in `layout-schema.ts`.
+- **Persistence:** user layouts + selection in `backend/data/live_layouts.json` (`services/live_layout_store.py`); channels each car has sent in `backend/data/live_channels.json` (`services/live_channel_cache.py`, written from the live WS route) so the editor's channel picker works offline. Routes: `GET /api/live/layouts`, `PUT|DELETE /api/live/layouts/{id}`, `PUT /api/live/layout-selection`, `GET /api/live/channels?vehicle=ev|ic`.
+- Layouts export/import as `*.qslayout.json` for sharing between laptops.
 
 ## Common tasks
 
@@ -148,7 +161,8 @@ npm run build
 ## Dependencies
 
 ### Python (backend/requirements.txt)
-- `libxrk` — AiM XRK/XRZ file parser (Cython, requires Python 3.10+)
+- `libxrk` — fallback XRK/XRZ parser (Cython, requires Python 3.10+)
+- AiM `MatLabXRK-2017-64-ReleaseU.dll` — primary parser on Windows (proprietary; see `backend/vendor/README.md`)
 - `fastapi` + `uvicorn` — HTTP server
 - `python-multipart` — file upload handling
 
@@ -156,6 +170,7 @@ npm run build
 - React 18 + Vite 7 + TypeScript
 - Tailwind CSS 3 + shadcn/ui components
 - lucide-react for icons
+- react-grid-layout for the live dashboard grid
 - No charting library (custom Canvas)
 - No state management library (custom hook)
 
@@ -165,11 +180,9 @@ npm run build
 ## Known limitations
 
 - Single file at a time — loading a new file replaces the current session
-- GPS data from libxrk uses computed channels (derived from raw ECEF) — quality depends on GPS fix
+- GPS data quality depends on GPS fix; primary DLL path uses AiM's GPS computations, fallback libxrk derives lat/lon from ECEF
 - Derived channels recompute from scratch each time (no incremental updates)
 - Export CSV interpolates all channels to the highest-rate channel's timebase, which can produce very large files
-- The Express server in `server/` is vestigial scaffolding that only serves the Vite dev build — all API logic is in the Python backend
-- `components/ui/` directory contains ~40 shadcn/ui components, most of which are unused by the app but harmless to keep
 
 ## Style conventions
 

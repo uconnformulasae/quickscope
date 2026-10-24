@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchGPSPreview, type GPSPreview } from '../lib/api';
 import { MapPin } from 'lucide-react';
 
@@ -8,21 +8,55 @@ import { MapPin } from 'lucide-react';
 const cache = new Map<string, GPSPreview | null>();
 const inflight = new Map<string, Promise<GPSPreview | null>>();
 
+const MAX_CONCURRENT = 2;
+let activeFetches = 0;
+const fetchQueue: Array<() => void> = [];
+
+function drainFetchQueue() {
+  while (activeFetches < MAX_CONCURRENT && fetchQueue.length > 0) {
+    const next = fetchQueue.shift();
+    next?.();
+  }
+}
+
+function runWithConcurrencyLimit<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      activeFetches += 1;
+      fn()
+        .then(resolve, reject)
+        .finally(() => {
+          activeFetches -= 1;
+          drainFetchQueue();
+        });
+    };
+    if (activeFetches < MAX_CONCURRENT) {
+      run();
+    } else {
+      fetchQueue.push(run);
+    }
+  });
+}
+
+const FETCH_DEFER_MS = 400;
+
 async function getPreview(sessionId: string): Promise<GPSPreview | null> {
   if (cache.has(sessionId)) return cache.get(sessionId) ?? null;
   const existing = inflight.get(sessionId);
   if (existing) return existing;
-  const p = fetchGPSPreview(sessionId)
-    .then(preview => {
-      cache.set(sessionId, preview);
-      inflight.delete(sessionId);
-      return preview;
-    })
-    .catch(() => {
-      cache.set(sessionId, null);
-      inflight.delete(sessionId);
-      return null;
-    });
+  const p = runWithConcurrencyLimit(() =>
+    fetchGPSPreview(sessionId)
+      .then(preview => {
+        cache.set(sessionId, preview);
+        inflight.delete(sessionId);
+        return preview;
+      })
+      .catch(() => {
+        cache.set(sessionId, null);
+        inflight.delete(sessionId);
+        return null;
+      }),
+  );
   inflight.set(sessionId, p);
   return p;
 }
@@ -31,30 +65,66 @@ interface Props {
   sessionId: string;
   size?: number;
   className?: string;
+  /** id of the scroll container used as IntersectionObserver root */
+  scrollRootId?: string;
 }
 
-export function GPSThumbnail({ sessionId, size = 32, className = '' }: Props) {
+export function GPSThumbnail({
+  sessionId,
+  size = 32,
+  className = '',
+  scrollRootId = 'session-list-scroll',
+}: Props) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
   const [preview, setPreview] = useState<GPSPreview | null | undefined>(
     cache.has(sessionId) ? cache.get(sessionId) : undefined,
   );
 
   useEffect(() => {
     if (cache.has(sessionId)) {
+      setVisible(true);
+      return;
+    }
+    const el = rootRef.current;
+    if (!el) return;
+    const root = scrollRootId ? document.getElementById(scrollRootId) : null;
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries.some(e => e.isIntersecting)) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { root, rootMargin: '80px', threshold: 0 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [sessionId, scrollRootId]);
+
+  useEffect(() => {
+    if (!visible) return;
+    if (cache.has(sessionId)) {
       setPreview(cache.get(sessionId) ?? null);
       return;
     }
     let alive = true;
-    getPreview(sessionId).then(p => {
-      if (alive) setPreview(p);
-    });
-    return () => { alive = false; };
-  }, [sessionId]);
+    const timer = window.setTimeout(() => {
+      getPreview(sessionId).then(p => {
+        if (alive) setPreview(p);
+      });
+    }, FETCH_DEFER_MS);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [sessionId, visible]);
 
   if (preview === undefined) {
-    // Loading — render a transparent box so layout doesn't shift when the
-    // preview lands.
+    // Placeholder until visible + fetch completes
     return (
       <div
+        ref={rootRef}
         className={`flex-shrink-0 rounded bg-muted/30 ${className}`}
         style={{ width: size, height: size }}
       />
@@ -64,6 +134,7 @@ export function GPSThumbnail({ sessionId, size = 32, className = '' }: Props) {
   if (!preview || preview.points.length < 2) {
     return (
       <div
+        ref={rootRef}
         className={`flex-shrink-0 rounded bg-muted/30 flex items-center justify-center ${className}`}
         style={{ width: size, height: size }}
         title="No GPS data"
@@ -77,11 +148,11 @@ export function GPSThumbnail({ sessionId, size = 32, className = '' }: Props) {
     .map(([x, y], i) => `${i === 0 ? 'M' : 'L'} ${(x * size).toFixed(1)} ${(y * size).toFixed(1)}`)
     .join(' ');
 
-  // Mark the start point with a small dot for orientation
   const [sx, sy] = preview.points[0];
 
   return (
     <div
+      ref={rootRef}
       className={`flex-shrink-0 rounded bg-muted/30 overflow-hidden ${className}`}
       style={{ width: size, height: size }}
       title={`GPS track (${preview.pointCount} points)`}

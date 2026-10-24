@@ -11,9 +11,10 @@ declare global {
   }
 }
 
+const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
 const API_BASE =
   (typeof window !== 'undefined' && window.__QUICKSCOPE_BACKEND__) ||
-  `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+  `${isHttps ? 'https' : 'http'}://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,9 @@ export interface SessionInfo {
   durationMs: number;
   totalSamples: number;
   lapCount: number;
+  recordedAt?: string | null;
+  /** Set by the upload endpoint: id of the stored session. */
+  sessionId?: string;
 }
 
 export interface ChannelDataResponse {
@@ -56,7 +60,6 @@ export interface GPSData {
 
 export interface LocalSession {
   id: string;
-  remote_id: number | null;
   aim_session_id: string;
   filename: string;
   local_path: string | null;
@@ -66,15 +69,23 @@ export interface LocalSession {
   recorded_at: string | null;
   duration_s: number;
   lap_count: number;
-  sync_status: 'local_only' | 'remote_only' | 'synced' | 'uploading' | 'downloading';
-  source: 'manual_upload' | 'aim_device' | 'railway';
+  source: 'manual_upload' | 'aim_device';
+  /** Set for AiM pulls: metadata is filled in by background indexing after download. */
+  index_status?: AimIndexStatus;
   created_at: string;
   updated_at: string;
 }
 
 export interface AimStatus {
   connected: boolean;
-  device: { ip: string; ssid: string; device_name: string } | null;
+  device: {
+    ip: string;
+    ssid: string;
+    device_name: string;
+    model?: string;
+    serial?: string;
+    vehicle?: string;
+  } | null;
 }
 
 export interface AimSession {
@@ -89,17 +100,9 @@ export interface AimSession {
 }
 
 export interface Settings {
-  railway_url: string;
   aim_wifi_ssid: string;
   aim_device_ip: string;
   aim_device_port: number;
-}
-
-export interface SyncResult {
-  ok: boolean;
-  pulled: number;
-  pushed: number;
-  errors: string[];
 }
 
 // ─── Session Management ─────────────────────────────────────────────────────
@@ -115,24 +118,6 @@ export async function loadSession(sessionId: string): Promise<SessionInfo> {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || `Load failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-export async function syncSessions(): Promise<SyncResult> {
-  const res = await fetch(`${API_BASE}/api/sessions/sync`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Sync failed: ${res.status}`);
-  }
-  return res.json();
-}
-
-export async function pullSession(sessionId: string): Promise<{ ok: boolean; local_path?: string; error?: string }> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/pull`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Pull failed: ${res.status}`);
   }
   return res.json();
 }
@@ -169,7 +154,28 @@ export async function listAimSessions(): Promise<{ ok: boolean; sessions: AimSes
   return res.json();
 }
 
-export async function pullFromAim(filenames: string[]): Promise<{ ok: boolean; downloaded: string[]; errors?: string[]; error?: string; message?: string }> {
+export type AimIndexStatus = 'pending' | 'running' | 'ok' | 'failed';
+
+export interface AimPullProgress {
+  /** True only while the device is being read; indexing continues afterwards. */
+  active: boolean;
+  filenames: string[];
+  file_index: number;
+  file_count: number;
+  filename: string;
+  bytes_received: number;
+  bytes_total: number;
+  phase: 'idle' | 'download';
+  indexing: Record<string, AimIndexStatus>;
+}
+
+export async function fetchAimPullProgress(): Promise<AimPullProgress> {
+  const res = await fetch(`${API_BASE}/api/aim/pull/progress`);
+  if (!res.ok) throw new Error(`Failed to fetch AiM pull progress: ${res.status}`);
+  return res.json();
+}
+
+export async function pullFromAim(filenames: string[]): Promise<AimPullResponse> {
   const res = await fetch(`${API_BASE}/api/aim/pull`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -180,6 +186,43 @@ export async function pullFromAim(filenames: string[]): Promise<{ ok: boolean; d
     throw new Error(err.detail || `AiM pull failed: ${res.status}`);
   }
   return res.json();
+}
+
+export interface AimPullResult {
+  filename: string;
+  bytes: number;
+  duration_s: number;
+  session_id: string;
+  index_status: AimIndexStatus;
+  local_path: string;
+}
+
+export interface AimPullResponse {
+  ok: boolean;
+  downloaded: string[];
+  errors?: string[];
+  error?: string;
+  results?: AimPullResult[];
+}
+
+export interface AimPullLogEntry {
+  ts: string;
+  action: 'list' | 'pull';
+  status: 'ok' | 'download_failed' | 'parse_failed' | 'list_failed' | 'list_ok';
+  device_ip: string;
+  filename?: string;
+  size: number;
+  duration_s: number;
+  session_id?: string;
+  session_count?: number;
+  error?: string;
+}
+
+export async function fetchAimPullLog(): Promise<AimPullLogEntry[]> {
+  const res = await fetch(`${API_BASE}/api/aim/pull/log`);
+  if (!res.ok) throw new Error(`Failed to fetch AiM pull log: ${res.status}`);
+  const data = await res.json();
+  return data.entries;
 }
 
 // ─── Settings ───────────────────────────────────────────────────────────────
@@ -272,6 +315,7 @@ export async function uploadFile(
       }
     };
 
+    xhr.timeout = 120_000;
     xhr.onerror = () => reject(new Error('Network error during upload'));
     xhr.ontimeout = () => reject(new Error('Upload timed out'));
     xhr.onabort = () => reject(new Error('Upload aborted'));
@@ -380,27 +424,103 @@ export interface LiveDeviceInfo {
   vehicle: string;
 }
 
-export interface LiveStatus {
-  reachable: boolean;
-  host: string;
-  device?: LiveDeviceInfo;
-}
-
-export async function fetchLiveStatus(): Promise<LiveStatus> {
-  const res = await fetch(`${API_BASE}/api/live/status`);
-  if (!res.ok) throw new Error(`Live status failed: ${res.status}`);
-  return res.json();
-}
+export type LiveSnapshotMessage = {
+  type: 'snapshot';
+  /** Monotonic per-connection snapshot counter; a jump means data was skipped. */
+  seq?: number;
+  ts: number;
+  subsystem: string;
+  /** Opt-in only (connect with `?raw=1`) -- omitted by default to save ~1 KB/snapshot. */
+  raw?: string;
+  channels?: Record<string, number>;
+  /** Channel name -> display unit; sent on the first snapshot and again only when the channel layout changes. */
+  units?: Record<string, string>;
+};
 
 export type LiveWSMessage =
   | { type: 'connected'; device: LiveDeviceInfo }
-  | { type: 'snapshot'; ts: number; subsystem: string; raw: string }
-  | { type: 'error'; message: string };
+  | LiveSnapshotMessage
+  | { type: 'error'; message: string }
+  // Device link cycling (routine ~30s AiM drop): 'reconnecting' until the
+  // stream resumes as 'live' (with the gap length in ms).
+  | { type: 'status'; state: 'reconnecting' | 'live'; gap_ms?: number; attempt?: number }
+  | { type: 'heartbeat' }
+  // Several snapshots sent in one WS frame when the sender falls behind the
+  // device pump (e.g. a busy tab) -- apply each in order, same as if they'd
+  // arrived one at a time.
+  | { type: 'batch'; messages: LiveWSMessage[] };
 
 export function liveWebSocketUrl(): string {
   // Replace http(s) with ws(s) for the live endpoint.
   const wsBase = API_BASE.replace(/^http/, 'ws');
   return `${wsBase}/api/live/ws`;
+}
+
+// ─── Live dashboard layouts ─────────────────────────────────────────────────
+// Layout bodies are opaque here; the client validates them with
+// components/live/layout-schema.ts `validateLayout`.
+
+export interface LiveLayoutSelectionDTO {
+  active: Partial<Record<'ev' | 'ic', string>>;
+  pinned: string | null;
+  last_used: string | null;
+}
+
+export interface LiveLayoutsResponse {
+  layouts: unknown[];
+  selection: LiveLayoutSelectionDTO;
+}
+
+export interface LiveChannelCache {
+  vehicle_kind: 'ev' | 'ic';
+  vehicle: string | null;
+  serial: string | null;
+  seen_at: string | null;
+  channels: string[];
+  /** Unit the logger declared for each channel. */
+  units?: Record<string, string>;
+}
+
+async function detailError(res: Response, fallback: string): Promise<Error> {
+  const err = await res.json().catch(() => ({ detail: res.statusText }));
+  return new Error(err.detail || `${fallback}: ${res.status}`);
+}
+
+export async function fetchLiveLayouts(): Promise<LiveLayoutsResponse> {
+  const res = await fetch(`${API_BASE}/api/live/layouts`);
+  if (!res.ok) throw await detailError(res, 'Failed to load layouts');
+  return res.json();
+}
+
+export async function saveLiveLayout(layout: { id: string }): Promise<unknown> {
+  const res = await fetch(`${API_BASE}/api/live/layouts/${encodeURIComponent(layout.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(layout),
+  });
+  if (!res.ok) throw await detailError(res, 'Failed to save layout');
+  return res.json();
+}
+
+export async function deleteLiveLayout(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/live/layouts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw await detailError(res, 'Failed to delete layout');
+}
+
+export async function saveLiveLayoutSelection(selection: LiveLayoutSelectionDTO): Promise<LiveLayoutSelectionDTO> {
+  const res = await fetch(`${API_BASE}/api/live/layout-selection`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(selection),
+  });
+  if (!res.ok) throw await detailError(res, 'Failed to save layout selection');
+  return res.json();
+}
+
+export async function fetchLiveChannels(vehicle: 'ev' | 'ic'): Promise<LiveChannelCache> {
+  const res = await fetch(`${API_BASE}/api/live/channels?vehicle=${vehicle}`);
+  if (!res.ok) throw await detailError(res, 'Failed to load cached channels');
+  return res.json();
 }
 
 export async function exportCSV(channels: string[]): Promise<Blob> {

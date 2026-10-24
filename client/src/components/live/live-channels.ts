@@ -1,0 +1,170 @@
+export interface Snapshot {
+  ts: number;
+  subsystem: string;
+  raw: string;
+  channels?: Record<string, number>;  // populated in preview mode; real frames decode this client-side later
+  /** Display unit per channel, from the logger's channel layout. */
+  units?: Record<string, string>;
+}
+
+export interface ChannelMeta {
+  name: string;
+  unit: string;
+  /** rendering hint — how many decimals to show */
+  precision: number;
+}
+
+// Channel metadata. Names match the EXACT names the AiM device publishes
+// in its channel-config frame (verified against
+// docs/protocol/captures/analysis/q6_full_records.py extraction of the
+// 103-channel record list). When the real-device decoder lands, channels
+// arrive in `snap.channels` keyed by exactly these names — no translation
+// layer.
+
+export const CHANNEL_META: ChannelMeta[] = [
+  // Vehicle dynamics
+  { name: 'RPM',                unit: 'rpm', precision: 0 },
+  { name: 'LFspeed',            unit: 'km/h', precision: 1 },
+  { name: 'Throttle_Pos',       unit: '%',   precision: 0 },
+  { name: 'TPS_1',              unit: '%',   precision: 1 },
+  { name: 'TPS_2',              unit: '%',   precision: 1 },
+  { name: 'BSE_Voltage',        unit: 'V',   precision: 2 },
+  { name: 'Direction',          unit: '',    precision: 0 },
+  { name: 'BrakeBias',          unit: '%',   precision: 1 },
+  // IMU
+  { name: 'LateralAcc',         unit: 'g',   precision: 2 },
+  { name: 'InlineAcc',          unit: 'g',   precision: 2 },
+  { name: 'VerticalAcc',        unit: 'g',   precision: 2 },
+  { name: 'YawRate',            unit: '°/s', precision: 1 },
+  { name: 'RollRate',           unit: '°/s', precision: 1 },
+  { name: 'PitchRate',          unit: '°/s', precision: 1 },
+  // Brake pressure
+  { name: 'FrBrakePressure',    unit: 'bar', precision: 0 },
+  { name: 'RBrkPressure',       unit: 'bar', precision: 0 },
+  // Pack (Orion BMS aggregates — only what the live stream carries)
+  { name: 'Pack_Voltage',       unit: 'V',   precision: 1 },
+  { name: 'Pack_Current',       unit: 'A',   precision: 1 },
+  { name: 'State_of_Charge',    unit: '%',   precision: 1 },
+  { name: 'Pack_Temp',          unit: '°C',  precision: 1 },
+  { name: 'Min_Cell_Voltage',   unit: 'V',   precision: 3 },
+  { name: 'BMS_Disch_Lim',      unit: 'A',   precision: 0 },
+  { name: 'BMS_Disch_Enable',   unit: '',    precision: 0 },
+  { name: 'BMS_LV_input',       unit: 'V',   precision: 2 },
+  // Motor + Inverter (Cascadia CM200DX → Emrax 228 LC)
+  { name: 'Motor_Temp',         unit: '°C',  precision: 1 },
+  { name: 'Torque_Command',     unit: 'Nm',  precision: 0 },
+  { name: 'Torque_Feedback',    unit: 'Nm',  precision: 0 },
+  { name: 'MCU_Torque_Limit',   unit: 'Nm',  precision: 0 },
+  { name: 'MCU_DC_Current',     unit: 'A',   precision: 1 },
+  { name: 'Phase_A_Current',    unit: 'A',   precision: 0 },
+  { name: 'Phase_B_Current',    unit: 'A',   precision: 0 },
+  { name: 'Phase_C_Current',    unit: 'A',   precision: 0 },
+  { name: 'Id_Feeback',         unit: 'A',   precision: 0 },
+  { name: 'Iq_Feedback',        unit: 'A',   precision: 0 },
+  { name: 'InverterEnable',     unit: '',    precision: 0 },
+  // External voltages / logger
+  { name: 'External Voltage',   unit: 'V',   precision: 2 },
+  { name: 'Logger Temperature', unit: '°C',  precision: 1 },
+  // No GPS entries: the live GPS struct (type 65536) isn't decoded by
+  // backend/services/aim_live_layout.py, so those channels never arrive.
+];
+
+// Boolean / state channels from the AiM channel-config. Each carries 0/1
+// on the wire — meaningless as a number, very meaningful as a label.
+// Polarity differs by channel: for "state" 1 = enabled (green); for
+// "fault" 1 = active fault (red).
+export type BoolKind = 'state' | 'fault';
+export interface BoolChannelMeta {
+  name: string;
+  label: string;
+  kind: BoolKind;
+}
+export const BOOL_CHANNELS: BoolChannelMeta[] = [
+  // Enable / state (1 = active / good)
+  { name: 'BMS_Disch_Enable',   label: 'BMS Discharge',  kind: 'state' },
+  { name: 'InverterEnable',     label: 'Inverter',       kind: 'state' },
+  { name: 'lc_enabled',         label: 'Launch Control', kind: 'state' },
+  { name: 'lc_sensor_health',   label: 'LC Sensors OK',  kind: 'state' },
+  { name: 'cut_rate_active',    label: 'Cut-rate Active',kind: 'state' },
+  { name: 'StartRec',           label: 'Logging',        kind: 'state' },
+  // Faults (1 = fault active / BAD)
+  { name: 'RTD_Fault',           label: 'RTD',                 kind: 'fault' },
+  { name: 'BSE_Fault',           label: 'BSE Plausibility',    kind: 'fault' },
+  { name: 'TPS1_OOR_Fault',      label: 'TPS1 Out of Range',   kind: 'fault' },
+  { name: 'TPS2_OOR_Fault',      label: 'TPS2 Out of Range',   kind: 'fault' },
+  { name: 'APPS_Dist_Fault',     label: 'APPS Plausibility',   kind: 'fault' },
+  { name: 'DC_Undervoltage',     label: 'DC Undervoltage',     kind: 'fault' },
+  { name: 'InverterTempHi',      label: 'Inverter Temp Hi',    kind: 'fault' },
+  { name: 'InverterTempLo',      label: 'Inverter Temp Lo',    kind: 'fault' },
+  { name: 'MCU_LV_Out_of_Range', label: 'MCU LV OOR',          kind: 'fault' },
+  { name: 'MotorOverTemp',       label: 'Motor Over Temp',     kind: 'fault' },
+  { name: 'MotorOverSpeed',      label: 'Motor Over Speed',    kind: 'fault' },
+  { name: 'InvOverVolt',         label: 'Inverter OverVolt',   kind: 'fault' },
+  { name: 'HWOverCurrent',       label: 'HW Over Current',     kind: 'fault' },
+  { name: 'CANCommandLost',      label: 'CAN Cmd Lost',        kind: 'fault' },
+];
+
+// ── Vehicle profile ─────────────────────────────────────────────────────────
+// The logger's discovery reply names the car ("UConn-EV" / "UConn-IC"). The
+// channel set differs completely between them (the IC layout is 85 channels
+// with an ECU "S8_*" block; the EV layout is the 113-channel Orion/Cascadia
+// set), so the dashboard is chosen from that name.
+export type VehicleKind = 'ev' | 'ic';
+
+export function vehicleKind(vehicle: string | undefined): VehicleKind {
+  return /(^|[^a-z])ic([^a-z]|$)/i.test(vehicle ?? '') ? 'ic' : 'ev';
+}
+
+// IC channels (names verbatim from the UConn-IC layout, IC_RS3_live.pcapng).
+// Units match what the logger declares for each (oct20livetest.pcapng).
+export const IC_ENGINE_STATS: { name: string; label: string; unit: string; precision: number }[] = [
+  { name: 'S8_RPM',      label: 'RPM',         unit: 'rpm', precision: 0 },
+  { name: 'S8_gear',     label: 'Gear',        unit: '',    precision: 0 },
+  { name: 'S8_tps1',     label: 'TPS',         unit: '%',   precision: 1 },
+  { name: 'S8_map1',     label: 'MAP',         unit: 'bar', precision: 2 },
+  { name: 'S8_ect1',     label: 'Coolant',     unit: '°C',  precision: 1 },
+  { name: 'S8_eot',      label: 'Oil Temp',    unit: '°C',  precision: 1 },
+  { name: 'S8_eop',      label: 'Oil Press',   unit: 'bar', precision: 2 },
+  { name: 'S8_fp1',      label: 'Fuel Press',  unit: 'bar', precision: 2 },
+  { name: 'S8_lam1',     label: 'Lambda',      unit: '',    precision: 2 },
+  { name: 'S8_vbat',     label: 'ECU Batt',    unit: 'V',   precision: 2 },
+  { name: 'S8_ignFinal1',label: 'Ign Final',   unit: '°',   precision: 1 },
+  { name: 'S8_fuelFinalPri1', label: 'Fuel Final', unit: 'ms', precision: 2 },
+];
+export const IC_WHEEL_SPEEDS = ['S8_lfSpeed', 'S8_rfspeed', 'S8_lrSpeed', 'S8_rrSpeed'] as const;
+export const IC_ENGINE_FLAGS: { name: string; label: string; kind: BoolKind }[] = [
+  { name: 'S8_engineEnable',   label: 'Engine Enable', kind: 'state' },
+  { name: 'S8_LaunchSwitch',   label: 'Launch',        kind: 'state' },
+  { name: 'S8_revLimitActiv',  label: 'Rev Limit',     kind: 'fault' },
+  { name: 'S8_revCutActive',   label: 'Rev Cut',       kind: 'fault' },
+  { name: 'S8_limpmode',       label: 'Limp Mode',     kind: 'fault' },
+  { name: 'loggingActive',     label: 'Logging',       kind: 'state' },
+  { name: 'StartRec',          label: 'Recording',     kind: 'state' },
+];
+export const IC_BRAKE_TEMPS = ['LF_BRKTempCH1', 'LF_BRKTempCH2', 'LF_BRKTempCH3', 'LF_BRKTempCH4'] as const;
+export const IC_TIRE_TEMPS = ['0TC01', '0TC02', '0TC03', '0TC04'] as const;
+// A disconnected thermocouple input reads this raw floor on the wire.
+export const IC_TC_DISCONNECTED = -1000;
+
+// Channels each car is known to send — the "Built-in" source in the
+// layout editor's channel picker, available before the car has ever
+// connected to this laptop.
+export const BUILTIN_CHANNELS: Record<VehicleKind, string[]> = {
+  ev: [...new Set([...CHANNEL_META.map((m) => m.name), ...BOOL_CHANNELS.map((b) => b.name)])],
+  ic: [
+    ...IC_ENGINE_STATS.map((s) => s.name),
+    ...IC_WHEEL_SPEEDS,
+    ...IC_ENGINE_FLAGS.map((f) => f.name),
+    ...IC_BRAKE_TEMPS,
+    ...IC_TIRE_TEMPS,
+    'LateralAcc', 'InlineAcc', 'VerticalAcc', 'YawRate', 'RollRate', 'PitchRate',
+    'FBrakePressCorr', 'RBrakePressCorr', 'Brake_Bias',
+    'External Voltage',
+  ],
+};
+
+// Fallback unit per channel when the logger hasn't told us (offline / before
+// the first snapshot). The logger's own units win whenever they're known.
+export const BUILTIN_UNITS: Record<string, string> = Object.fromEntries(
+  [...CHANNEL_META, ...IC_ENGINE_STATS].filter((m) => m.unit).map((m) => [m.name, m.unit]),
+);

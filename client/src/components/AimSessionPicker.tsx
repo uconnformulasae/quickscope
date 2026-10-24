@@ -1,6 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { X, Download, Loader2, CheckCircle, HardDrive, Radio } from 'lucide-react';
-import { listAimSessions, pullFromAim, type AimSession } from '../lib/api';
+import {
+  listAimSessions,
+  pullFromAim,
+  fetchAimPullProgress,
+  type AimSession,
+  type AimPullProgress,
+  type AimIndexStatus,
+} from '../lib/api';
+import { formatAimDeviceListDate } from '../lib/time-format';
 
 interface AimSessionPickerProps {
   onClose: () => void;
@@ -14,13 +22,57 @@ function formatSize(bytes: number): string {
   return `${bytes} B`;
 }
 
+function mergePullProgress(queue: string[], server: AimPullProgress): Record<string, number> {
+  const next: Record<string, number> = {};
+  for (const name of queue) next[name] = 0;
+  if (!server.active) return next;
+
+  const completedCount = Math.max(0, server.file_index - 1);
+  for (let i = 0; i < completedCount && i < queue.length; i++) {
+    next[queue[i]] = 100;
+  }
+
+  const current = server.filename;
+  if (!current || !queue.includes(current)) return next;
+
+  if (server.bytes_total > 0) {
+    next[current] = Math.min(100, Math.round((server.bytes_received / server.bytes_total) * 100));
+  }
+  return next;
+}
+
+function isIndexingInFlight(status: AimIndexStatus | undefined): boolean {
+  return status === 'pending' || status === 'running';
+}
+
+function pickIndexing(queue: string[], server: AimPullProgress): Record<string, AimIndexStatus> {
+  const picked: Record<string, AimIndexStatus> = {};
+  for (const name of queue) {
+    const status = server.indexing?.[name];
+    if (status) picked[name] = status;
+  }
+  return picked;
+}
+
+const INDEX_BADGE: Record<AimIndexStatus, { label: string; className: string }> = {
+  pending: { label: 'indexing', className: 'bg-primary/10 text-primary' },
+  running: { label: 'indexing', className: 'bg-primary/10 text-primary' },
+  ok: { label: 'indexed', className: 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400' },
+  failed: { label: 'parse warning', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
+};
+
 export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProps) {
   const [sessions, setSessions] = useState<AimSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [downloading, setDownloading] = useState(false);
+  const [pullPercent, setPullPercent] = useState<Record<string, number>>({});
+  const [indexing, setIndexing] = useState<Record<string, AimIndexStatus>>({});
   const [downloadResult, setDownloadResult] = useState<string | null>(null);
+  const pullPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Polling outlives the pull request: indexing runs after the device is released.
+  const isPullingRef = useRef(false);
 
   // Dismiss on Escape
   useEffect(() => {
@@ -61,13 +113,42 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
     setSelected(new Set());
   }, []);
 
+  const stopPullPoll = useCallback(() => {
+    if (pullPollRef.current !== null) {
+      clearInterval(pullPollRef.current);
+      pullPollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopPullPoll(), [stopPullPoll]);
+
+  const pollPullProgress = useCallback((queue: string[]) => {
+    fetchAimPullProgress()
+      .then(progress => {
+        if (progress.active) setPullPercent(mergePullProgress(queue, progress));
+        const picked = pickIndexing(queue, progress);
+        setIndexing(prev => ({ ...prev, ...picked }));
+        const isIndexing = Object.values(picked).some(isIndexingInFlight);
+        if (!isPullingRef.current && !isIndexing) {
+          stopPullPoll();
+          onDownloaded();
+        }
+      })
+      .catch(err => console.warn('AiM pull progress poll failed:', err));
+  }, [stopPullPoll, onDownloaded]);
+
   const handleDownload = useCallback(async () => {
     if (selected.size === 0) return;
+    const queue = Array.from(selected);
     setDownloading(true);
+    setPullPercent(Object.fromEntries(queue.map(name => [name, 0])));
     setError(null);
     setDownloadResult(null);
+    stopPullPoll();
+    isPullingRef.current = true;
+    pullPollRef.current = setInterval(() => pollPullProgress(queue), 200);
     try {
-      const result = await pullFromAim(Array.from(selected));
+      const result = await pullFromAim(queue);
       if (result.error) {
         setError(result.error);
       } else {
@@ -77,7 +158,18 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
           setError(`${errCount} download(s) failed: ${result.errors!.join('; ')}`);
         }
         if (count > 0) {
-          setDownloadResult(`Downloaded ${count} session${count !== 1 ? 's' : ''}`);
+          const summaries = (result.results || [])
+            .filter(r => result.downloaded?.includes(r.filename))
+            .map(r => `${r.filename} · ${formatSize(r.bytes)} · downloaded in ${r.duration_s.toFixed(1)}s`);
+          setDownloadResult(
+            summaries.length > 0
+              ? summaries.join('\n')
+              : `Downloaded ${count} session${count !== 1 ? 's' : ''}`,
+          );
+          setIndexing(prev => ({
+            ...prev,
+            ...Object.fromEntries((result.results || []).map(r => [r.filename, r.index_status])),
+          }));
           onDownloaded();
           // Mark downloaded ones
           setSessions(prev => prev.map(s =>
@@ -94,10 +186,14 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Download failed');
+      stopPullPoll();
     } finally {
+      // Keep polling (if still running) so rows flip from "indexing" to "indexed".
+      isPullingRef.current = false;
       setDownloading(false);
+      setPullPercent({});
     }
-  }, [selected, onDownloaded]);
+  }, [selected, onDownloaded, stopPullPoll, pollPullProgress]);
 
   const newCount = sessions.filter(s => !s.already_downloaded).length;
 
@@ -125,27 +221,40 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
               <Loader2 className="w-5 h-5 text-primary animate-spin" />
               <p className="text-xs text-muted-foreground">Listing sessions on device...</p>
             </div>
-          ) : sessions.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-2">
+          ) : sessions.length === 0 && !error ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-2 px-5 text-center">
               <HardDrive className="w-6 h-6 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">No sessions found on device</p>
+              <p className="text-xs text-muted-foreground/70">
+                Connect to the AiM WiFi hotspot and verify the device IP in Settings (default 10.0.0.1).
+              </p>
             </div>
           ) : (
             <div className="divide-y divide-border/30">
               {sessions.map(session => {
                 const isSelected = selected.has(session.filename);
                 const isDownloaded = session.already_downloaded;
+                const pullFill = pullPercent[session.filename];
+                const indexStatus = indexing[session.filename];
 
                 return (
                   <button
                     key={session.filename}
                     onClick={() => !isDownloaded && toggleSelect(session.filename)}
                     disabled={isDownloaded || downloading}
-                    className={`w-full flex items-center gap-3 px-5 py-2.5 text-left transition-colors
+                    className={`relative w-full overflow-hidden text-left transition-colors
                       ${isDownloaded ? 'opacity-50' : 'hover:bg-muted/20'}
-                      ${isSelected && !isDownloaded ? 'bg-primary/5' : ''}
+                      ${isSelected && !isDownloaded && pullFill === undefined ? 'bg-primary/5' : ''}
                     `}
                   >
+                    {pullFill !== undefined && (
+                      <div
+                        className="absolute inset-y-0 left-0 bg-primary/25 dark:bg-primary/30 transition-[width] duration-200 ease-out pointer-events-none"
+                        style={{ width: `${pullFill}%` }}
+                        aria-hidden
+                      />
+                    )}
+                    <div className="relative flex w-full items-center gap-3 px-5 py-2.5">
                     {/* Checkbox */}
                     <div className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors
                       ${isDownloaded
@@ -166,14 +275,20 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
                         <span className="text-sm font-medium text-foreground truncate">
                           {session.filename}
                         </span>
-                        {isDownloaded && (
+                        {isDownloaded && !indexStatus && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 flex-shrink-0">
                             downloaded
                           </span>
                         )}
+                        {indexStatus && (
+                          <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${INDEX_BADGE[indexStatus].className}`}>
+                            {isIndexingInFlight(indexStatus) && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                            {INDEX_BADGE[indexStatus].label}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                        {session.date && <span>{session.date}</span>}
+                        {session.date && <span>{formatAimDeviceListDate(session.date)}</span>}
                         {session.hour && <span>{session.hour}</span>}
                         {session.vehicle && <span>{session.vehicle}</span>}
                       </div>
@@ -185,6 +300,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
                         <span>{session.lap_count} laps</span>
                       )}
                       <span>{formatSize(session.size)}</span>
+                    </div>
                     </div>
                   </button>
                 );
@@ -200,7 +316,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
           </div>
         )}
         {downloadResult && (
-          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20">
+          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20 whitespace-pre-line">
             {downloadResult}
           </div>
         )}

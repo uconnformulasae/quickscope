@@ -1,0 +1,451 @@
+"""Tests for AiM download trace and stall-ack behavior."""
+
+from __future__ import annotations
+
+import hashlib
+import itertools
+import struct
+from unittest.mock import patch
+
+import pytest
+
+from conftest import aim_capture_stream
+
+from services.aim_connector import (
+    _BATCH_PAYLOAD_BYTES,
+    _IncrementalReassembler,
+    _make_download_progress_ack,
+    _prompt_next_batch,
+    _receive_file_data,
+)
+from services.aim_download_trace import AimDownloadTrace
+from services.aim_live import decode_frame, encode_frame
+
+
+def _file_block(file_offset: int, data: bytes) -> bytes:
+    payload = struct.pack("<I", file_offset) + data
+    return encode_frame(b"STCP", payload)
+
+
+def _ack_payload_bytes(frame_bytes: bytes) -> int:
+    frame, _ = decode_frame(frame_bytes)
+    assert frame is not None
+    assert len(frame.payload) == 4
+    return struct.unpack("<I", frame.payload)[0]
+
+
+class _RecordingSocket:
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+        self.timeouts_before_data = 0
+        self._recv_calls = 0
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def settimeout(self, _timeout: float) -> None:
+        return None
+
+    def recv(self, _size: int) -> bytes:
+        self._recv_calls += 1
+        if self._recv_calls == 1:
+            header = b"<hSTCP" + (4 + 100).to_bytes(4, "little") + b"\x00>"
+            payload = (0).to_bytes(4, "little") + (b"a" * 100)
+            trailer = b"<STCP" + (sum(payload) & 0xFFFF).to_bytes(2, "little") + b">"
+            return header + payload + trailer
+        self.timeouts_before_data += 1
+        raise TimeoutError("timed out")
+def test_replayed_blocks_after_resume_do_not_shift_or_corrupt_the_file():
+    """QS_Pull_242.pcapng: a mid-batch ACK made the device replay from an
+    earlier offset. Replays must overwrite the same bytes, not append."""
+    file = bytes(i % 251 for i in range(1000))
+    blocks = [(off, file[off:off + 100]) for off in range(0, 1000, 100)]
+    replay = blocks[:6] + blocks[3:8] + blocks[5:]  # restarts at 300, then 500
+    reassembler = _IncrementalReassembler()
+    for off, data in replay:
+        reassembler.feed(off, data)
+
+    assert len(reassembler) == 1000
+    assert reassembler.covered == 1000
+    assert bytes(reassembler.file_data) == file
+    assert reassembler.conflicts == 0
+
+
+def test_reassembler_tracks_gaps_and_contiguous_prefix():
+    r = _IncrementalReassembler()
+    r.feed(0, b"a" * 100)
+    r.feed(200, b"c" * 100)
+    assert len(r) == 100
+    assert r.covered == 200
+    assert not r.is_complete(300)
+    r.feed(100, b"b" * 100)
+    assert len(r) == 300
+    assert r.is_complete(300)
+
+
+def test_make_download_progress_ack_encodes_byte_count():
+    ack = _make_download_progress_ack(982320)
+    assert _ack_payload_bytes(ack) == 982320
+    assert ack != encode_frame(b"STCP", b"\x00\x00\x00\x00")  # not the zero live micro-ACK
+
+
+def test_prompt_next_batch_sends_progress_ack_at_exact_batch_boundary():
+    sock = _RecordingSocket()
+    early_threshold = _BATCH_PAYLOAD_BYTES - 32_744
+    acked, sent = _prompt_next_batch(
+        sock,
+        extracted_size=early_threshold,
+        acked_through=0,
+        trace=None,
+    )
+    assert sent == 0
+    assert acked == 0
+    assert sock.sent == []
+
+    acked, sent = _prompt_next_batch(
+        sock,
+        extracted_size=_BATCH_PAYLOAD_BYTES,
+        acked_through=0,
+        trace=None,
+    )
+    assert sent == 1
+    assert acked == _BATCH_PAYLOAD_BYTES
+    assert len(sock.sent) == 1
+    assert _ack_payload_bytes(sock.sent[0]) == _BATCH_PAYLOAD_BYTES
+
+    acked2, sent2 = _prompt_next_batch(
+        sock,
+        extracted_size=_BATCH_PAYLOAD_BYTES,
+        acked_through=acked,
+        trace=None,
+    )
+    assert sent2 == 0
+    assert acked2 == _BATCH_PAYLOAD_BYTES
+
+
+def test_prompt_next_batch_acks_boundary_not_overshoot():
+    # Arrange: one large recv() carried the contiguous prefix past the boundary.
+    sock = _RecordingSocket()
+    overshoot = _BATCH_PAYLOAD_BYTES + 32_744
+
+    # Act
+    acked, sent = _prompt_next_batch(
+        sock, extracted_size=overshoot, acked_through=0, trace=None
+    )
+
+    # Assert
+    assert (acked, sent) == (_BATCH_PAYLOAD_BYTES, 1)
+    assert [_ack_payload_bytes(item) for item in sock.sent] == [_BATCH_PAYLOAD_BYTES]
+
+
+def test_prompt_next_batch_sends_single_ack_for_highest_crossed_boundary():
+    sock = _RecordingSocket()
+
+    acked, sent = _prompt_next_batch(
+        sock, extracted_size=2 * _BATCH_PAYLOAD_BYTES + 10, acked_through=0, trace=None
+    )
+
+    assert (acked, sent) == (2 * _BATCH_PAYLOAD_BYTES, 1)
+    assert [_ack_payload_bytes(item) for item in sock.sent] == [2 * _BATCH_PAYLOAD_BYTES]
+
+
+def test_prompt_next_batch_stays_aligned_to_resume_point():
+    # After a resume ACK at an unaligned offset the device batches from there.
+    sock = _RecordingSocket()
+    resume_at = 500_000
+
+    acked, sent = _prompt_next_batch(
+        sock,
+        extracted_size=resume_at + _BATCH_PAYLOAD_BYTES + 5,
+        acked_through=resume_at,
+        trace=None,
+    )
+
+    assert (acked, sent) == (resume_at + _BATCH_PAYLOAD_BYTES, 1)
+
+
+def test_prompt_next_batch_skips_ack_once_file_complete():
+    sock = _RecordingSocket()
+
+    acked, sent = _prompt_next_batch(
+        sock,
+        extracted_size=2 * _BATCH_PAYLOAD_BYTES,
+        acked_through=_BATCH_PAYLOAD_BYTES,
+        total_file_size=2 * _BATCH_PAYLOAD_BYTES,
+        trace=None,
+    )
+
+    assert (acked, sent) == (_BATCH_PAYLOAD_BYTES, 0)
+    assert sock.sent == []
+def test_receive_file_data_short_pause_sends_no_mid_batch_ack(tmp_path, monkeypatch):
+    """A pause shorter than _STALL_RESUME_S (normal after WiFi loss) must not
+    ACK -- that is what corrupted QS_Pull_242."""
+    monkeypatch.setattr("services.aim_download_trace._LOG_DIR", tmp_path / "logs")
+    sock = _RecordingSocket()
+    trace = AimDownloadTrace("test.xrz", 500)
+
+    ticks = itertools.chain(
+        (i * 0.05 for i in range(60)),  # 3s of silence: a normal TCP-recovery pause
+        itertools.repeat(1000.0),  # then the idle limit trips
+    )
+    with patch("services.aim_connector.time.monotonic", side_effect=lambda: next(ticks)):
+        with pytest.raises(RuntimeError):
+            _receive_file_data(sock, 500, trace)
+
+    assert sock.sent == []
+    trace.close(status="test")
+
+
+def test_receive_file_data_resume_ack_after_long_silence(tmp_path, monkeypatch):
+    monkeypatch.setattr("services.aim_download_trace._LOG_DIR", tmp_path / "logs")
+    sock = _RecordingSocket()
+    trace = AimDownloadTrace("test.xrz", 500)
+
+    ticks = itertools.count(0, 1.0)  # 1s per clock read: silence crosses 8s quickly
+    with patch("services.aim_connector.time.monotonic", side_effect=lambda: next(ticks)):
+        with pytest.raises(RuntimeError):
+            _receive_file_data(sock, 500, trace)
+
+    assert [_ack_payload_bytes(item) for item in sock.sent][:1] == [100]
+    trace.close(status="test")
+
+
+def test_receive_file_data_multi_batch_with_replay_yields_exact_file():
+    """Batch-boundary ACKs, a mid-stream replay from an earlier offset, and
+    exact-size completion (QS_Pull_242 shape, scaled down by patching the
+    batch size)."""
+    file = bytes((i * 7) % 253 for i in range(1200))
+    blk = 100
+    blocks = [_file_block(off, file[off:off + blk]) for off in range(0, 1200, blk)]
+    # batch 1: 0..600, then device replays from 300 (an early ACK), batch continues.
+    raw = b"".join(blocks[:6] + blocks[3:9] + blocks[9:])
+
+    with patch("services.aim_connector._BATCH_PAYLOAD_BYTES", 600):
+        sock = _FixedChunkReplaySocket(raw, 777)
+        result = _receive_file_data(sock, 1200, trace=None)
+
+    assert result == file
+    acks = [_ack_payload_bytes(item) for item in sock.sent]
+    assert acks and acks[0] == 600
+
+
+def _stcp_4byte_values(stream: bytes) -> list[int]:
+    return [
+        struct.unpack("<I", frame.payload)[0]
+        for _, frame in _iter_frames(stream)
+        if frame.cmd == b"STCP" and len(frame.payload) == 4
+    ]
+
+
+def _iter_frames(stream: bytes):
+    """Yield ``(stream_offset, frame)``, resyncing past undecodable bytes."""
+    offset = 0
+    while offset < len(stream):
+        try:
+            frame, consumed = decode_frame(stream, offset)
+        except ValueError:
+            offset = stream.find(b"<h", offset + 1)
+            if offset < 0:
+                return
+            continue
+        if frame is None or consumed == 0:
+            return
+        yield offset, frame
+        offset += consumed
+
+
+def test_wireshark_a0116_capture_uses_cumulative_progress_acks():
+    client_stream = aim_capture_stream("116CaptureWireshark.pcapng", client_to_server=True)
+
+    ack_values = _stcp_4byte_values(client_stream)
+
+    assert ack_values == [0, 982320, 1964640, 0]
+
+
+def _load_pcap_server_stream(name: str = "116CaptureWireshark.pcapng") -> bytes:
+    return aim_capture_stream(name)
+
+
+class _FixedChunkReplaySocket:
+    """Like a real trickling TCP socket: recv() ignores the caller's
+    requested size and hands back its own fixed-size slices, regardless of
+    where AiM protocol frame boundaries fall."""
+
+    def __init__(self, stream: bytes, chunk_size: int) -> None:
+        self._stream = stream
+        self._chunk_size = chunk_size
+        self._offset = 0
+        self.sent: list[bytes] = []
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def settimeout(self, _timeout: float) -> None:
+        return None
+
+    def recv(self, _requested_size: int) -> bytes:
+        if self._offset >= len(self._stream):
+            return b""
+        chunk = self._stream[self._offset : self._offset + self._chunk_size]
+        self._offset += len(chunk)
+        return chunk
+
+
+@pytest.mark.parametrize("chunk_size", [536, 1072])
+def test_receive_file_data_incremental_matches_legacy_reassembly(chunk_size):
+    """Regression test for the incremental reassembler (perf fix): feed a
+    synthetic multi-batch STCP file stream through `_receive_file_data()` in
+    small chunks whose boundaries don't line up with frame boundaries, and
+    check the result is byte-identical to the file the blocks encode.
+    """
+    batch_one = b"".join(
+        _file_block(off, bytes([off % 251]) * 200) for off in range(0, 2000, 200)
+    )
+    batch_two = _file_block(2000, b"Z" * 300)
+    raw = batch_one + batch_two
+    expected = b"".join(bytes([off % 251]) * 200 for off in range(0, 2000, 200)) + b"Z" * 300
+
+    sock = _FixedChunkReplaySocket(raw, chunk_size)
+    file_data = _receive_file_data(sock, len(expected), trace=None)
+
+    assert file_data == expected
+
+
+class _ReplaySocket:
+    """Replays server bytes from a capture and records client progress ACKs."""
+
+    def __init__(self, server_stream: bytes) -> None:
+        self._stream = server_stream
+        self._offset = 0
+        self.sent: list[bytes] = []
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def settimeout(self, _timeout: float) -> None:
+        return None
+
+    def recv(self, size: int) -> bytes:
+        if self._offset >= len(self._stream):
+            return b""
+        chunk = self._stream[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+
+def test_receive_file_data_replays_wireshark_a0116_server_stream():
+    server_stream = _load_pcap_server_stream()
+    sock = _ReplaySocket(server_stream)
+    file_data = _receive_file_data(sock, 2482176, trace=None)
+
+    assert len(file_data) == 2482176
+    progress_acks = sorted(
+        {_ack_payload_bytes(item) for item in sock.sent if b"<hSTCP" in item}
+    )
+    assert 982320 in progress_acks
+    assert 1964640 in progress_acks
+
+
+def test_receive_file_data_ignores_blocks_after_file_complete():
+    # Arrange: one read carries the whole file *and* a following offset-0 block
+    # (RS3 asks for the session list on the same TCP right after the download).
+    file = b"F" * 1000
+    trailing_session_list = _file_block(0, b"name,size,date,hour," + b"L" * 200)
+    sock = _FixedChunkReplaySocket(_file_block(0, file) + trailing_session_list, 65_536)
+
+    # Act
+    result = _receive_file_data(sock, len(file), trace=None)
+
+    # Assert
+    assert result == file
+
+
+class _OffsetReplaySocket:
+    """Replays captured server bytes in fixed chunks; records where each ACK went out."""
+
+    def __init__(self, stream: bytes, chunk_size: int) -> None:
+        self._stream = stream
+        self._chunk_size = chunk_size
+        self._offset = 0
+        self.acks: list[tuple[int, int]] = []  # (stream offset at send, ack value)
+
+    def sendall(self, data: bytes) -> None:
+        self.acks.append((self._offset, _ack_payload_bytes(data)))
+
+    def settimeout(self, _timeout: float) -> None:
+        return None
+
+    def recv(self, requested_size: int) -> bytes:
+        size = min(requested_size, self._chunk_size)
+        chunk = self._stream[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+
+def _download_phase(server_stream: bytes) -> tuple[bytes, int]:
+    """Server bytes from the first full file block on, plus the device-reported size.
+
+    RS3 captures carry session-list traffic on the same TCP before the download;
+    that traffic also contains offset-0 STCP blocks, so replay must start at the
+    file itself. The two 84 B info frames sit immediately before the first block.
+    """
+    for offset, frame in _iter_frames(server_stream):
+        payload = frame.payload
+        if (
+            frame.cmd == b"STCP"
+            and len(payload) == 4 + 32_744
+            and struct.unpack_from("<I", payload, 0)[0] == 0
+        ):
+            info = server_stream[offset - 168 : offset]
+            size = struct.unpack_from("<I", info, 84 + 12 + 0x10)[0]
+            return server_stream[offset:], size
+    raise AssertionError("no file download found in capture")
+
+
+def _block_stream_offsets(stream: bytes) -> dict[int, int]:
+    """File offset -> stream offset of the first STCP block carrying it."""
+    positions: dict[int, int] = {}
+    for offset, frame in _iter_frames(stream):
+        if frame.cmd == b"STCP" and len(frame.payload) > 64:
+            positions.setdefault(struct.unpack_from("<I", frame.payload, 0)[0], offset)
+    return positions
+
+
+# (capture, expected size, SHA-1 prefix of the RS3-downloaded file)
+_COMPLETE_PULLS = [
+    ("RS3_PULL_241.pcapng", 3_149_824, "0ea1db9e9df3"),
+    ("QS_Pull_241.pcapng", 3_149_824, "0ea1db9e9df3"),
+    ("RS3_PULL_242.pcapng", 4_091_904, "5c777c2cf0a9"),
+]
+
+
+@pytest.mark.parametrize("chunk_size", [1072, 262_144])
+@pytest.mark.parametrize("capture,expected_size,sha1_prefix", _COMPLETE_PULLS)
+def test_receive_file_data_replays_rs3_pull_captures(capture, expected_size, sha1_prefix, chunk_size):
+    # Arrange
+    stream, device_size = _download_phase(_load_pcap_server_stream(capture))
+    sock = _OffsetReplaySocket(stream, chunk_size)
+    boundaries = list(range(_BATCH_PAYLOAD_BYTES, expected_size, _BATCH_PAYLOAD_BYTES))
+    next_batch_at = _block_stream_offsets(stream)
+
+    # Act
+    file_data = _receive_file_data(sock, device_size, trace=None)
+
+    # Assert: same bytes RS3 saved, and ACKs exactly where RS3 sent them.
+    assert device_size == expected_size
+    assert len(file_data) == expected_size
+    assert hashlib.sha1(file_data).hexdigest().startswith(sha1_prefix)
+    assert [value for _, value in sock.acks] == boundaries
+    for sent_at, value in sock.acks:
+        batch_end = next_batch_at[value]
+        assert batch_end <= sent_at < batch_end + chunk_size
+
+
+def test_receive_file_data_rejects_qs_pull_242_replay_gap():
+    """Old code's mid-batch ACKs made the device replay instead of finishing
+    (QS_Pull_242); replaying those bytes must fail loudly, never save a short file."""
+    stream, device_size = _download_phase(_load_pcap_server_stream("QS_Pull_242.pcapng"))
+    sock = _OffsetReplaySocket(stream, 1072)
+
+    with pytest.raises(RuntimeError, match="Incomplete download"):
+        _receive_file_data(sock, device_size, trace=None)

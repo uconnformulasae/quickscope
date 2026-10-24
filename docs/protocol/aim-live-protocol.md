@@ -1,6 +1,21 @@
 # AiM EVO5 — WiFi Protocol (Live Data)
 
-Reverse-engineered from `docs/protocol/captures/live1.pcapng` and
+**UConn RS3 reference captures (use for QuickScope live client work):**
+
+- `c:\Users\jesse\Downloads\Live.pcapng` — tcp.stream **1**
+- `c:\Users\jesse\Downloads\live_pedal.pcapng` — tcp.stream **45**
+- `c:\Users\jesse\Downloads\RS3-5-47.pcapng` — tcp.stream **0** (113ch steady **707 B** `Syst`, `Q:703`)
+- `c:\Users\jesse\Downloads\working-dropped-5-55.pcapng` — QuickScope paired capture; device **FIN+RST** after extra post-LIVE micro acks
+- `~/Downloads/wireshark/working-dropped-6-50.pcapng` — QuickScope, clean `(1,1)` micro cycles (prior fix held), device still **FIN**s the socket after 16 live frames / ~31s
+- `~/Downloads/wireshark/RS3-9-22-26-long.pcapng` — RS3 on the same car, tcp.stream 30/31/32: **client**-initiated FIN every ~40–90s, immediately followed by a brand-new TCP connect + full re-handshake
+
+**Steady poll ack rule (RS3):** one driver micro immediately after each STNC `0x00020003` and `0x00020053`; **no** additional 4 B STCP ack after consuming the LIVE payload. Violations show up as `(1, 2)` micro cycles in `scripts/compare_live_pcaps.py`.
+
+**Live TCP sessions are not permanent.** Even with a clean `(1,1)` micro pattern, the EVO5 only keeps a live socket open for roughly a minute (~16–80 live frames depending on how busy the enumeration phase was) before hanging up — `working-dropped-6-50.pcapng` shows the *device* sending FIN after 16 `Syst`/`kkk` frames with zero protocol violations on our side. `RS3-9-22-26-long.pcapng` shows Race Studio hitting the same wall every 40–90s and simply reconnecting (new TCP handshake + full RS3 enumeration) so the operator never sees a gap. `AimLiveClient.stream()` now does the same: on `ConnectionError` it tears down the dead socket and redoes `connect()` (cached device IP, no new UDP broadcast) with a short backoff, up to `RECONNECT_MAX_ATTEMPTS` tries, before finally propagating the drop to the caller.
+
+See [captures/SOURCE_CAPTURES.md](captures/SOURCE_CAPTURES.md). Committed follow dumps: `captures/fixtures/live_2026_follow_raw.txt` and `live_pedal_2026_follow_raw.txt`.
+
+Earlier analysis also used `docs/protocol/captures/live1.pcapng` and
 `live2.pcapng` (Race Studio 3 ↔ AiM EVO5, capture date 2026-04-23). All
 findings here come from observed traffic; the byte-level layout has been
 validated against ≥194 server live frames in Live 1 and ≥860 in Live 2.
@@ -248,21 +263,24 @@ slots is sufficient.
 
 ### 4.3 Live data poll (steady state)
 
-After enumeration, every cycle is exactly:
+Race Studio 3 drives the logger with an **STNC pair** before the next
+telemetry blob arrives (`Live.pcapng` stream 1, `RS3_live_1min.pcapng` stream 36):
 
 ```
-  S → C   STCP   547 bytes     LIVE DATA SNAPSHOT  ← the value
-  C → S   STNC    64 bytes     poll request
-  S → C   STCP    64 bytes     ack ('I')
-  S → C   STCP    64 bytes     ack ('Q')
+  C → S   STNC    64 bytes     sub 0x00020003
+  C → S   STCP     4 bytes     micro-ack (after I/Q if present)
+  C → S   STNC    64 bytes     sub 0x00020053
   C → S   STCP     4 bytes     micro-ack
-  S → C   STCP    12 bytes     "kkk" heartbeat
+  S → C   STCP   691 bytes     LIVE DATA SNAPSHOT  (UConn EVO5; 547 B on older configs)
+  C → S   STCP     4 bytes     micro-ack after consuming LIVE
+  S → C   STCP    12 bytes     "kkk" heartbeat (poll B path)
 ```
 
-Cadence: ~250 ms per cycle (≈4 Hz). Cycle observed unchanged for 71 s in
-Live 1 and 134 s in Live 2 (including the user-reported "pause stream"
-event — the pause is a Race Studio UI affordance; the wire traffic is
-identical).
+Cadence: ~250 ms per full cycle (≈4 Hz) on short captures; RS3 1 min capture
+uses ~0.62 s per STNC pair before the 691 B snapshot.
+
+QuickScope `aim_live.py` mirrors the RS3 pair pump, then blocks for the next
+691/547 B snapshot.
 
 ### 4.4 Disconnect
 
@@ -272,10 +290,12 @@ frame in both captures.
 
 ---
 
-## 5. The 547-byte live-data frame
+## 5. The live-data snapshot (547 or 691 bytes)
 
-This is the frame to parse for live values. Total length 547; observed 194
-times in Live 1 and 860+ times in Live 2.
+Parse channel values from **547 B** (legacy 103-channel configs) or **691 B**
+(current UConn EVO5). Steady-state RS3 traffic overwhelmingly uses **691 B**
+frames whose tag bytes are `kkk\x01` — not only `Syst`. The **12 B** heartbeat
+uses the same tag prefix; distinguish by payload length.
 
 ### 5.1 Layout (verified across 200+ frames)
 

@@ -39,7 +39,7 @@ export function getPlotlyColors() {
   };
 }
 
-/** Load Plotly.js from CDN (shared by Histogram and XY Plot tabs) */
+/** Load the bundled Plotly.js lazily (shared by Histogram and XY Plot tabs). Works offline. */
 let plotlyPromise: Promise<void> | null = null;
 export function ensurePlotly(onReady: () => void) {
   if ((window as any).Plotly) {
@@ -47,13 +47,10 @@ export function ensurePlotly(onReady: () => void) {
     return;
   }
   if (!plotlyPromise) {
-    plotlyPromise = new Promise<void>((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdn.plot.ly/plotly-2.35.2.min.js';
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('Failed to load Plotly'));
-      document.head.appendChild(script);
+    plotlyPromise = import('plotly.js-dist-min').then((mod) => {
+      (window as any).Plotly = mod.default ?? mod;
     });
+    plotlyPromise.catch(() => { plotlyPromise = null; }); // allow a retry on the next call
   }
-  plotlyPromise.then(onReady).catch(() => {});
+  plotlyPromise.then(onReady).catch((err) => console.error('Failed to load Plotly', err));
 }

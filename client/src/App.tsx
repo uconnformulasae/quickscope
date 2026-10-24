@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo } from './lib/api';
+import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import { useSidebarWidths, LEFT_SIDEBAR, RIGHT_SIDEBAR } from './lib/useSidebarWidths';
 import type { DerivedChannel, ViewMode } from './lib/useXRKStore';
 import type { XRKSession, ChannelDef, ChannelSample } from './lib/xrk-parser';
+import { resolveLogStartMs } from './lib/time-format';
 import { resolveChartColor } from './lib/chart-utils';
 import { ChannelSidebar } from './components/ChannelSidebar';
 import { TelemetryChart } from './components/TelemetryChart';
@@ -58,6 +59,8 @@ export default function App() {
   // View state
   const [view, setView] = useState<View>('browser');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** AiM device from session browser status when user opens Live (avoids re-probing). */
+  const [liveAimDevice, setLiveAimDevice] = useState<AimStatus['device']>(null);
 
   // Dialog state
   const [derivedDialogOpen, setDerivedDialogOpen] = useState(false);
@@ -67,6 +70,7 @@ export default function App() {
 
   // Session ID from backend
   const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
+  const [loadedSessionSource, setLoadedSessionSource] = useState<LocalSession['source']>('manual_upload');
 
   // Drag over state for chart area
   const [isDragOver, setIsDragOver] = useState(false);
@@ -152,6 +156,7 @@ export default function App() {
       lapSource,
       durationMs: info.durationMs,
       totalSamples: info.totalSamples,
+      logStartMs: resolveLogStartMs(info.recordedAt, info.metadata.date, info.metadata.time),
     };
 
     setSession(session, fileName);
@@ -159,8 +164,11 @@ export default function App() {
   }, [setSession, setProgress]);
 
   /** Called when session browser loads a session */
-  const handleSessionLoaded = useCallback(async (info: SessionInfo, sessionId: string, fileName: string) => {
+  const handleSessionLoaded = useCallback(async (
+    info: SessionInfo, sessionId: string, fileName: string, source: LocalSession['source'],
+  ) => {
     setLoadedSessionId(sessionId);
+    setLoadedSessionSource(source);
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
@@ -192,6 +200,8 @@ export default function App() {
         });
       });
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
+      setLoadedSessionId(info.sessionId ?? null);
+      setLoadedSessionSource('manual_upload');
       await buildAndSetSession(info, file.name);
     } catch (err) {
       setError(`Failed to upload XRK file: ${err instanceof Error ? err.message : String(err)}`);
@@ -329,7 +339,10 @@ export default function App() {
         <SessionBrowser
           onSessionLoaded={handleSessionLoaded}
           onOpenSettings={() => setSettingsOpen(true)}
-          onOpenLive={() => setView('live')}
+          onOpenLive={(device) => {
+            setLiveAimDevice(device);
+            setView('live');
+          }}
           theme={theme}
           onToggleTheme={toggleTheme}
         />
@@ -342,7 +355,7 @@ export default function App() {
   if (view === 'live') {
     return (
       <div className="flex flex-col h-full bg-background overflow-hidden">
-        <LiveView onBack={() => setView('browser')} />
+        <LiveView onBack={() => setView('browser')} aimDevice={liveAimDevice} />
       </div>
     );
   }
@@ -545,8 +558,6 @@ export default function App() {
         <ExportDialog
           session={session}
           fileName={state.fileName}
-          derivedChannels={state.derivedChannels}
-          derivedSamplesMap={derivedSamplesMap}
           onClose={() => setExportDialogOpen(false)}
         />
       )}
@@ -559,6 +570,7 @@ export default function App() {
           durationMs={session.durationMs}
           lapCount={Math.max(0, session.lapMarkers.length - 1)}
           fileName={state.fileName}
+          source={loadedSessionSource}
           onClose={() => setSessionInfoOpen(false)}
           onFileRenamed={handleFileRenamed}
         />

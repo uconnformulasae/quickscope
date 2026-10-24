@@ -2,12 +2,12 @@
  * Cursor and delta panel drawing for the telemetry chart.
  * Handles cursor lines, value readout pills, hover crosshair, and delta comparison panel.
  */
-import type { ChannelSample } from './xrk-parser';
 import type { DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT,
-  clamp, interpolateValue, nearestSample, formatValue, formatTimeSec,
+  clamp, interpolateValue, nearestSample, formatValue,
 } from './chart-utils';
+import { formatChartCursorTime } from './time-format';
 
 interface CursorState {
   cursorA: number | null;
@@ -30,8 +30,7 @@ function drawCursorLine(
   ctx.stroke();
 
   if (showTimestamp) {
-    const tickStep = dc.xTicks.length >= 2 ? dc.xTicks[1] - dc.xTicks[0] : undefined;
-    const label = formatTimeSec(t, tickStep);
+    const label = formatChartCursorTime(t, dc.session.logStartMs);
     ctx.font = `10px ${MONO_FONT}`;
     const tw = ctx.measureText(label).width;
     const pillW = tw + 8;
@@ -134,7 +133,7 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
     drawCursorLine(dc, hoverT, dc.colors.hoverLine, axisY, true);
   }
 
-  if (cursor.deltaMode && (cursor.cursorA !== null || cursor.cursorB !== null)) {
+  if (!cursor.deltaMode || cursor.cursorA !== null || cursor.cursorB !== null) {
     let hoverPillIndex = 0;
     for (const strip of strips) {
       const data = channelDataMap.get(strip.channelId);
@@ -168,9 +167,11 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
       ctx.beginPath();
       ctx.roundRect(pillX, pillY, pillW, pillH, 2);
       ctx.fill();
-      ctx.fillStyle = strip.color + 'aa';
+      ctx.fillStyle = strip.color;
+      ctx.globalAlpha = 0.85;
       ctx.textAlign = 'left';
       ctx.fillText(pillText, pillX + 3, pillY + 10);
+      ctx.globalAlpha = 1.0;
       hoverPillIndex++;
     }
   }
@@ -287,8 +288,12 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
     const xB = dc.timeToX(cursor.cursorB, xRange, plotW);
     const left = Math.max(lm, Math.min(xA, xB));
     const right = Math.min(w - rm, Math.max(xA, xB));
-    ctx.fillStyle = dc.colors.deltaFill;
-    ctx.fillRect(left, 0, right - left, axisY);
+    // Both cursors off the same side of the plot: nothing visible to shade
+    // (a negative width would paint backwards over the axis margin).
+    if (right > left) {
+      ctx.fillStyle = dc.colors.deltaFill;
+      ctx.fillRect(left, 0, right - left, axisY);
+    }
   }
 
   // Cursor A line + pills

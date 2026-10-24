@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Search, X, Plus, FlaskConical, Pencil, Trash2 } from 'lucide-react';
+import { Search, X, FlaskConical, Pencil, Trash2 } from 'lucide-react';
 import type { XRKSession, ChannelDef } from '../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel, ChartMode } from '../lib/useXRKStore';
 
@@ -99,8 +99,7 @@ export function ChannelSidebar({
               title="Create derived channel"
               data-testid="btn-create-derived-open"
             >
-              <Plus className="w-3 h-3" />
-              <FlaskConical className="w-3 h-3" />
+              <FlaskConical className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
@@ -200,13 +199,11 @@ export function ChannelSidebar({
         {/* Session channels */}
         {filteredChannels.map(chan => {
           const isActive = activeSet.has(chan.index);
-          const sampleCount = (session.samples.get(chan.index) || []).length;
           return (
             <ChannelRow
               key={chan.index}
               chan={chan}
               isActive={isActive}
-              sampleCount={sampleCount}
               onToggle={() => onToggleChannel(chan.index, chan.color)}
             />
           );
@@ -254,15 +251,14 @@ export function ChannelSidebar({
 interface ChannelRowProps {
   chan: ChannelDef;
   isActive: boolean;
-  sampleCount: number;
   onToggle: () => void;
 }
 
-function ChannelRow({ chan, isActive, sampleCount, onToggle }: ChannelRowProps) {
-  // Use fileSampleCount (from backend) to determine if the file has data for this channel.
-  // sampleCount is 0 for channels not yet lazy-loaded, even if the file has data.
-  const fileHasData = (chan.fileSampleCount ?? sampleCount) > 0;
-  const displayCount = chan.fileSampleCount ?? sampleCount;
+function ChannelRow({ chan, isActive, onToggle }: ChannelRowProps) {
+  // fileSampleCount comes from the backend's channel list, so it is known even
+  // for channels whose samples haven't been lazy-loaded yet.
+  const displayCount = chan.fileSampleCount ?? 0;
+  const fileHasData = displayCount > 0;
   return (
     <button
       onClick={onToggle}
@@ -369,8 +365,8 @@ function DerivedChannelRow({ dc, isActive, sampleCount, onToggle, onEdit, onRemo
         </div>
       </button>
 
-      {/* Edit / delete — visible on hover */}
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      {/* Edit / delete — visible on hover (subtle on touch) */}
+      <div className="flex items-center gap-0.5 opacity-60 sm:opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={e => { e.stopPropagation(); onEdit(); }}
           className="p-1 rounded text-muted-foreground/60 hover:text-primary transition-colors"

@@ -8,13 +8,25 @@ __pycache__/
 data/
 .superpowers/
 .claude/
+.cursorignore
+.cursor/
+*.csv
+!tests/fixtures/golden/**/*.csv
+!tests/fixtures/endurance_CT16-EV_Standardized_a_5816_rs.csv
+*.pcapng
 
 # PyInstaller output
 backend/build/
 backend/dist/
+backend/vendor/*.dll
 
 # electron-builder output
 release/
+
+# Local parser validation fixtures (large binary logs)
+tests/fixtures/*.xrk
+!tests/fixtures/endurance_CT16-EV_Standardized_a_5816.xrk
+tests/fixtures/*.xrz
 
 # Local-only data that must never enter history
 # backend/data is a symlink to this machine's telemetry library.

@@ -179,6 +179,10 @@ export function nearestSample(samples: ChannelSample[], tMs: number): ChannelSam
 }
 
 export function brightenColor(hex: string, amount: number): string {
+  // Expand shorthand #rgb to #rrggbb so it parses as three byte pairs.
+  if (/^#[0-9a-f]{3}$/i.test(hex)) {
+    hex = `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`;
+  }
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
@@ -193,7 +197,10 @@ export function niceAxisTicks(min: number, max: number, maxTicks: number): numbe
   const range = max - min;
   if (range <= 0 || !isFinite(range)) return [min];
 
-  const roughStep = range / maxTicks;
+  const safeMaxTicks = Math.max(2, maxTicks);
+  const roughStep = range / safeMaxTicks;
+  if (!isFinite(roughStep) || roughStep <= 0) return [min];
+
   const mag = Math.pow(10, Math.floor(Math.log10(roughStep)));
   const residual = roughStep / mag;
   let niceStep: number;
@@ -230,12 +237,17 @@ export function formatTimeSec(sec: number, tickStep?: number): string {
     else if (tickStep < 0.95) decimals = 2;
   }
 
-  const mins = Math.floor(sec / 60);
-  const secs = sec % 60;
+  const absSec = Math.abs(sec);
+  const factor = 10 ** decimals;
+  const roundedTotal = Math.round(absSec * factor) / factor;
+  // Only signed if it's still nonzero at this precision (no "-0.0s").
+  const sign = sec < 0 && roundedTotal > 0 ? '-' : '';
+  const mins = Math.floor(roundedTotal / 60);
+  const secs = roundedTotal % 60;
   if (mins > 0) {
-    return `${mins}:${secs.toFixed(decimals).padStart(decimals + 3, '0')}`;
+    return `${sign}${mins}:${secs.toFixed(decimals).padStart(decimals + 3, '0')}`;
   }
-  return secs.toFixed(decimals) + 's';
+  return `${sign}${secs.toFixed(decimals)}s`;
 }
 
 /**
@@ -264,8 +276,11 @@ export function minMaxTrace(
     let j = i + 1;
 
     while (j < n && Math.round(timeToX(samples[j].timestamp / 1000)) === px) {
-      if (samples[j].value < samples[minIdx].value) minIdx = j;
-      if (samples[j].value > samples[maxIdx].value) maxIdx = j;
+      const val = samples[j].value;
+      if (Number.isFinite(val)) {
+        if (!Number.isFinite(samples[minIdx].value) || val < samples[minIdx].value) minIdx = j;
+        if (!Number.isFinite(samples[maxIdx].value) || val > samples[maxIdx].value) maxIdx = j;
+      }
       j++;
     }
 

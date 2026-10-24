@@ -4,7 +4,6 @@ Shared application state and utility functions.
 Used across route modules — import from here instead of duplicating.
 """
 
-import asyncio
 import logging
 import math
 import re
@@ -12,9 +11,7 @@ from datetime import datetime as _dt
 from pathlib import Path
 from typing import Optional
 
-from libxrk import aim_xrk, ChannelMetadata
-
-from services import sync_service
+from libxrk import ChannelMetadata
 
 logger = logging.getLogger("quickscope")
 
@@ -26,17 +23,84 @@ CHART_COLORS = [
 
 
 # ─── In-memory state (active session for analysis) ──────────────────────────
+#
+# Parsed logs live in session_cache (LRU, keyed by session_id). SessionState
+# exposes the active entry for legacy routes that read state.log.
+
+from services.session_cache import session_cache
+
+_PENDING_ID = "__pending__"
+
 
 class SessionState:
+    """Facade over session_cache for the active analysis session."""
+
     def __init__(self):
-        self.log = None
-        self.filename: Optional[str] = None
-        self.session_id: Optional[str] = None
+        self._filename: Optional[str] = None
+
+    @property
+    def log(self):
+        sid = session_cache.active_id
+        if sid is None:
+            return None
+        entry = session_cache.get(sid)
+        return entry[0] if entry else None
+
+    @log.setter
+    def log(self, value):
+        if value is None:
+            session_cache.clear_active()
+            return
+        # A freshly parsed log is unbound until session_id is assigned. Never write
+        # it under the previously active session's key: that overwrites its cache entry.
+        session_cache.put(_PENDING_ID, value, self._filename or "")
+        session_cache.set_active(_PENDING_ID)
+
+    @property
+    def filename(self):
+        sid = session_cache.active_id
+        if sid is not None:
+            entry = session_cache.get(sid)
+            if entry:
+                return entry[1]
+        return self._filename
+
+    @filename.setter
+    def filename(self, value):
+        self._filename = value
+        sid = session_cache.active_id
+        if sid is not None:
+            entry = session_cache.get(sid)
+            if entry is not None and entry[1] != value:
+                session_cache.rename(sid, value or "")
+
+    @property
+    def session_id(self):
+        return session_cache.active_id
+
+    @session_id.setter
+    def session_id(self, value):
+        if value is None:
+            session_cache.clear_active()
+            return
+        pending = session_cache.get(_PENDING_ID)
+        if pending is not None and value != _PENDING_ID:
+            log, fn = pending
+            session_cache.evict(_PENDING_ID)
+            session_cache.put(value, log, fn)
+        session_cache.set_active(value)
+
+    def discard_pending(self):
+        """Drop a log that was never bound to a session id (e.g. failed upload)."""
+        session_cache.evict(_PENDING_ID)
+        self._filename = None
 
     def clear(self):
-        self.log = None
-        self.filename = None
-        self.session_id = None
+        sid = session_cache.active_id
+        if sid is not None:
+            session_cache.evict(sid)
+        session_cache.evict(_PENDING_ID)
+        self._filename = None
 
     @property
     def loaded(self) -> bool:
@@ -45,19 +109,13 @@ class SessionState:
 
 state = SessionState()
 
-# Guard against concurrent sync operations
-_sync_lock = asyncio.Lock()
 
-
-async def background_sync():
-    if _sync_lock.locked():
-        return
-    async with _sync_lock:
-        try:
-            await sync_service.sync_with_railway()
-        except Exception:
-            logger.exception("Background sync failed")
-
+def get_log(session_id: Optional[str] = None):
+    """Resolve session_id to a parsed log without changing the active session."""
+    if not session_id:
+        return state.log
+    entry = session_cache.get(session_id)
+    return entry[0] if entry else None
 
 # ─── Utility functions ───────────────────────────────────────────────────────
 
@@ -71,21 +129,34 @@ def channel_meta(name: str, table) -> dict:
     }
 
 
-def channel_data(name: str, table) -> dict:
+def channel_data(name: str, table, *, drop_gaps: bool = False) -> dict:
+    """Timestamps/values for a channel.
+
+    Non-finite samples (sensor dropouts) are never replaced with a made-up
+    number. By default they come back as ``None`` so callers can keep index
+    alignment with sibling channels; ``drop_gaps=True`` removes those samples
+    (timestamp and value together) for callers that need plain numeric arrays.
+    """
     df = table.to_pandas()
     timestamps = df['timecodes'].tolist()
-    values = df[name].tolist()
-    clean_vals = []
-    for v in values:
-        if isinstance(v, (int, float)) and math.isfinite(v):
-            clean_vals.append(float(v))
-        else:
-            clean_vals.append(0.0)
-    return {"timestamps": timestamps, "values": clean_vals}
+    values = [
+        float(v) if isinstance(v, (int, float)) and math.isfinite(v) else None
+        for v in df[name].tolist()
+    ]
+    if drop_gaps:
+        kept = [(t, v) for t, v in zip(timestamps, values) if v is not None]
+        timestamps = [t for t, _ in kept]
+        values = [v for _, v in kept]
+    return {"timestamps": timestamps, "values": values}
 
 
-def parse_file(file_path: str | Path):
-    return aim_xrk(str(file_path))
+def parse_file(file_path: str | Path, priority: int | None = None):
+    from parsers import parse_xrk
+    from parsers.parse_gate import PRIORITY_INTERACTIVE
+
+    if priority is None:
+        priority = PRIORITY_INTERACTIVE
+    return parse_xrk(file_path, priority=priority)
 
 
 def extract_session_info(log, filename: str) -> dict:
@@ -138,16 +209,25 @@ def extract_session_info(log, filename: str) -> dict:
         "durationMs": duration_ms,
         "totalSamples": total_samples,
         "lapCount": lap_count,
+        "recordedAt": parse_recorded_at(metadata["date"], metadata["time"]),
     }
 
 
-def parse_recorded_at(date_str: str, time_str: str) -> Optional[str]:
-    """Parse XRK 'Log Date' + 'Log Time' into an ISO-8601 datetime string."""
+_MONTH_FIRST_FORMATS = ("%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y")
+_DAY_FIRST_FORMATS = ("%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y")
+
+
+def parse_recorded_at(date_str: str, time_str: str, *, day_first: bool = False) -> Optional[str]:
+    """Parse an AiM date + time pair into an ISO-8601 datetime string.
+
+    XRK 'Log Date' is US month/day/year ("09/07/2026" is 7 Sept), but the
+    logger's session list sends day/month/year ("21/08/2026"); pass
+    ``day_first=True`` for the latter. Trying the wrong order first puts every
+    date with day <= 12 in the wrong month.
+    """
     if not date_str:
         return None
-    # AiM loggers write US month/day/year ("09/07/2026" is 7 Sept); try that first,
-    # otherwise every date with day <= 12 lands in the wrong month.
-    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+    for fmt in _DAY_FIRST_FORMATS if day_first else _MONTH_FIRST_FORMATS:
         try:
             d = _dt.strptime(date_str.strip(), fmt)
             break
@@ -166,18 +246,64 @@ def parse_recorded_at(date_str: str, time_str: str) -> Optional[str]:
     return d.isoformat()
 
 
+def resolve_aim_recorded_at(
+    device_date: str,
+    device_hour: str,
+    xrk_date: str,
+    xrk_time: str,
+) -> Optional[str]:
+    """Prefer AiM device session-list date/hour over embedded XRK Log Date."""
+    device_ts = parse_recorded_at(device_date, device_hour, day_first=True)
+    if device_ts:
+        xrk_ts = parse_recorded_at(xrk_date, xrk_time)
+        if xrk_ts and xrk_ts != device_ts:
+            logger.warning(
+                "AiM device date %s %s differs from XRK Log Date %s %s; using device date",
+                device_date,
+                device_hour,
+                xrk_date,
+                xrk_time,
+            )
+        return device_ts
+    return parse_recorded_at(xrk_date, xrk_time)
+
+
+def format_recorded_at_display(recorded_at: str) -> tuple[str, str]:
+    """Split an ISO-8601 recorded_at into XRK-style (month/day/year) date and time strings."""
+    try:
+        d = _dt.fromisoformat(recorded_at)
+    except ValueError:
+        return "", ""
+    return d.strftime("%m/%d/%Y"), d.strftime("%H:%M:%S")
+
+
+def apply_stored_recorded_at(info: dict, recorded_at: Optional[str]) -> dict:
+    """Override session info metadata with a stored recorded_at timestamp."""
+    if not recorded_at:
+        return info
+    date_str, time_str = format_recorded_at_display(recorded_at)
+    if not date_str:
+        return info
+    info = dict(info)
+    info["metadata"] = dict(info["metadata"])
+    info["metadata"]["date"] = date_str
+    info["metadata"]["time"] = time_str
+    info["recordedAt"] = recorded_at
+    return info
+
+
 def sanitize_filename(filename: str) -> str:
     """Strip directory components and dangerous characters from a filename."""
     safe = Path(filename).name
     safe = re.sub(r'[^\w\-.]', '_', safe)
-    if not safe:
+    if not safe or safe in {".", ".."} or safe.startswith("."):
         raise ValueError("Invalid filename")
     return safe
 
 
 def interpolate(timestamps, values, t):
     """Binary-search linear interpolation at timestamp t."""
-    if not timestamps:
+    if not timestamps or not math.isfinite(t):
         return None
     if t <= timestamps[0]:
         return values[0]

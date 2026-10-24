@@ -7,8 +7,9 @@ import type { DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT, AXIS_WIDTH,
   BOTTOM_AXIS_HEIGHT,
-  niceAxisTicks, formatValue, formatTimeSec, clamp, brightenColor, minMaxTrace,
+  niceAxisTicks, formatValue, clamp, brightenColor, minMaxTrace,
 } from './chart-utils';
+import { formatChartAxisTime } from './time-format';
 
 const LERP_RATE = 0.18;
 
@@ -401,14 +402,14 @@ export function drawXAxis(dc: DrawContext): number {
       ctx.moveTo(Math.round(x) + 0.5, axisY);
       ctx.lineTo(Math.round(x) + 0.5, axisY + 5);
       ctx.stroke();
-      ctx.fillText(formatTimeSec(xt, tickStep), x, axisY + 18);
+      ctx.fillText(formatChartAxisTime(xt, dc.session.logStartMs, tickStep), x, axisY + 18);
     }
   }
 
   ctx.font = `9px ${MONO_FONT}`;
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'right';
-  ctx.fillText('Time (s)', w - rm, axisY + 30);
+  ctx.fillText(dc.session.logStartMs !== null ? 'Time' : 'Time (s)', w - rm, axisY + 30);
 
   return axisY;
 }
