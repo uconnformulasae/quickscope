@@ -122,6 +122,7 @@ jobs:
 
       - name: Backend healthcheck
         run: |
+          mkdir -p backend/data && chmod 777 backend/data
           docker compose up -d backend
           for i in $(seq 1 30); do
             if docker compose exec -T backend python -c \

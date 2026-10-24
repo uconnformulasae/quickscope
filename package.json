@@ -79,7 +79,7 @@
         ]
       }
     ],
-    "afterPack": "scripts/afterPack.js",
+    "afterPack": "scripts/afterPack.cjs",
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
