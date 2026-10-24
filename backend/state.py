@@ -213,11 +213,21 @@ def extract_session_info(log, filename: str) -> dict:
     }
 
 
-def parse_recorded_at(date_str: str, time_str: str) -> Optional[str]:
-    """Parse XRK 'Log Date' + 'Log Time' into an ISO-8601 datetime string."""
+_MONTH_FIRST_FORMATS = ("%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y")
+_DAY_FIRST_FORMATS = ("%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y")
+
+
+def parse_recorded_at(date_str: str, time_str: str, *, day_first: bool = False) -> Optional[str]:
+    """Parse an AiM date + time pair into an ISO-8601 datetime string.
+
+    XRK 'Log Date' is US month/day/year ("09/07/2026" is 7 Sept), but the
+    logger's session list sends day/month/year ("21/08/2026"); pass
+    ``day_first=True`` for the latter. Trying the wrong order first puts every
+    date with day <= 12 in the wrong month.
+    """
     if not date_str:
         return None
-    for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+    for fmt in _DAY_FIRST_FORMATS if day_first else _MONTH_FIRST_FORMATS:
         try:
             d = _dt.strptime(date_str.strip(), fmt)
             break
@@ -243,7 +253,7 @@ def resolve_aim_recorded_at(
     xrk_time: str,
 ) -> Optional[str]:
     """Prefer AiM device session-list date/hour over embedded XRK Log Date."""
-    device_ts = parse_recorded_at(device_date, device_hour)
+    device_ts = parse_recorded_at(device_date, device_hour, day_first=True)
     if device_ts:
         xrk_ts = parse_recorded_at(xrk_date, xrk_time)
         if xrk_ts and xrk_ts != device_ts:
@@ -259,12 +269,12 @@ def resolve_aim_recorded_at(
 
 
 def format_recorded_at_display(recorded_at: str) -> tuple[str, str]:
-    """Split an ISO-8601 recorded_at into AiM-style date and time strings."""
+    """Split an ISO-8601 recorded_at into XRK-style (month/day/year) date and time strings."""
     try:
         d = _dt.fromisoformat(recorded_at)
     except ValueError:
         return "", ""
-    return d.strftime("%d/%m/%Y"), d.strftime("%H:%M:%S")
+    return d.strftime("%m/%d/%Y"), d.strftime("%H:%M:%S")
 
 
 def apply_stored_recorded_at(info: dict, recorded_at: Optional[str]) -> dict:

@@ -71,7 +71,7 @@ def _setup_pull_mocks(
             metadata = {
                 "Vehicle": "V",
                 "Driver": "D",
-                "Log Date": "26/08/2026",
+                "Log Date": "08/26/2026",
                 "Log Time": "20:53:39",
                 "Venue": "Track",
             }
@@ -87,7 +87,7 @@ def _setup_pull_mocks(
             "metadata": {
                 "vehicle": "V",
                 "driver": "D",
-                "date": "26/08/2026",
+                "date": "08/26/2026",
                 "time": "20:53:39",
                 "venue": "Track",
                 "championship": "",
@@ -105,25 +105,25 @@ def test_resolve_aim_recorded_at_prefers_device_date():
     result = resolve_aim_recorded_at(
         "01/09/2026",
         "14:30:00",
-        "26/08/2026",
+        "08/26/2026",
         "20:53:39",
     )
     assert result == "2026-09-01T14:30:00"
 
 
 def test_resolve_aim_recorded_at_falls_back_to_xrk():
-    result = resolve_aim_recorded_at("", "", "26/08/2026", "20:53:39")
+    result = resolve_aim_recorded_at("", "", "08/26/2026", "20:53:39")
     assert result == "2026-08-26T20:53:39"
 
 
 def test_apply_stored_recorded_at_overrides_metadata():
     info = {
-        "metadata": {"date": "26/08/2026", "time": "20:53:39"},
+        "metadata": {"date": "08/26/2026", "time": "20:53:39"},
         "recordedAt": "2026-08-26T20:53:39",
     }
     updated = apply_stored_recorded_at(info, "2026-09-01T14:30:00")
     assert updated["recordedAt"] == "2026-09-01T14:30:00"
-    assert updated["metadata"]["date"] == "01/09/2026"
+    assert updated["metadata"]["date"] == "09/01/2026"
     assert updated["metadata"]["time"] == "14:30:00"
 
 
@@ -193,7 +193,7 @@ def test_load_session_uses_stored_recorded_at_for_aim_device(
             metadata = {
                 "Vehicle": "V",
                 "Driver": "D",
-                "Log Date": "26/08/2026",
+                "Log Date": "08/26/2026",
                 "Log Time": "20:53:39",
                 "Venue": "Track",
             }
@@ -208,5 +208,5 @@ def test_load_session_uses_stored_recorded_at_for_aim_device(
     assert res.status_code == 200
     body = res.json()
     assert body["recordedAt"] == "2026-09-01T14:30:00"
-    assert body["metadata"]["date"] == "01/09/2026"
+    assert body["metadata"]["date"] == "09/01/2026"
     assert body["metadata"]["time"] == "14:30:00"

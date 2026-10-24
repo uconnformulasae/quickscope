@@ -86,15 +86,24 @@ def test_sanitize_filename_rejects_empty():
 @pytest.mark.parametrize(
     "date, time, expected",
     [
-        ("05/10/2026", "14:30:00", "2026-10-05T14:30:00"),
+        ("10/05/2026", "14:30:00", "2026-10-05T14:30:00"),
         ("2026-10-05", "09:05", "2026-10-05T09:05:00"),
         ("25/12/2025", "", "2025-12-25T00:00:00"),
         ("05-10-2026", "23:59:59", "2026-10-05T23:59:59"),
-        ("  05/10/2026 ", " 14:30:00 ", "2026-10-05T14:30:00"),
+        ("  10/05/2026 ", " 14:30:00 ", "2026-10-05T14:30:00"),
     ],
 )
 def test_parse_recorded_at(date, time, expected):
     assert parse_recorded_at(date, time) == expected
+
+
+def test_parse_recorded_at_xrk_dates_are_month_first():
+    assert parse_recorded_at("09/07/2026", "") == "2026-09-07T00:00:00"
+
+
+def test_parse_recorded_at_device_dates_are_day_first():
+    assert parse_recorded_at("09/07/2026", "", day_first=True) == "2026-07-09T00:00:00"
+    assert parse_recorded_at("21/08/2026", "18:46:48", day_first=True) == "2026-08-21T18:46:48"
 
 
 @pytest.mark.parametrize("date", ["", "garbage", "32/13/2026"])
@@ -107,20 +116,22 @@ def test_parse_recorded_at_ignores_bad_time_but_keeps_date():
 
 
 def test_format_recorded_at_display_roundtrip():
-    assert format_recorded_at_display("2026-10-05T14:30:00") == ("05/10/2026", "14:30:00")
+    assert format_recorded_at_display("2026-10-05T14:30:00") == ("10/05/2026", "14:30:00")
+    date_str, time_str = format_recorded_at_display("2026-10-05T14:30:00")
+    assert parse_recorded_at(date_str, time_str) == "2026-10-05T14:30:00"
     assert format_recorded_at_display("junk") == ("", "")
 
 
 def test_device_date_wins_over_embedded_xrk_date():
-    assert resolve_aim_recorded_at("06/10/2026", "08:00:00", "05/10/2026", "14:30:00") == "2026-10-06T08:00:00"
-    assert resolve_aim_recorded_at("", "", "05/10/2026", "14:30:00") == "2026-10-05T14:30:00"
+    assert resolve_aim_recorded_at("06/10/2026", "08:00:00", "10/05/2026", "14:30:00") == "2026-10-06T08:00:00"
+    assert resolve_aim_recorded_at("", "", "10/05/2026", "14:30:00") == "2026-10-05T14:30:00"
     assert resolve_aim_recorded_at("", "", "", "") is None
 
 
 def test_apply_stored_recorded_at_overrides_without_mutating_input():
     info = {"metadata": {"date": "01/01/2000", "time": "00:00:00"}, "recordedAt": None}
     out = apply_stored_recorded_at(info, "2026-10-05T14:30:00")
-    assert out["metadata"] == {"date": "05/10/2026", "time": "14:30:00"}
+    assert out["metadata"] == {"date": "10/05/2026", "time": "14:30:00"}
     assert out["recordedAt"] == "2026-10-05T14:30:00"
     assert info["metadata"]["date"] == "01/01/2000"
     assert apply_stored_recorded_at(info, None) is info

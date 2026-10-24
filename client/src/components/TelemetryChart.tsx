@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { formatChartElapsed } from '../lib/time-format';
 import type { ChannelSample } from '../lib/xrk-parser';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, ImageDown } from 'lucide-react';
 import {
   type TelemetryChartProps, type StripLayout, type DrawContext,
   LEFT_MARGIN, RIGHT_MARGIN, BOTTOM_AXIS_HEIGHT, MIN_STRIP_HEIGHT, AXIS_WIDTH,
   DEBOUNCE_MS,
-  clamp, niceAxisTicks, getChartColors,
+  clamp, niceAxisTicks, getChartColors, toDarkChartColor,
 } from '../lib/chart-utils';
 import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawXAxis } from '../lib/chart-draw';
 import { drawCursors } from '../lib/chart-cursors';
+import type { ChartExportSpec } from '../lib/chart-export';
+import { ImageExportDialog } from './ImageExportDialog';
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -23,12 +25,14 @@ export function TelemetryChart({
   cursorTime,
   onCursorTimeChange,
   chartMode = 'separate',
+  fileName = null,
 }: TelemetryChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
   const [canScroll, setCanScroll] = useState(false); // separate mode with more strips than fit
   const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
+  const [imageExportSpec, setImageExportSpec] = useState<ChartExportSpec | null>(null);
 
   // ─── Refs for transient state (no React re-renders) ─────────────────────
   const cursorEmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -727,6 +731,36 @@ export function TelemetryChart({
     setDeltaMode(prev => !prev);
   }, []);
 
+  // ─── Save image: snapshot the current view for the export renderer ────
+  const openImageExport = useCallback(() => {
+    const spec: ChartExportSpec = {
+      fileName,
+      metadata: session.metadata,
+      channels: visibleChannels.flatMap(ac => {
+        const data = channelDataMap.get(ac.channelId);
+        if (!data) return [];
+        const mm = globalMinMaxCache.current.get(ac.channelId);
+        return [{
+          channelId: ac.channelId,
+          name: data.def.shortName,
+          units: data.def.units,
+          color: toDarkChartColor(ac.color),
+          samples: data.allSamples,
+          globalMin: mm?.minSample ?? null,
+          globalMax: mm?.maxSample ?? null,
+        }];
+      }),
+      xRange: getEffectiveXRange(),
+      sessionDurationSec: sessionDuration,
+      chartMode,
+      lapMarkers: session.lapMarkers,
+      exportedAt: new Date(),
+    };
+    setImageExportSpec(spec);
+  }, [fileName, session, visibleChannels, channelDataMap, getEffectiveXRange, sessionDuration, chartMode]);
+
+  const closeImageExport = useCallback(() => setImageExportSpec(null), []);
+
   // ─── Empty state ──────────────────────────────────────────────────────
   if (visibleChannels.length === 0) {
     return (
@@ -766,6 +800,15 @@ export function TelemetryChart({
           >
             Δ Delta
           </button>
+          <button
+            onClick={openImageExport}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            title="Save image"
+            aria-label="Save image"
+            data-testid="save-image"
+          >
+            <ImageDown className="w-4 h-4" />
+          </button>
           {viewRange && (
             <button
               onClick={resetZoom}
@@ -803,6 +846,10 @@ export function TelemetryChart({
           data-testid="telemetry-canvas"
         />
       </div>
+
+      {imageExportSpec && (
+        <ImageExportDialog spec={imageExportSpec} onClose={closeImageExport} />
+      )}
     </div>
   );
 }

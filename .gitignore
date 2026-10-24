@@ -27,3 +27,9 @@ release/
 tests/fixtures/*.xrk
 !tests/fixtures/endurance_CT16-EV_Standardized_a_5816.xrk
 tests/fixtures/*.xrz
+
+# Local-only data that must never enter history
+# backend/data is a symlink to this machine's telemetry library.
+backend/data
+# Pre-library snapshot kept for comparison (66 MB).
+backend/data.before-library/

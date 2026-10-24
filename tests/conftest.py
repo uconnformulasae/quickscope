@@ -283,7 +283,7 @@ def make_log(
             "Venue": "Test Track",
             "Series": "FSAE",
             "Session": "Endurance",
-            "Log Date": "05/10/2026",
+            "Log Date": "10/05/2026",
             "Log Time": "14:30:00",
             "Long Comment": "",
         },

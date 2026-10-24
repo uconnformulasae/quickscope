@@ -10,7 +10,7 @@ from services import aim_pull_indexer, aim_pull_log, aim_pull_progress, session_
 from services.session_cache import session_cache
 
 _INFO = {
-    "metadata": {"venue": "Track", "driver": "D", "vehicle": "V", "date": "26/08/2026", "time": "20:53:39"},
+    "metadata": {"venue": "Track", "driver": "D", "vehicle": "V", "date": "08/26/2026", "time": "20:53:39"},
     "durationMs": 163_000,
     "lapCount": 4,
 }
