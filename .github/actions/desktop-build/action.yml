@@ -39,20 +39,28 @@ runs:
           const notarize = process.env.NOTARIZE === 'true';
           const pkg = require('./package.json');
           const base = pkg.build;
+          const macConfig = {
+            ...base.mac,
+            target: [
+              { target: 'dmg', arch: [arch] },
+              { target: 'zip', arch: [arch] },
+            ],
+            notarize,
+          };
+          if (notarize) {
+            macConfig.hardenedRuntime = true;
+          } else {
+            macConfig.hardenedRuntime = false;
+            macConfig.gatekeeperAssess = false;
+            macConfig.identity = null;
+          }
           fs.writeFileSync(
             process.env.CFG,
             JSON.stringify(
               {
                 ...base,
                 directories: { ...base.directories, output: 'release' },
-                mac: {
-                  ...base.mac,
-                  target: [
-                    { target: 'dmg', arch: [arch] },
-                    { target: 'zip', arch: [arch] },
-                  ],
-                  notarize,
-                },
+                mac: macConfig,
                 dmg: { ...base.dmg, title: 'QuickScope ' + pkg.version + ' ' + arch },
               },
               null,

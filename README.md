@@ -33,9 +33,13 @@ Download the latest installer from the [Releases page](../../releases/latest):
 - **macOS (Intel)** — `QuickScope-*-x64.dmg`
 - **Windows (x64)** — `QuickScope-Setup-*.exe`
 
-Double-click to install. No Python or Node required. On first launch Windows
-may show a SmartScreen warning (click **More info → Run anyway**); unsigned
-Mac builds require right-click → Open once.
+Double-click to install. No Python or Node required. On first launch:
+- **Windows**: may show a SmartScreen warning (click **More info → Run anyway**).
+- **macOS**: unsigned builds are blocked by Gatekeeper on first launch. To open via GUI:
+  1. Double-click `QuickScope.app` once (macOS shows an unverified developer dialog; click **Done**).
+  2. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open Anyway**.
+  3. Enter your password/Touch ID and confirm **Open**.
+  *(Alternatively, run `xattr -cr /Applications/QuickScope.app` in Terminal).*
 
 See [docs/PACKAGING.md](docs/PACKAGING.md) for the release/signing workflow.
 

@@ -16,8 +16,11 @@ All installers are self-contained — users don't need Python or Node.
 ### User install flow
 
 **Mac:** Download the `.dmg`, double-click, drag QuickScope to Applications,
-launch from Launchpad. If the build is unsigned, first launch requires
-right-click → Open (Gatekeeper warning shown once).
+launch from Launchpad or Applications. If the build is unsigned:
+1. Double-click `QuickScope.app` once (macOS shows an unverified developer warning; click **Done**).
+2. Open **System Settings → Privacy & Security**, scroll down to **Security**, and click **Open Anyway**.
+3. Enter your password or Touch ID and confirm **Open**.
+*(Alternatively, run `xattr -cr /Applications/QuickScope.app` in Terminal).*
 
 **Windows:** Download the `.exe`, double-click. Because the build is unsigned,
 SmartScreen shows a blue "Windows protected your PC" screen — click

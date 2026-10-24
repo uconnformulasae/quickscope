@@ -79,6 +79,7 @@
         ]
       }
     ],
+    "afterPack": "scripts/afterPack.js",
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
@@ -98,7 +99,7 @@
         }
       ],
       "icon": "build/icon.png",
-      "hardenedRuntime": true,
+      "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
