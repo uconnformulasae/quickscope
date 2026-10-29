@@ -14,6 +14,7 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
   theme?: 'dark' | 'light';
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
+  const plottedEl = useRef<HTMLDivElement | null>(null);
 
   const activeChannelIdsWithData = activeChannels
     .filter(ac => resolveSamples(ac.channelId, session, derivedSamplesMap).length > 0)
@@ -30,9 +31,13 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
   useEffect(() => {
     if (!chartRef.current || !xChan || !yChan) return;
 
+    // Plotly loads lazily; if the tab unmounts (or deps change) before it
+    // arrives, don't render into the detached node -- that leaks a chart
+    // (and, for scattergl, a WebGL context) that nothing will ever purge.
+    let cancelled = false;
     const render = () => {
       const Plotly = (window as any).Plotly;
-      if (!Plotly || !chartRef.current) return;
+      if (cancelled || !Plotly || !chartRef.current) return;
 
       const pc = getPlotlyColors();
 
@@ -43,20 +48,46 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
       const xSamples = xSamplesRaw;
       const ySamples = ySamplesRaw;
 
+      const yDuration = ySamples[ySamples.length - 1].timestamp - ySamples[0].timestamp;
+      const yMeanDt = ySamples.length > 1 && yDuration > 0 ? yDuration / (ySamples.length - 1) : 1000;
+      const maxDeltaMs = Math.max(100, yMeanDt * 2.5);
+
       const xs: number[] = [];
       const ys: number[] = [];
 
       for (const xs_sample of xSamples) {
         const ts = xs_sample.timestamp;
-        let lo = 0, hi = ySamples.length - 1;
-        while (lo < hi - 1) {
+        let lo = 0;
+        let hi = ySamples.length - 1;
+        while (lo <= hi) {
           const mid = (lo + hi) >> 1;
-          if (ySamples[mid].timestamp <= ts) lo = mid;
-          else hi = mid;
+          if (ySamples[mid].timestamp < ts) {
+            lo = mid + 1;
+          } else {
+            hi = mid - 1;
+          }
         }
+
+        let bestIdx = -1;
+        let minDiff = Infinity;
         if (lo < ySamples.length) {
+          const diff = Math.abs(ySamples[lo].timestamp - ts);
+          if (diff < minDiff) {
+            minDiff = diff;
+            bestIdx = lo;
+          }
+        }
+        if (lo > 0) {
+          const diff = Math.abs(ySamples[lo - 1].timestamp - ts);
+          if (diff < minDiff) {
+            minDiff = diff;
+            bestIdx = lo - 1;
+          }
+        }
+
+        if (bestIdx !== -1 && minDiff <= maxDeltaMs) {
           xs.push(xs_sample.value);
-          ys.push(ySamples[lo].value);
+          ys.push(ySamples[bestIdx].value);
         }
       }
 
@@ -96,9 +127,20 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
       Plotly.react(chartRef.current, [trace], layout, {
         responsive: true, displayModeBar: false, displaylogo: false,
       });
+      plottedEl.current = chartRef.current;
     };
 
     ensurePlotly(render);
+
+    // Also runs on unmount, releasing the chart's WebGL/DOM resources.
+    return () => {
+      cancelled = true;
+      const Plotly = (window as any).Plotly;
+      if (Plotly && plottedEl.current) {
+        Plotly.purge(plottedEl.current);
+        plottedEl.current = null;
+      }
+    };
   }, [session, xChan, yChan, yAc, theme]);
 
   const chanOptions = activeChannels.map(ac => {

@@ -1,6 +1,7 @@
 /**
  * DerivedChannelDialog — Create or edit a derived/computed channel.
- * Supports formula mode (math expression) and JavaScript mode (function body).
+ * Supports formula mode (math expression, evaluated client-side) and Python
+ * mode (script evaluated by the backend's restricted sandbox).
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, FlaskConical, Code2, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Search } from 'lucide-react';
@@ -58,8 +59,13 @@ function MiniPreviewChart({
 
     const minT = timestamps[0];
     const maxT = timestamps[timestamps.length - 1];
-    const minV = Math.min(...values);
-    const maxV = Math.max(...values);
+    // Loop instead of Math.min(...values): spreading large arrays overflows the call stack
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (const v of values) {
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
     const rangeV = maxV - minV || 1;
     const rangeT = maxT - minT || 1;
 

@@ -14,16 +14,14 @@ session's debugging, not historical forensics.
 
 from __future__ import annotations
 
-import threading
-from collections import deque
 from datetime import datetime, timezone
-from typing import Iterable, Literal
+from typing import Literal
+
+from services.ring_log import RingLog
 
 UploadStatus = Literal["ok", "parse_failed", "upload_failed"]
 
-_MAX_ENTRIES = 100
-_lock = threading.Lock()
-_entries: deque[dict] = deque(maxlen=_MAX_ENTRIES)
+_log = RingLog(max_entries=100)
 
 
 def record(
@@ -47,16 +45,13 @@ def record(
     }
     if error:
         entry["error"] = error
-    with _lock:
-        _entries.append(entry)
+    _log.append(entry)
 
 
 def list_recent() -> list[dict]:
-    with _lock:
-        # Newest first
-        return list(reversed(_entries))
+    """Newest first."""
+    return _log.list_recent()
 
 
 def clear() -> None:
-    with _lock:
-        _entries.clear()
+    _log.clear()

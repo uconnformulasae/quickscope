@@ -80,7 +80,7 @@ export function AnalysisPanel({
           <StatsTab session={session} activeChannels={activeChannels} viewRange={viewRange} derivedChannels={derivedChannels} derivedSamplesMap={derivedSamplesMap} onNavigateToTime={onNavigateToTime} />
         )}
         {analysisTab === 'lapanalysis' && (
-          <LapAnalysisTab session={session} activeChannels={activeChannels} />
+          <LapAnalysisTab session={session} activeChannels={activeChannels} derivedChannels={derivedChannels} derivedSamplesMap={derivedSamplesMap} />
         )}
         {analysisTab === 'histogram' && (
           <HistogramTab

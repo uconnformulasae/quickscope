@@ -16,8 +16,11 @@ All installers are self-contained — users don't need Python or Node.
 ### User install flow
 
 **Mac:** Download the `.dmg`, double-click, drag QuickScope to Applications,
-launch from Launchpad. If the build is unsigned, first launch requires
-right-click → Open (Gatekeeper warning shown once).
+launch from Launchpad or Applications. If the build is unsigned:
+1. Double-click `QuickScope.app` once (macOS shows an unverified developer warning; click **Done**).
+2. Open **System Settings → Privacy & Security**, scroll down to **Security**, and click **Open Anyway**.
+3. Enter your password or Touch ID and confirm **Open**.
+*(Alternatively, run `xattr -cr /Applications/QuickScope.app` in Terminal).*
 
 **Windows:** Download the `.exe`, double-click. Because the build is unsigned,
 SmartScreen shows a blue "Windows protected your PC" screen — click
@@ -30,9 +33,10 @@ shortcut don't prompt.
 QuickScope.app / QuickScope.exe
 ├─ Electron shell                    (serves the UI, owns the window)
 │    ↓ spawns on startup
-├─ quickscope-backend                (PyInstaller-frozen FastAPI + libxrk)
+├─ quickscope-backend                (PyInstaller-frozen FastAPI + parsers)
 │    binds to 127.0.0.1:<free-port>
 │    reads/writes to user data dir
+│    All platforms: libxrk only (no MatLabXRK DLL in installers)
 │
 └─ User data directory               (persists across reinstalls)
      macOS:    ~/Library/Application Support/QuickScope/data/
@@ -48,6 +52,11 @@ A preload script injects `window.__QUICKSCOPE_BACKEND__` so the renderer's
 ## Local build (test before shipping)
 
 Prerequisites: Python 3.12, Node 20.
+
+Desktop installers **do not** bundle the MatLabXRK DLL. End users on every platform parse
+with **libxrk** (same as macOS/Linux today). For local dev on Windows you may still place
+`MatLabXRK-2017-64-ReleaseU.dll` in `backend/vendor/` and use `./start.ps1 -Dll` — that
+does not affect `npm run dist:*` output.
 
 ```bash
 npm ci

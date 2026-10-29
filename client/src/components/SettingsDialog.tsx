@@ -8,7 +8,6 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const [settings, setSettings] = useState<Settings>({
-    railway_url: '',
     aim_wifi_ssid: '',
     aim_device_ip: '10.0.0.1',
     aim_device_port: 2000,
@@ -37,7 +36,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
     setError(null);
     setSaved(false);
     try {
-      await updateSettings(settings);
+      const payload = {
+        ...settings,
+        aim_device_port: settings.aim_device_port || 2000,
+      };
+      await updateSettings(payload);
+      setSettings(payload);
       setSaved(true);
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
@@ -64,21 +68,6 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
 
         {/* Content */}
         <div className="px-5 py-4 space-y-4">
-          {/* Railway */}
-          <div>
-            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-              Data-Development (Railway)
-            </h3>
-            <label className="block text-xs text-muted-foreground mb-1">API URL</label>
-            <input
-              type="text"
-              value={settings.railway_url}
-              onChange={e => setSettings({ ...settings, railway_url: e.target.value })}
-              placeholder="https://your-app.railway.app/api/v1"
-              className="w-full px-3 py-2 rounded-md text-sm bg-muted/30 border border-border text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50"
-            />
-          </div>
-
           {/* AiM */}
           <div>
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
@@ -109,8 +98,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                   <label className="block text-xs text-muted-foreground mb-1">Port</label>
                   <input
                     type="number"
-                    value={settings.aim_device_port}
-                    onChange={e => setSettings({ ...settings, aim_device_port: parseInt(e.target.value) || 2000 })}
+                    value={settings.aim_device_port === 0 ? '' : settings.aim_device_port}
+                    onChange={e => setSettings({ ...settings, aim_device_port: e.target.value === '' ? 0 : parseInt(e.target.value, 10) || 0 })}
+                    placeholder="2000"
                     className="w-full px-3 py-2 rounded-md text-sm bg-muted/30 border border-border text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50"
                   />
                 </div>

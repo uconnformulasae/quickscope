@@ -1,9 +1,45 @@
 #!/bin/bash
 # QuickScope — start script
 # Starts the Python backend and React frontend
+#
+# Usage:
+#   ./start.sh              Auto: AiM DLL on Windows when available, else libxrk
+#   ./start.sh --libxrk     Force libxrk parser
+#   ./start.sh --dll        Force AiM DLL parser (Windows only)
 
 set -e
 cd "$(dirname "$0")"
+
+PARSER_MODE="auto"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --libxrk)
+            PARSER_MODE="libxrk"
+            shift
+            ;;
+        --dll)
+            PARSER_MODE="aim_dll"
+            shift
+            ;;
+        -h|--help)
+            sed -n '2,8p' "$0"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [--libxrk | --dll]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "$PARSER_MODE" == "libxrk" ]]; then
+    export QUICKSCOPE_PARSER=libxrk
+elif [[ "$PARSER_MODE" == "aim_dll" ]]; then
+    export QUICKSCOPE_PARSER=aim_dll
+else
+    unset QUICKSCOPE_PARSER 2>/dev/null || true
+fi
 
 # Pick a Python 3.10+ interpreter
 if command -v python3.12 >/dev/null 2>&1; then
@@ -24,26 +60,48 @@ fi
 
 VENV_PY=".venv/bin/python"
 
-# Install Python deps if libxrk missing inside the venv
-if ! "$VENV_PY" -c "import libxrk" 2>/dev/null; then
+# Install Python deps if missing or requirements.txt changed since the last install
+PY_STAMP=".venv/.requirements-installed"
+if [ ! -f "$PY_STAMP" ] || [ backend/requirements.txt -nt "$PY_STAMP" ] \
+    || ! "$VENV_PY" -c "import libxrk" 2>/dev/null; then
     echo "Installing Python dependencies..."
     "$VENV_PY" -m pip install --upgrade pip
     "$VENV_PY" -m pip install -r backend/requirements.txt
+    touch "$PY_STAMP"
 fi
 
-# Install Node deps if needed
-if [ ! -d "node_modules" ]; then
+# Install Node deps if missing or package.json / package-lock.json changed since the last install
+# (npm writes node_modules/.package-lock.json on every install)
+NODE_STAMP="node_modules/.package-lock.json"
+if [ ! -f "$NODE_STAMP" ] || [ package.json -nt "$NODE_STAMP" ] || [ package-lock.json -nt "$NODE_STAMP" ]; then
     echo "Installing Node dependencies..."
     npm install
+    touch "$NODE_STAMP"
 fi
 
+# npm 11+ warns on devdir injected by some tooling (e.g. Cursor); not a valid npm config key.
+unset npm_config_devdir NPM_CONFIG_DEVDIR 2>/dev/null || true
+
+stop_listener_on_port() {
+    local port="$1"
+    local pids
+    pids=$(lsof -ti :"$port" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "Stopping existing process on port $port (PID(s): $pids)..."
+        kill -9 $pids 2>/dev/null || true
+    fi
+}
+
+stop_listener_on_port 8000
+stop_listener_on_port 5173
+
 # Start backend
-echo "Starting QuickScope backend on :8000..."
-(cd backend && "../$VENV_PY" -m uvicorn main:app --host 0.0.0.0 --port 8000) &
+echo "Starting QuickScope backend on :8000 (parser: $PARSER_MODE)..."
+(cd backend && exec "../$VENV_PY" -m uvicorn main:app --host 127.0.0.1 --port 8000) &
 BACKEND_PID=$!
 
 # Start frontend dev server
-echo "Starting QuickScope frontend on :5000..."
+echo "Starting QuickScope frontend on :5173..."
 npm run dev &
 FRONTEND_PID=$!
 
@@ -52,7 +110,7 @@ trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit" INT TERM EXIT
 
 echo ""
 echo "QuickScope is running!"
-echo "  Frontend: http://localhost:5000"
+echo "  Frontend: http://localhost:5173"
 echo "  Backend:  http://localhost:8000"
 echo ""
 echo "Press Ctrl+C to stop."

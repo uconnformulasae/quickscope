@@ -1,6 +1,7 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
+@plugin "tailwindcss-animate";
+@custom-variant dark (&:where(.dark, .dark *));
 
 /* =========================================================
    QuickScope Design System — Dark Motorsport Telemetry Aesthetic
@@ -216,16 +217,18 @@
     outline-offset: 2px;
     border-radius: var(--radius);
   }
+}
 
-  /* Animations */
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes pulse-glow {
-    0%, 100% { box-shadow: 0 0 8px hsl(var(--primary) / 0.3); }
-    50% { box-shadow: 0 0 20px hsl(var(--primary) / 0.6); }
-  }
-
-  .fade-in { animation: fadeIn 0.2s ease-out; }
+/* Live dashboard grid (react-grid-layout) — theme the library's edit chrome. */
+.react-grid-item.react-grid-placeholder {
+  background: hsl(var(--primary));
+  opacity: 0.15;
+  border-radius: var(--radius);
+}
+.live-grid-editing .react-grid-item > section {
+  outline: 1px dashed hsl(var(--primary) / 0.5);
+  outline-offset: 2px;
+}
+.react-grid-item > .react-resizable-handle::after {
+  border-color: hsl(var(--muted-foreground));
 }

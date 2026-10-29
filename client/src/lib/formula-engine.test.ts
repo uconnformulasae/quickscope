@@ -1,0 +1,229 @@
+import { describe, expect, it } from 'vitest';
+import { evaluateFormula, extractChannelNames, type ChannelMap } from './formula-engine';
+
+const ch = (timestamps: number[], values: number[]) => ({ timestamps, values });
+
+const channels: ChannelMap = {
+  A: ch([0, 1000, 2000], [1, 2, 3]),
+  B: ch([0, 1000, 2000], [10, 20, 30]),
+  Slow: ch([0, 2000], [0, 100]),
+  RPM: ch([0, 1000, 2000], [100, 200, 300]),
+  Speed: ch([0, 1000, 2000], [10, 20, 30]),
+  Throttle: ch([0, 1000, 2000], [1, 2, 3]),
+};
+
+function ok(expr: string, map: ChannelMap = channels) {
+  const out = evaluateFormula(expr, map);
+  if (typeof out === 'string') throw new Error(`expected success, got error: ${out}`);
+  return out;
+}
+
+describe('scalar arithmetic', () => {
+  it.each([
+    ['1 + 2', 3],
+    ['7 - 10', -3],
+    ['3 * 4', 12],
+    ['9 / 2', 4.5],
+    ['2 ^ 10', 1024],
+    ['-5 + 2', -3],
+    ['2 + 3 * 4', 14],
+    ['(2 + 3) * 4', 20],
+    ['2 ^ 3 ^ 2', 512],
+    ['sqrt(16)', 4],
+    ['abs(-3.5)', 3.5],
+    ['min(3, 9)', 3],
+    ['max(3, 9)', 9],
+    ['pow(2, 5)', 32],
+    ['  1+1  ', 2],
+  ])('%s = %s', (expr, expected) => {
+    expect(ok(expr).values).toEqual([expected]);
+  });
+
+  it('division by zero never yields Infinity and reports error', () => {
+    const out = evaluateFormula('1 / 0', channels);
+    expect(typeof out === 'string' || !out.values.includes(Infinity)).toBe(true);
+  });
+});
+
+describe('channel arithmetic', () => {
+  it('scales a channel', () => {
+    expect(ok('A * 2')).toEqual(ch([0, 1000, 2000], [2, 4, 6]));
+  });
+
+  it('adds channels sample by sample', () => {
+    expect(ok('A + B').values).toEqual([11, 22, 33]);
+  });
+
+  it('interpolates a slower channel onto the merged timeline', () => {
+    const out = ok('A + Slow');
+    expect(out.timestamps).toEqual([0, 1000, 2000]);
+    expect(out.values).toEqual([1, 52, 103]);
+  });
+
+  it('unary minus negates channels', () => {
+    expect(ok('-A').values).toEqual([-1, -2, -3]);
+  });
+
+  it('min/max of two channels is element-wise', () => {
+    expect(ok('min(A, 2)').values).toEqual([1, 2, 2]);
+    expect(ok('max(A, 2)').values).toEqual([2, 2, 3]);
+  });
+
+  it('applies math functions to channels', () => {
+    expect(ok('sqrt(A * A)').values).toEqual([1, 2, 3]);
+  });
+
+  it('resolves function names case-insensitively', () => {
+    expect(ok('SQRT(16)').values).toEqual([4]);
+  });
+
+  it('drops non-finite samples from channel results', () => {
+    const out = ok('1 / (A - 2)');
+    expect(out.timestamps).toEqual([0, 2000]);
+    expect(out.values).toEqual([-1, 1]);
+  });
+});
+
+describe('signal functions', () => {
+  it('diff() returns the rate of change per second', () => {
+    const out = ok('diff(A)');
+    expect(out.timestamps).toEqual([1000, 2000]);
+    expect(out.values).toEqual([1, 1]);
+  });
+
+  it('diff() of a single sample is empty', () => {
+    expect(ok('diff(X)', { X: ch([0], [5]) })).toEqual({ timestamps: [], values: [] });
+  });
+
+  it('smooth() keeps length and flattens a spike', () => {
+    const spiky: ChannelMap = { S: ch([0, 1, 2, 3, 4], [0, 0, 10, 0, 0]) };
+    const out = ok('smooth(S, 3)', spiky);
+    expect(out.values).toHaveLength(5);
+    expect(Math.max(...out.values)).toBeLessThan(10);
+    expect(out.values.reduce((a, b) => a + b, 0)).toBeGreaterThan(0);
+  });
+
+  it('mavg() ramps up from zero at the start of the session (FSAE EV.3.4.1.a)', () => {
+    // Intentional: before the first sample the signal counts as 0, so a
+    // 200 ms window over a constant 4 reads 0, 2, then 4 once it's full.
+    const flat: ChannelMap = { F: ch([0, 100, 200, 300, 400, 500], [4, 4, 4, 4, 4, 4]) };
+    const { values } = ok('mavg(F, 200)', flat);
+    expect(values[0]).toBeCloseTo(0);
+    expect(values[1]).toBeCloseTo(2);
+    expect(values.slice(2)).toEqual([4, 4, 4, 4]);
+  });
+
+  it('mavg() is a time average, so sample rate and pauses do not skew it', () => {
+    // 10 Hz, then a 60 s pause, then 100 Hz -- all at a constant 10. The old
+    // session-wide sample-count divisor read ~10x high in the 100 Hz part.
+    const ts = [
+      ...Array.from({ length: 50 }, (_, i) => i * 100),
+      ...Array.from({ length: 500 }, (_, i) => 65_000 + i * 10),
+    ];
+    const F: ChannelMap = { F: ch(ts, ts.map(() => 10)) };
+    const { values } = ok('mavg(F, 500)', F);
+    for (const v of values.slice(10)) expect(v).toBeCloseTo(10);
+  });
+
+  it('mavg() of a ramp lags it by half the window', () => {
+    const ts = Array.from({ length: 101 }, (_, i) => i * 10);
+    const R: ChannelMap = { R: ch(ts, ts) }; // value == time (ms)
+    const { values } = ok('mavg(R, 200)', R);
+    expect(values[100]).toBeCloseTo(1000 - 100); // mean of 800..1000
+  });
+
+  it('smooth() of a constant signal is that constant', () => {
+    const flat: ChannelMap = { F: ch([0, 100, 200, 300], [4, 4, 4, 4]) };
+    expect(ok('smooth(F, 3)', flat).values).toEqual([4, 4, 4, 4]);
+  });
+
+  it('delay() with zero samples is the identity', () => {
+    expect(ok('delay(A, 0)')).toEqual(channels.A);
+  });
+});
+
+describe('errors', () => {
+  it.each([
+    ['Missing * 2', /Unknown channel: 'Missing'/],
+    ['nope(1)', /Unknown function/],
+    ['diff()', /takes 1 argument/],
+    ['smooth(A)', /takes 2 arguments/],
+    ['pow(1)', /takes 2 arguments/],
+    ['(1 + 2', /./],
+    ['1 +', /./],
+    ['', /./],
+  ])('%s -> error string', (expr, pattern) => {
+    const out = evaluateFormula(expr, channels);
+    expect(typeof out).toBe('string');
+    expect(out as string).toMatch(pattern);
+  });
+
+  it('never throws', () => {
+    expect(() => evaluateFormula('@@@', channels)).not.toThrow();
+  });
+});
+
+describe('extractChannelNames', () => {
+  it('returns distinct channel identifiers, not functions', () => {
+    expect(extractChannelNames('sqrt(A) + A * B - diff(Slow)').sort()).toEqual(['A', 'B', 'Slow']);
+  });
+
+  it('returns [] for unparseable input', () => {
+    expect(extractChannelNames('((')).toEqual([]);
+  });
+
+  it('allows channel names with underscores and digits', () => {
+    expect(extractChannelNames('Pack_Voltage1 * 2')).toEqual(['Pack_Voltage1']);
+  });
+});
+
+// ─── Known bugs (audit §1.2, §1.3) ───────────────────────────────────────────
+// `it.fails` passes while the bug exists and starts failing the moment it is
+// fixed, which tells you to flip it to a plain `it`.
+
+describe('signal and arithmetic fixes', () => {
+  it('delay() shifts values later in time', () => {
+    const out = ok('delay(A, 1)');
+    // Channel A is timestamps: [0, 1000, 2000], values: [1, 2, 3]
+    // Delayed by 1 sample: value 1 shifts to t=1000, value 2 shifts to t=2000
+    expect(out.timestamps).toEqual([1000, 2000]);
+    expect(out.values).toEqual([1, 2]);
+  });
+
+  it('delay() supports negative samples as lead', () => {
+    const out = ok('delay(A, -1)');
+    // Lead by 1 sample: value 2 shifts to t=0, value 3 shifts to t=1000
+    expect(out.timestamps).toEqual([0, 1000]);
+    expect(out.values).toEqual([2, 3]);
+  });
+
+  it('subtraction without spaces is not read as one identifier (RPM-100)', () => {
+    expect(ok('RPM-100').values).toEqual([0, 100, 200]);
+  });
+
+  it('channel-minus-channel without spaces works (Speed-Throttle)', () => {
+    expect(ok('Speed-Throttle').values).toEqual([9, 18, 27]);
+  });
+
+  it('a scalar takes on the channel timestamps instead of adding a t=0 sample', () => {
+    const late: ChannelMap = { a: ch([5000, 6000], [10, 20]) };
+    expect(ok('a * 2', late)).toEqual({ timestamps: [5000, 6000], values: [20, 40] });
+    expect(ok('5 + a', late)).toEqual({ timestamps: [5000, 6000], values: [15, 25] });
+    expect(ok('min(a, 15)', late)).toEqual({ timestamps: [5000, 6000], values: [10, 15] });
+    expect(ok('max(12, a)', late)).toEqual({ timestamps: [5000, 6000], values: [12, 20] });
+  });
+
+  it('mavg() of a constant signal settles at that constant', () => {
+    const flat: ChannelMap = { F: ch([0, 100, 200, 300, 400, 500], [4, 4, 4, 4, 4, 4]) };
+    expect(ok('mavg(F, 200)', flat).values.at(-1)).toBeCloseTo(4);
+  });
+
+  it('a scalar divide-by-zero is reported, not returned as NaN', () => {
+    const out = evaluateFormula('1 / 0', channels);
+    expect(typeof out === 'string').toBe(true);
+  });
+
+  it('subtraction WITH spaces works today (workaround)', () => {
+    expect(ok('RPM - 100').values).toEqual([0, 100, 200]);
+  });
+});

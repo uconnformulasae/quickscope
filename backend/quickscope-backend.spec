@@ -28,6 +28,11 @@ routes_hidden = [
     "routes.sessions",
     "routes.analysis",
     "routes.settings",
+    "routes.live",
+    "routes.live_layouts",
+    "parsers",
+    "parsers.aim_dll",
+    "parsers.log_adapter",
 ]
 
 hiddenimports = (
@@ -38,6 +43,8 @@ hiddenimports = (
     + routes_hidden
 )
 
+# Packaged desktop builds use libxrk only. The MatLabXRK DLL is for local dev /
+# Windows CI tests (backend/vendor); do not ship it in PyInstaller output.
 
 a = Analysis(
     ["entry.py"],

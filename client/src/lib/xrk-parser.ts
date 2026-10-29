@@ -48,6 +48,8 @@ export interface XRKSession {
   lapSource: LapSource;
   durationMs: number;
   totalSamples: number;
+  /** Epoch ms at log start, for wall-clock chart labels. Null when unknown. */
+  logStartMs: number | null;
 }
 
 export interface ParseProgress {
@@ -84,19 +86,25 @@ export function computeStats(samples: ChannelSample[]): ChannelStats {
     if (!isFinite(s.value)) continue;
     variance += (s.value - mean) ** 2;
   }
-  return { min, max, mean, stdDev: Math.sqrt(variance / count), count, minTimestamp, maxTimestamp };
+  return { min, max, mean, stdDev: Math.sqrt(variance / (count > 1 ? count - 1 : 1)), count, minTimestamp, maxTimestamp };
 }
 
 export function formatTime(milliseconds: number): string {
-  const totalSeconds = Math.floor(milliseconds / 1000);
+  const sign = milliseconds < 0 ? '-' : '';
+  const totalMs = Math.round(Math.abs(milliseconds));
+  const totalSeconds = Math.floor(totalMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  const millis = Math.floor(milliseconds % 1000);
-  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
+  const millis = totalMs % 1000;
+  return `${sign}${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
 }
 
 export function formatLapTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toFixed(3).padStart(6, '0')}`;
+  const sign = seconds < 0 ? '-' : '';
+  const totalSec = Math.abs(seconds);
+  const roundedMs = Math.round(totalSec * 1000);
+  const totalSeconds = Math.floor(roundedMs / 1000);
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = (roundedMs % 60000) / 1000;
+  return `${sign}${mins}:${secs.toFixed(3).padStart(6, '0')}`;
 }

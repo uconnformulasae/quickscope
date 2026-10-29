@@ -29,7 +29,6 @@ export function TableView({
   // Build channel info for columns
   const columns = useMemo(() => {
     return activeChannels
-      .filter(ac => ac.visible)
       .map(ac => {
         const isDerived = ac.channelId >= 10000;
         const channelDef = session.channels.get(ac.channelId);
@@ -59,11 +58,11 @@ export function TableView({
 
   // Build table data
   const channelIds = useMemo(() => columns.map(c => c.channelId), [columns]);
-  const rows = useMemo(() => buildTableData(channelIds, allSamplesMap), [channelIds, allSamplesMap]);
+  const table = useMemo(() => buildTableData(channelIds, allSamplesMap), [channelIds, allSamplesMap]);
 
   // Virtualizer
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: table.rowCount,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 20,
@@ -87,10 +86,10 @@ export function TableView({
     const seconds = parseFloat(searchValue);
     if (isNaN(seconds)) return;
     const ms = seconds * 1000;
-    const idx = findRowByTimestamp(rows, ms);
+    const idx = findRowByTimestamp(table.timestamps, ms);
     setHighlightedRow(idx);
     virtualizer.scrollToIndex(idx, { align: 'center' });
-  }, [searchValue, rows, virtualizer]);
+  }, [searchValue, table, virtualizer]);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch();
@@ -120,79 +119,88 @@ export function TableView({
         />
         <span className="text-[10px] text-muted-foreground/40 font-mono">Ctrl+G</span>
         <span className="ml-auto text-[11px] text-muted-foreground">
-          {rows.length.toLocaleString()} rows
+          {table.rowCount.toLocaleString()} rows
         </span>
       </div>
 
-      {/* Table header */}
-      <div className="flex border-b border-border bg-card flex-shrink-0 overflow-hidden">
-        <div className="w-24 flex-shrink-0 px-3 py-2 text-[11px] font-semibold text-muted-foreground font-mono border-r border-border/30">
-          Time (s)
-        </div>
-        {columns.map((col) => (
-          <div
-            key={col.channelId}
-            className="flex-1 min-w-[100px] px-3 py-2 text-[11px] font-semibold text-muted-foreground font-mono border-r border-border/30 last:border-r-0 flex items-center gap-1.5 truncate"
-          >
-            <span
-              className="w-2 h-2 rounded-full flex-shrink-0"
-              style={{ backgroundColor: col.color }}
-            />
-            {col.name}{col.units ? ` (${col.units})` : ''}
-          </div>
-        ))}
-      </div>
-
-      {/* Virtualized rows */}
-      <div ref={parentRef} className="flex-1 overflow-auto">
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            width: '100%',
-            position: 'relative',
-          }}
-        >
-          {virtualizer.getVirtualItems().map((virtualRow) => {
-            const row = rows[virtualRow.index];
-            const isEven = virtualRow.index % 2 === 0;
-            const isHighlighted = virtualRow.index === highlightedRow;
-            return (
+      {/* Table scroll container */}
+      <div
+        ref={parentRef}
+        className="flex-1 overflow-auto"
+      >
+        <div className="min-w-max relative">
+          {/* Table header (sticky inside scroll container) */}
+          <div className="sticky top-0 z-10 flex border-b border-border bg-card">
+            <div className="w-24 flex-shrink-0 px-3 py-2 text-[11px] font-semibold text-muted-foreground font-mono border-r border-border/30">
+              Time (s)
+            </div>
+            {columns.map((col) => (
               <div
-                key={virtualRow.index}
-                className={`flex absolute w-full ${
-                  isHighlighted
-                    ? 'bg-primary/15 ring-1 ring-inset ring-primary/30'
-                    : isEven
-                      ? 'bg-background'
-                      : 'bg-[hsl(225,30%,90%)] dark:bg-muted'
-                }`}
-                style={{
-                  height: `${ROW_HEIGHT}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
+                key={col.channelId}
+                className="w-32 flex-shrink-0 px-3 py-2 text-[11px] font-semibold text-muted-foreground font-mono border-r border-border/30 last:border-r-0 flex items-center gap-1.5 truncate"
               >
-                <div className={`w-24 flex-shrink-0 px-3 flex items-center text-[11px] font-mono border-r border-border/10 ${
-                  isHighlighted ? 'text-primary font-semibold' : 'text-muted-foreground'
-                }`}>
-                  {(row.timestamp / 1000).toFixed(3)}
-                </div>
-                {row.values.map((val, colIdx) => (
-                  <div
-                    key={colIdx}
-                    className={`flex-1 min-w-[100px] px-3 flex items-center text-[11px] font-mono border-r border-border/10 last:border-r-0 ${
-                      row.held[colIdx]
-                        ? 'text-foreground/50'
-                        : val === null
-                          ? 'text-muted-foreground/30'
-                          : 'text-foreground'
-                    }`}
-                  >
-                    {val !== null ? formatValue(val) : '\u2014'}
-                  </div>
-                ))}
+                <span
+                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: col.color }}
+                />
+                <span className="truncate">{col.name}{col.units ? ` (${col.units})` : ''}</span>
               </div>
-            );
-          })}
+            ))}
+          </div>
+
+          {/* Virtualized rows */}
+          <div
+            style={{
+              height: `${virtualizer.getTotalSize()}px`,
+              width: '100%',
+              position: 'relative',
+            }}
+          >
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              // The virtualizer can still hold indices from before the table
+              // shrank (channel toggled, session switched) for one render.
+              if (virtualRow.index >= table.rowCount) return null;
+              const row = table.rowAt(virtualRow.index);
+              const isEven = virtualRow.index % 2 === 0;
+              const isHighlighted = virtualRow.index === highlightedRow;
+              return (
+                <div
+                  key={virtualRow.key}
+                  className={`flex absolute left-0 right-0 ${
+                    isHighlighted
+                      ? 'bg-primary/15 ring-1 ring-inset ring-primary/30'
+                      : isEven
+                        ? 'bg-background'
+                        : 'bg-muted/40'
+                  }`}
+                  style={{
+                    height: `${ROW_HEIGHT}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <div className={`w-24 flex-shrink-0 px-3 flex items-center text-[11px] font-mono border-r border-border/10 ${
+                    isHighlighted ? 'text-primary font-semibold' : 'text-muted-foreground'
+                  }`}>
+                    {(row.timestamp / 1000).toFixed(3)}
+                  </div>
+                  {row.values.map((val, colIdx) => (
+                    <div
+                      key={colIdx}
+                      className={`w-32 flex-shrink-0 px-3 flex items-center text-[11px] font-mono border-r border-border/10 last:border-r-0 ${
+                        row.held[colIdx]
+                          ? 'text-foreground/50'
+                          : val === null
+                            ? 'text-muted-foreground/30'
+                            : 'text-foreground'
+                      }`}
+                    >
+                      {val !== null ? formatValue(val) : '\u2014'}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
