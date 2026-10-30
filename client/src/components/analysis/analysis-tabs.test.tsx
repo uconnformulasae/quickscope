@@ -128,6 +128,12 @@ describe('LapAnalysisTab', () => {
     expect(screen.getByText('Best')).toBeTruthy();
   });
 
+  it('marks the best lap in the accent color', () => {
+    render(<LapAnalysisTab session={lapSession()} activeChannels={[]} />);
+    const card = screen.getByText('Best').closest('div.rounded-lg');
+    expect(card?.className).toContain('accent');
+  });
+
   it('labels auto-detected laps', () => {
     const { rerender } = render(<LapAnalysisTab session={lapSession('gps_auto')} activeChannels={[]} />);
     expect(screen.getByText('Auto-detected (GPS)')).toBeTruthy();

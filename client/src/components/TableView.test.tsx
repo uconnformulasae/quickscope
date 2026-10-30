@@ -125,7 +125,7 @@ describe('AnalysisPanel', () => {
 
     fireEvent.click(screen.getByText('Laps'));
     fireEvent.click(screen.getByText('Histogram'));
-    fireEvent.click(screen.getByText('XY Plot'));
+    fireEvent.click(screen.getByText('XY'));
     fireEvent.click(screen.getByText('GPS'));
     expect(onTabChange.mock.calls.map((c) => c[0])).toEqual(['lapanalysis', 'histogram', 'xyplot', 'gps']);
   });

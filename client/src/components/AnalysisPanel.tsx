@@ -1,7 +1,7 @@
 import type { XRKSession } from '../lib/xrk-parser';
 import type { ActiveChannel, AnalysisTab, TimeRange, DerivedChannel } from '../lib/useXRKStore';
 import type { ChannelSample } from '../lib/xrk-parser';
-import { BarChart3, Activity, ScatterChart, Timer, MapPin } from 'lucide-react';
+import { SegmentedControl } from './ui/SegmentedControl';
 import { GPSMapView } from './GPSMapView';
 import { StatsTab } from './analysis/StatsTab';
 import { LapAnalysisTab } from './analysis/LapAnalysisTab';
@@ -26,12 +26,12 @@ interface AnalysisPanelProps {
   theme?: 'dark' | 'light';
 }
 
-const TABS: { id: AnalysisTab; label: string; icon: any }[] = [
-  { id: 'stats', label: 'Stats', icon: Activity },
-  { id: 'lapanalysis', label: 'Laps', icon: Timer },
-  { id: 'histogram', label: 'Histogram', icon: BarChart3 },
-  { id: 'xyplot', label: 'XY Plot', icon: ScatterChart },
-  { id: 'gps', label: 'GPS', icon: MapPin },
+const TABS: { value: AnalysisTab; label: string }[] = [
+  { value: 'stats', label: 'Stats' },
+  { value: 'lapanalysis', label: 'Laps' },
+  { value: 'histogram', label: 'Histogram' },
+  { value: 'xyplot', label: 'XY' },
+  { value: 'gps', label: 'GPS' },
 ];
 
 export function AnalysisPanel({
@@ -52,26 +52,10 @@ export function AnalysisPanel({
   theme,
 }: AnalysisPanelProps) {
   return (
-    <div className="flex flex-col h-full bg-card border-l border-border overflow-hidden">
+    <div className="flex flex-col h-full bg-card border-l border-separator overflow-hidden">
       {/* Tab bar */}
-      <div className="flex-shrink-0 flex border-b border-border">
-        {TABS.map(tab => {
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => onTabChange(tab.id)}
-              className={`flex-1 flex flex-col items-center gap-0.5 py-2 px-1 text-xs transition-colors
-                ${analysisTab === tab.id
-                  ? 'text-primary border-b-2 border-primary bg-primary/5'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
-                }`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              {tab.label}
-            </button>
-          );
-        })}
+      <div className="flex-shrink-0 flex justify-center p-2.5">
+        <SegmentedControl size="sm" ariaLabel="Analysis" value={analysisTab} options={TABS} onChange={onTabChange} />
       </div>
 
       {/* Tab content */}

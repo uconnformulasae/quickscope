@@ -41,7 +41,7 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
   return (
     <div className="p-2 space-y-2">
       {viewRange && (
-        <p className="text-xs text-muted-foreground px-1 pb-1 border-b border-border">
+        <p className="text-xs text-muted-foreground px-1 pb-1 border-b border-separator">
           Showing statistics for selected zoom range
         </p>
       )}
@@ -53,60 +53,58 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
         const displayMax = viewRange ? vs.max : gs.max;
         const displayMaxTs = viewRange ? vs.maxTimestamp : gs.maxTimestamp;
         return (
-          <div key={chan.index} className="rounded-lg border border-border overflow-hidden">
-            <div
-              className="flex items-center justify-between px-2.5 py-1.5"
-              style={{ borderLeft: `3px solid ${color}`, background: `${color}0d` }}
-            >
-              <div>
-                <span className="text-xs font-semibold text-foreground">{chan.shortName}</span>
-                {chan.units && <span className="text-xs text-muted-foreground ml-1">({chan.units})</span>}
+          <div key={chan.index} className="rounded-[11px] bg-popover overflow-hidden">
+            <div className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1.5">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
+                <span className="text-[13px] font-semibold text-foreground truncate">{chan.shortName}</span>
+                {chan.units && <span className="text-label-3 text-xs">({chan.units})</span>}
               </div>
               {hasData ? (
-                <span className="text-xs text-muted-foreground tabular">{vs.count.toLocaleString()} pts</span>
+                <span className="text-[11px] text-label-3 tabular">{vs.count.toLocaleString()} pts</span>
               ) : (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground/60">No data</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-muted/60 text-label-3">No data</span>
               )}
             </div>
             {hasData ? (
-              <div className="grid grid-cols-2 gap-px bg-border">
+              <div className="grid grid-cols-2 gap-px px-1.5 pb-1.5">
                 <button
-                  className={`bg-card px-2.5 py-1.5 text-left group ${canNavigate ? 'cursor-pointer hover:bg-muted/30 transition-colors' : 'cursor-default'}`}
+                  className={`rounded-lg px-1.5 py-1.5 text-left group ${canNavigate ? 'cursor-pointer hover:bg-muted/30 transition-colors' : 'cursor-default'}`}
                   onClick={canNavigate ? () => onNavigateToTime!(displayMinTs) : undefined}
                   disabled={!canNavigate}
                   title={canNavigate ? `Jump to min @ ${formatTime(displayMinTs)}` : undefined}
                 >
                   <div className="flex items-center justify-between">
-                    <p className="text-xs text-muted-foreground leading-none mb-0.5">Min</p>
+                    <p className="text-[11px] font-medium text-label-3 leading-none mb-0.5">Min</p>
                     {canNavigate && <Crosshair className="w-3 h-3 text-muted-foreground/30 group-hover:text-primary/60 transition-colors" />}
                   </div>
-                  <p className="text-sm font-medium text-foreground tabular">{formatNum(displayMin)}</p>
-                  <p className="text-xs text-muted-foreground/50 leading-none mt-0.5">@ {formatTime(displayMinTs)}</p>
+                  <p className="text-[17px] font-medium text-foreground font-display tabular">{formatNum(displayMin)}</p>
+                  <p className="text-[11px] text-label-3 font-mono leading-none mt-0.5">@ {formatTime(displayMinTs)}</p>
                 </button>
                 <button
-                  className={`bg-card px-2.5 py-1.5 text-left group ${canNavigate ? 'cursor-pointer hover:bg-muted/30 transition-colors' : 'cursor-default'}`}
+                  className={`rounded-lg px-1.5 py-1.5 text-left group ${canNavigate ? 'cursor-pointer hover:bg-muted/30 transition-colors' : 'cursor-default'}`}
                   onClick={canNavigate ? () => onNavigateToTime!(displayMaxTs) : undefined}
                   disabled={!canNavigate}
                   title={canNavigate ? `Jump to max @ ${formatTime(displayMaxTs)}` : undefined}
                 >
                   <div className="flex items-center justify-between">
-                    <p className="text-xs text-muted-foreground leading-none mb-0.5">Max</p>
+                    <p className="text-[11px] font-medium text-label-3 leading-none mb-0.5">Max</p>
                     {canNavigate && <Crosshair className="w-3 h-3 text-muted-foreground/30 group-hover:text-primary/60 transition-colors" />}
                   </div>
-                  <p className="text-sm font-medium text-foreground tabular">{formatNum(displayMax)}</p>
-                  <p className="text-xs text-muted-foreground/50 leading-none mt-0.5">@ {formatTime(displayMaxTs)}</p>
+                  <p className="text-[17px] font-medium text-foreground font-display tabular">{formatNum(displayMax)}</p>
+                  <p className="text-[11px] text-label-3 font-mono leading-none mt-0.5">@ {formatTime(displayMaxTs)}</p>
                 </button>
-                <div className="bg-card px-2.5 py-1.5">
-                  <p className="text-xs text-muted-foreground leading-none mb-0.5">Mean</p>
-                  <p className="text-sm font-medium text-foreground tabular">{formatNum(vs.mean)}</p>
+                <div className="px-1.5 py-1.5">
+                  <p className="text-[11px] font-medium text-label-3 leading-none mb-0.5">Mean</p>
+                  <p className="text-[17px] font-medium text-foreground font-display tabular">{formatNum(vs.mean)}</p>
                 </div>
-                <div className="bg-card px-2.5 py-1.5">
-                  <p className="text-xs text-muted-foreground leading-none mb-0.5">Std Dev</p>
-                  <p className="text-sm font-medium text-foreground tabular">{formatNum(vs.stdDev)}</p>
+                <div className="px-1.5 py-1.5">
+                  <p className="text-[11px] font-medium text-label-3 leading-none mb-0.5">Std Dev</p>
+                  <p className="text-[17px] font-medium text-foreground font-display tabular">{formatNum(vs.stdDev)}</p>
                 </div>
               </div>
             ) : (
-              <div className="px-2.5 py-3 text-xs text-muted-foreground/50 italic">
+              <div className="px-3 py-3 text-xs text-label-3 italic">
                 No data recorded for this channel in this session
               </div>
             )}

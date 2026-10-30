@@ -16,9 +16,9 @@ const LAP_SOURCE_LABEL: Record<LapSource, string> = {
 };
 
 const LAP_SOURCE_TONE: Record<LapSource, string> = {
-  device: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30',
-  gps_auto: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30',
-  beacon_auto: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30',
+  device: 'bg-success/15 text-success border-success/30',
+  gps_auto: 'bg-warning/15 text-warning border-warning/30',
+  beacon_auto: 'bg-warning/15 text-warning border-warning/30',
   none: 'bg-muted text-muted-foreground border-border',
 };
 
@@ -94,27 +94,27 @@ export function LapAnalysisTab({
         {sourceTag}
       </div>
       {bestTime && (
-        <div className="mb-3 p-2.5 rounded-lg bg-primary/10 border border-primary/20">
+        <div className="mb-3 p-2.5 rounded-lg bg-accent/10 border border-accent/20">
           <p className="text-xs text-muted-foreground">Best Lap</p>
-          <p className="text-lg font-bold text-primary tabular mt-0.5">{formatLapTime(bestTime)}</p>
+          <p className="text-lg font-bold text-accent tabular mt-0.5">{formatLapTime(bestTime)}</p>
         </div>
       )}
       <div className="space-y-1.5">
         {lapData.map(lap => (
           <div
             key={lap.lapNum}
-            className={`rounded-lg border p-2.5 transition-colors ${lap.isBest ? 'border-primary/40 bg-primary/5' : 'border-border'}`}
+            className={`rounded-lg border p-2.5 transition-colors ${lap.isBest ? 'border-accent/40 bg-accent/5' : 'border-separator'}`}
           >
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2">
-                <span className={`text-xs font-semibold tabular ${lap.isBest ? 'text-primary' : 'text-foreground'}`}>
+                <span className={`text-xs font-semibold tabular ${lap.isBest ? 'text-accent' : 'text-foreground'}`}>
                   Lap {lap.lapNum}
                 </span>
                 {lap.isBest && (
-                  <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">Best</span>
+                  <span className="text-xs bg-accent/20 text-accent px-1.5 py-0.5 rounded-full">Best</span>
                 )}
               </div>
-              <span className={`text-sm font-bold tabular ${lap.isBest ? 'text-primary' : 'text-foreground'}`}>
+              <span className={`text-sm font-bold tabular ${lap.isBest ? 'text-accent' : 'text-foreground'}`}>
                 {formatLapTime(lap.lapTimeS)}
               </span>
             </div>
