@@ -242,6 +242,17 @@ describe('SessionHeader', () => {
     expect(screen.queryByText(/samples/)).toBeNull();
   });
 
+  it('truncates a very long file name and caps the title area before the centered control', () => {
+    const long = 'x'.repeat(300) + '.xrk';
+    renderHeader({ fileName: long });
+    const name = screen.getByText(long);
+    expect(name.className).toContain('truncate');
+    const group = name.closest('button')!.parentElement!;
+    expect(group.className).toContain('min-w-0');
+    expect(group.className).toContain('max-w-[calc(50%-76px)]');
+    expect(name.closest('button')!.className).not.toMatch(/max-w-\[\d+%\]/);
+  });
+
   it('opens session info from the title', () => {
     const { handlers } = renderHeader();
     fireEvent.click(screen.getByText('run.xrk'));

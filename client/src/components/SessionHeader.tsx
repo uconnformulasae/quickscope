@@ -60,7 +60,7 @@ export function SessionHeader({
 
   return (
     <header className="relative z-20 flex h-[52px] flex-shrink-0 items-center gap-1.5 border-b border-separator bg-card px-3">
-      <div className="flex min-w-0 items-center gap-1.5">
+      <div className="flex min-w-0 max-w-[calc(50%-76px)] flex-1 items-center gap-1.5">
         {onBack && (
           <IconButton label="Back to sessions" onClick={onBack}>
             <ArrowLeft className="h-4 w-4" />
@@ -73,7 +73,7 @@ export function SessionHeader({
           <button
             type="button"
             onClick={onSessionInfoOpen}
-            className="ml-1 flex min-w-0 max-w-[40%] flex-col items-start rounded-md px-1.5 py-0.5 text-left hover:bg-muted"
+            className="ml-1 flex min-w-0 flex-col items-start rounded-md px-1.5 py-0.5 text-left hover:bg-muted"
           >
             <span className="max-w-full truncate font-display text-[13.5px] font-semibold text-foreground">{fileName}</span>
             {subtitle && <span className="max-w-full truncate text-[11.5px] text-muted-foreground">{subtitle}</span>}
