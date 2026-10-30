@@ -5,7 +5,7 @@ import { ThemeToggle } from './ThemeToggle';
 import { SettingsDialog } from './SettingsDialog';
 import { SessionInfoModal } from './SessionInfoModal';
 import { SessionHeader } from './SessionHeader';
-import { QuickScopeLogo } from './QuickScopeLogo';
+import { GaugeGlyph, QuickScopeLogo } from './QuickScopeLogo';
 import { useTheme } from '../lib/useTheme';
 import { makeSession } from '../test-fixtures';
 
@@ -295,5 +295,17 @@ describe('QuickScopeLogo', () => {
     rerender(<QuickScopeLogo showWordmark={false} />);
     expect(screen.getByRole('img', { name: 'QuickScope' })).toBeTruthy();
     expect(container.textContent).not.toContain('QuickScope');
+  });
+
+  it('uses unique gradient ids per instance', () => {
+    const { container } = render(<><QuickScopeLogo /><QuickScopeLogo /></>);
+    const ids = Array.from(container.querySelectorAll('linearGradient')).map((g) => g.id);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+
+  it('mono renders no orange fill', () => {
+    const { container } = render(<GaugeGlyph size={20} mono />);
+    expect(container.querySelector('[fill="#f77f00"]')).toBeNull();
   });
 });
