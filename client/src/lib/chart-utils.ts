@@ -4,6 +4,7 @@
 import type { ChannelSample } from './xrk-parser';
 import type { ActiveChannel, TimeRange, DerivedChannel, ChartMode } from './useXRKStore';
 import type { XRKSession } from './xrk-parser';
+import { MONO_FONT } from './fonts';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -94,7 +95,7 @@ export const RIGHT_MARGIN = 12;
 export const BOTTOM_AXIS_HEIGHT = 36;
 export const MIN_STRIP_HEIGHT = 140;
 export const AXIS_WIDTH = 50;
-export const MONO_FONT = 'JetBrains Mono, monospace';
+export { MONO_FONT };
 
 export interface ChartColors {
   grid: string;

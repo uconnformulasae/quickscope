@@ -1,4 +1,10 @@
 import type { Config } from "tailwindcss";
+import { UI_FONT, DISPLAY_FONT, MONO_FONT } from "./client/src/lib/fonts";
+
+const split = (s: string) => s.split(",").map((f) => f.trim());
+const UI_STACK = split(UI_FONT);
+const DISPLAY_STACK = split(DISPLAY_FONT);
+const MONO_STACK = split(MONO_FONT);
 
 export default {
   darkMode: ["class"],
@@ -9,8 +15,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["DM Sans", "Inter", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "Fira Code", "Consolas", "monospace"],
+        sans: UI_STACK,
+        display: DISPLAY_STACK,
+        mono: MONO_STACK,
       },
       colors: {
         background: "hsl(var(--background))",
@@ -43,6 +50,17 @@ export default {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
         },
+        canvas: "hsl(var(--canvas))",
+        "surface-1": "hsl(var(--surface-1))",
+        "surface-2": "hsl(var(--surface-2))",
+        "surface-3": "hsl(var(--surface-3))",
+        "surface-4": "hsl(var(--surface-4))",
+        "label-3": "hsl(var(--label-3))",
+        "label-4": "hsl(var(--label-4))",
+        success: "hsl(var(--success))",
+        warning: "hsl(var(--warning))",
+        danger: "hsl(var(--danger))",
+        separator: "var(--separator)",
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",

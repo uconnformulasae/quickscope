@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { resolveChannel, resolveSamples, ensurePlotly, getPlotlyColors } from './analysis-helpers';
+import { MONO_FONT, UI_FONT } from '../../lib/fonts';
 
 export function HistogramTab({ session, activeChannels, channelId, onChannelChange, derivedChannels, derivedSamplesMap, theme }: {
   session: XRKSession;
@@ -55,20 +56,20 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
         plot_bgcolor: 'transparent',
         xaxis: {
           title: `${chan.shortName}${chan.units ? ` (${chan.units})` : ''}`,
-          tickfont: { size: 10, color: pc.tickfontColor, family: 'JetBrains Mono' },
+          tickfont: { size: 10, color: pc.tickfontColor, family: MONO_FONT },
           gridcolor: pc.gridcolor,
         },
         yaxis: {
           title: 'Count',
-          tickfont: { size: 10, color: pc.tickfontColor, family: 'JetBrains Mono' },
+          tickfont: { size: 10, color: pc.tickfontColor, family: MONO_FONT },
           gridcolor: pc.gridcolor,
         },
         margin: { l: 45, r: 15, t: 15, b: 45 },
         bargap: 0.05,
-        font: { family: 'DM Sans', color: pc.fontColor, size: 11 },
+        font: { family: UI_FONT, color: pc.fontColor, size: 11 },
         hoverlabel: {
           bgcolor: pc.hoverBg,
-          font: { color: pc.hoverText, family: 'JetBrains Mono', size: 11 },
+          font: { color: pc.hoverText, family: MONO_FONT, size: 11 },
           bordercolor: pc.borderColor,
         },
       };

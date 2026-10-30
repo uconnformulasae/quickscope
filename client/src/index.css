@@ -11,43 +11,50 @@
    ========================================================= */
 
 @layer base {
-  :root {
-    /* Surfaces - Dark Charcoal motorsport palette */
-    --background: 232 28% 7%;         /* #0d0e14 deep charcoal */
-    --foreground: 220 15% 88%;        /* #dde1ec cool light text */
+  :root, .dark {
+    /* Fonts (same stacks as client/src/lib/fonts.ts) */
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
 
-    --card: 230 25% 10%;              /* #131520 card surface */
-    --card-foreground: 220 15% 88%;
+    /* Surfaces */
+    --background: 231 21% 6%;
+    --canvas: 231 21% 6%;
+    --surface-1: 228 21% 9%;
+    --surface-2: 227 21% 13%;
+    --surface-3: 227 21% 17%;
+    --surface-4: 226 20% 22%;
 
-    --popover: 230 25% 10%;
-    --popover-foreground: 220 15% 88%;
+    --foreground: 223 23% 94%;
+    --card: var(--surface-1);
+    --card-foreground: 223 23% 94%;
+    --popover: var(--surface-2);
+    --popover-foreground: 223 23% 94%;
 
-    /* Primary: Electric Blue */
-    --primary: 232 82% 59%;           /* #4361ee */
+    --primary: 229 83% 60%;
     --primary-foreground: 0 0% 100%;
 
-    /* Secondary: subtle dark surface */
-    --secondary: 230 20% 16%;         /* #1d2030 */
-    --secondary-foreground: 220 15% 75%;
+    --secondary: var(--surface-3);
+    --secondary-foreground: 224 14% 68%;
+    --muted: var(--surface-3);
+    --muted-foreground: 224 14% 68%;
+    --label-3: 224 11% 49%;
+    --label-4: 225 14% 34%;
 
-    /* Muted */
-    --muted: 230 20% 14%;             /* #191d2b */
-    --muted-foreground: 220 10% 50%;  /* muted text */
-
-    /* Accent: Racing Orange */
-    --accent: 28 100% 49%;            /* #f77f00 */
+    --accent: 31 100% 48%;
     --accent-foreground: 0 0% 100%;
 
-    /* Destructive */
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
+    --success: 135 64% 50%;
+    --warning: 36 100% 63%;
+    --danger: 3 100% 69%;
+    --destructive: var(--danger);
+    --destructive-foreground: 223 23% 94%;
 
-    /* Border & Input */
-    --border: 230 20% 20%;            /* #242838 */
-    --input: 230 20% 18%;
-    --ring: 232 82% 59%;              /* electric blue ring */
+    --border: 227 18% 19%;
+    --separator: rgba(255,255,255,0.07);
+    --input: var(--surface-3);
+    --ring: 229 83% 60%;
 
-    /* Radius */
     --radius: 0.5rem;
 
     /* Chart colors - telemetry palette */
@@ -59,8 +66,8 @@
     --chart-6: 48 100% 60%;   /* yellow - voltage */
 
     /* Canvas chart colors */
-    --chart-grid: rgba(255,255,255,0.05);
-    --chart-text: #8b93a8;
+    --chart-grid: rgba(255,255,255,0.045);
+    --chart-text: #7b8296;
     --chart-cursor: rgba(255,255,255,0.5);
     --chart-cursor-pill: rgba(13,14,20,0.9);
     --chart-cursor-pill-text: #dde1ec;
@@ -74,73 +81,34 @@
     --chart-lap-text: #f77f00;
   }
 
-  /* QuickScope is dark-first — dark mode is the primary mode */
-  .dark {
-    --background: 232 28% 7%;
-    --foreground: 220 15% 88%;
-    --card: 230 25% 10%;
-    --card-foreground: 220 15% 88%;
-    --popover: 230 25% 10%;
-    --popover-foreground: 220 15% 88%;
-    --primary: 232 82% 59%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 230 20% 16%;
-    --secondary-foreground: 220 15% 75%;
-    --muted: 230 20% 14%;
-    --muted-foreground: 220 10% 50%;
-    --accent: 28 100% 49%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 230 20% 20%;
-    --input: 230 20% 18%;
-    --ring: 232 82% 59%;
-
-    /* Canvas chart colors */
-    --chart-grid: rgba(255,255,255,0.05);
-    --chart-text: #8b93a8;
-    --chart-cursor: rgba(255,255,255,0.5);
-    --chart-cursor-pill: rgba(13,14,20,0.9);
-    --chart-cursor-pill-text: #dde1ec;
-    --chart-delta-fill: rgba(34,211,238,0.10);
-    --chart-delta-line: rgba(34,211,238,0.7);
-    --chart-delta-panel: rgba(13,14,20,0.92);
-    --chart-delta-accent: #22d3ee;
-    --chart-separator: rgba(255,255,255,0.08);
-    --chart-hover-line: rgba(255,255,255,0.25);
-    --chart-lap-marker: rgba(247,127,0,0.35);
-    --chart-lap-text: #f77f00;
-  }
-
-  /* Light mode override (less common) */
   .light {
-    --background: 220 14% 96%;       /* #f0f1f5 light gray */
-    --foreground: 230 25% 10%;       /* #131520 dark text */
+    --background: 240 11% 96%;
+    --canvas: 0 0% 100%;
+    --surface-1: 240 33% 99%;
+    --surface-2: 0 0% 100%;
+    --surface-3: 240 12% 93%;
+    --surface-4: 240 9% 89%;
 
-    --card: 0 0% 100%;               /* #ffffff white */
-    --card-foreground: 230 25% 10%;
+    --foreground: 240 3% 12%;
+    --card-foreground: 240 3% 12%;
+    --popover-foreground: 240 3% 12%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 230 25% 10%;
+    --primary: 230 74% 54%;
+    --secondary-foreground: 240 4% 38%;
+    --muted-foreground: 240 4% 38%;
+    --label-3: 240 2% 54%;
+    --label-4: 240 4% 77%;
 
-    --primary: 232 82% 50%;          /* slightly deeper blue for white bg */
-    --primary-foreground: 0 0% 100%;
+    --accent: 29 100% 39%;
 
-    --secondary: 220 14% 92%;
-    --secondary-foreground: 230 20% 25%;
-
-    --muted: 220 14% 94%;
-    --muted-foreground: 220 10% 42%;
-
-    --accent: 28 100% 45%;
-    --accent-foreground: 0 0% 100%;
-
-    --destructive: 0 72% 51%;
+    --success: 140 67% 37%;
+    --warning: 36 100% 36%;
+    --danger: 354 100% 42%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 220 14% 85%;           /* #d4d7e0 */
-    --input: 220 14% 90%;
-    --ring: 232 82% 50%;
+    --border: 240 8% 88%;
+    --separator: rgba(0,0,0,0.08);
+    --ring: 230 74% 54%;
 
     /* Chart colors - adjusted for light background contrast */
     --chart-1: 232 82% 45%;   /* deeper blue */
@@ -151,8 +119,8 @@
     --chart-6: 48 100% 42%;   /* deeper yellow */
 
     /* Canvas chart colors */
-    --chart-grid: rgba(0,0,0,0.10);
-    --chart-text: hsl(220,10%,35%);
+    --chart-grid: rgba(0,0,0,0.06);
+    --chart-text: #86868b;
     --chart-cursor: rgba(0,0,0,0.45);
     --chart-cursor-pill: rgba(255,255,255,0.95);
     --chart-cursor-pill-text: #131520;
@@ -181,10 +149,11 @@
 
   body {
     @apply bg-background text-foreground;
-    font-family: 'DM Sans', 'Inter', system-ui, sans-serif;
+    font-family: var(--font-ui);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-size: clamp(0.875rem, 0.8rem + 0.35vw, 1rem);
+    font-size: 13px;
+    letter-spacing: -0.006em;
     line-height: 1.5;
   }
 
@@ -216,6 +185,13 @@
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
     border-radius: var(--radius);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
   }
 }
 

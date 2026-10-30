@@ -17,6 +17,7 @@ import type { ChartMode } from './useXRKStore';
 import {
   niceAxisTicks, formatValue, formatTimeSec, brightenColor, minMaxTrace, clamp, interpolateValue,
 } from './chart-utils';
+import { MONO_FONT, UI_FONT } from './fonts';
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
@@ -61,8 +62,8 @@ const W = 1600;
 const BASE_H = 900;
 const PAD = 56;
 
-const MONO = '"JetBrains Mono", ui-monospace, monospace';
-const SANS = '"DM Sans", system-ui, sans-serif';
+const MONO = MONO_FONT;
+const SANS = UI_FONT;
 
 const FONT = {
   title: `600 24px ${SANS}`,
@@ -274,22 +275,6 @@ export function buildImageFileName(spec: ChartExportSpec): string {
   return `${stem}.png`;
 }
 
-async function ensureFonts(): Promise<void> {
-  const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
-  if (!fonts) return;
-  try {
-    await Promise.all([
-      fonts.load(`400 16px "JetBrains Mono"`),
-      fonts.load(`500 16px "JetBrains Mono"`),
-      fonts.load(`400 16px "DM Sans"`),
-      fonts.load(`500 16px "DM Sans"`),
-      fonts.load(`600 16px "DM Sans"`),
-    ]);
-  } catch {
-    // Offline or blocked: fall back to system fonts.
-  }
-}
-
 // ─── Plot model ─────────────────────────────────────────────────────────────
 
 interface Region {
@@ -312,7 +297,6 @@ interface OverlayAxis {
 // ─── Renderer ───────────────────────────────────────────────────────────────
 
 export async function renderChartImage(spec: ChartExportSpec): Promise<ChartExportResult> {
-  await ensureFonts();
 
   const channels = spec.channels;
   const n = Math.max(1, channels.length);
