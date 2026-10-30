@@ -13,14 +13,16 @@ export function useDismiss(ref: RefObject<HTMLElement | null>, onDismiss: () => 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !e.defaultPrevented) {
         e.preventDefault();
+        e.stopPropagation();
         cb.current();
       }
     };
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
+    // Capture phase so a menu consumes Escape before an enclosing Sheet sees it.
+    document.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey, true);
     };
   }, [ref, enabled]);
 }

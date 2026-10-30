@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from 'react';
+import { useRef, type KeyboardEvent } from 'react';
 
 export function SegmentedControl<T extends string>({
   value,
@@ -13,13 +13,18 @@ export function SegmentedControl<T extends string>({
   size?: 'sm' | 'md';
   ariaLabel: string;
 }) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     e.preventDefault();
     const i = options.findIndex((o) => o.value === value);
     const step = e.key === 'ArrowRight' ? 1 : -1;
-    const next = options[(i + step + options.length) % options.length];
-    if (next) onChange(next.value);
+    const ni = (i + step + options.length) % options.length;
+    const next = options[ni];
+    if (next) {
+      onChange(next.value);
+      refs.current[ni]?.focus();
+    }
   };
   return (
     <div
@@ -28,11 +33,14 @@ export function SegmentedControl<T extends string>({
       onKeyDown={onKeyDown}
       className="inline-flex gap-0 rounded-lg bg-muted p-0.5"
     >
-      {options.map((o) => {
+      {options.map((o, idx) => {
         const on = o.value === value;
         return (
           <button
             key={o.value}
+            ref={(el) => {
+              refs.current[idx] = el;
+            }}
             type="button"
             role="radio"
             aria-checked={on}

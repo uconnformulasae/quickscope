@@ -30,6 +30,19 @@ describe('SegmentedControl', () => {
     fireEvent.keyDown(screen.getByRole('radio', { name: 'Gamma' }), { key: 'ArrowRight' });
     expect(onChange).toHaveBeenCalledWith('a');
   });
+  it('moves focus to the newly selected radio', () => {
+    function Ctl() {
+      const [v, setV] = useState('a');
+      return <SegmentedControl value={v} options={options} onChange={setV} ariaLabel="Pick" />;
+    }
+    render(<Ctl />);
+    const alpha = screen.getByRole('radio', { name: 'Alpha' });
+    alpha.focus();
+    fireEvent.keyDown(alpha, { key: 'ArrowRight' });
+    const beta = screen.getByRole('radio', { name: 'Beta' });
+    expect(beta.getAttribute('aria-checked')).toBe('true');
+    expect(document.activeElement).toBe(beta);
+  });
   it('moves back with ArrowLeft', () => {
     const onChange = vi.fn();
     render(<SegmentedControl value="a" options={options} onChange={onChange} ariaLabel="Pick" />);
@@ -132,6 +145,21 @@ describe('Sheet', () => {
     fireEvent.mouseDown(dialog.parentElement!);
     fireEvent.click(dialog.parentElement!);
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+  it('Escape closes an open Menu first, then the Sheet', () => {
+    const onClose = vi.fn();
+    render(
+      <Sheet title="T" onClose={onClose}>
+        <MenuButton label="More" icon={<span>i</span>} items={[{ label: 'A', onSelect: () => {} }]} />
+      </Sheet>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(screen.getByRole('menu')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('menuitem'), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
   it('does not close on backdrop when closeOnBackdrop is false', () => {
     const onClose = vi.fn();
