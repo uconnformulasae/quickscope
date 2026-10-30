@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { X, Download, Loader2, CheckCircle, HardDrive, Radio } from 'lucide-react';
+import { Download, Loader2, CheckCircle, HardDrive, Radio } from 'lucide-react';
 import {
   listAimSessions,
   pullFromAim,
@@ -8,6 +8,8 @@ import {
   type AimPullProgress,
   type AimIndexStatus,
 } from '../lib/api';
+import { Sheet } from './ui/Sheet';
+import { Button } from './ui/Button';
 import { formatAimDeviceListDate } from '../lib/time-format';
 
 interface AimSessionPickerProps {
@@ -57,8 +59,8 @@ function pickIndexing(queue: string[], server: AimPullProgress): Record<string, 
 const INDEX_BADGE: Record<AimIndexStatus, { label: string; className: string }> = {
   pending: { label: 'indexing', className: 'bg-primary/10 text-primary' },
   running: { label: 'indexing', className: 'bg-primary/10 text-primary' },
-  ok: { label: 'indexed', className: 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400' },
-  failed: { label: 'parse warning', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
+  ok: { label: 'indexed', className: 'bg-success/10 text-success' },
+  failed: { label: 'parse warning', className: 'bg-warning/10 text-warning' },
 };
 
 export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProps) {
@@ -73,13 +75,6 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
   const pullPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Polling outlives the pull request: indexing runs after the device is released.
   const isPullingRef = useRef(false);
-
-  // Dismiss on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
 
   useEffect(() => {
     setLoading(true);
@@ -198,24 +193,37 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
   const newCount = sessions.filter(s => !s.already_downloaded).length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Radio className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
-            <h2 className="text-sm font-semibold text-foreground">AiM Device Sessions</h2>
+    <Sheet
+      title="AiM Device Sessions"
+      onClose={onClose}
+      width={640}
+      footer={
+        sessions.length > 0 ? (
+          <div className="flex w-full items-center justify-between">
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span>{sessions.length} on device</span>
+              {newCount > 0 && <span>{newCount} new</span>}
+              <span>{selected.size} selected</span>
+              <button onClick={selectAll} className="text-primary hover:underline">Select all</button>
+              <button onClick={selectNone} className="hover:underline">Deselect all</button>
+            </div>
+            <Button
+              variant="primary"
+              onClick={handleDownload}
+              disabled={selected.size === 0 || downloading}
+            >
+              {downloading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              {downloading ? 'Downloading...' : `Download ${selected.size}`}
+            </Button>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-muted/50 text-muted-foreground">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto min-h-0">
+        ) : undefined
+      }
+    >
+      <div className="-mx-[18px] -mt-2.5">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12 gap-3">
               <Loader2 className="w-5 h-5 text-primary animate-spin" />
@@ -254,18 +262,18 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
                         aria-hidden
                       />
                     )}
-                    <div className="relative flex w-full items-center gap-3 px-5 py-2.5">
+                    <div className="relative flex w-full items-center gap-3 px-[18px] py-2.5">
                     {/* Checkbox */}
                     <div className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors
                       ${isDownloaded
-                        ? 'border-emerald-500/50 bg-emerald-500/20'
+                        ? 'border-success/50 bg-success/20'
                         : isSelected
                           ? 'border-primary bg-primary'
                           : 'border-border'
                       }
                     `}>
                       {(isSelected || isDownloaded) && (
-                        <CheckCircle className={`w-3 h-3 ${isDownloaded ? 'text-emerald-500 dark:text-emerald-400' : 'text-primary-foreground'}`} />
+                        <CheckCircle className={`w-3 h-3 ${isDownloaded ? 'text-success' : 'text-primary-foreground'}`} />
                       )}
                     </div>
 
@@ -276,7 +284,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
                           {session.filename}
                         </span>
                         {isDownloaded && !indexStatus && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 flex-shrink-0">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-success/10 text-success flex-shrink-0">
                             downloaded
                           </span>
                         )}
@@ -307,45 +315,18 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
               })}
             </div>
           )}
-        </div>
-
-        {/* Error / Success */}
-        {error && (
-          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20">
-            {error}
-          </div>
-        )}
-        {downloadResult && (
-          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20 whitespace-pre-line">
-            {downloadResult}
-          </div>
-        )}
-
-        {/* Footer */}
-        {sessions.length > 0 && (
-          <div className="flex items-center justify-between px-5 py-3 border-t border-border flex-shrink-0">
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span>{sessions.length} on device</span>
-              {newCount > 0 && <span>{newCount} new</span>}
-              <span>{selected.size} selected</span>
-              <button onClick={selectAll} className="text-primary hover:underline">Select all</button>
-              <button onClick={selectNone} className="hover:underline">Deselect all</button>
-            </div>
-            <button
-              onClick={handleDownload}
-              disabled={selected.size === 0 || downloading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
-              {downloading ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Download className="w-3.5 h-3.5" />
-              )}
-              {downloading ? 'Downloading...' : `Download ${selected.size}`}
-            </button>
-          </div>
-        )}
       </div>
-    </div>
+
+      {error && (
+        <div className="mt-2 px-3 py-2 rounded-md text-xs bg-danger/10 text-danger border border-danger/20">
+          {error}
+        </div>
+      )}
+      {downloadResult && (
+        <div className="mt-2 px-3 py-2 rounded-md text-xs bg-success/10 text-success border border-success/20 whitespace-pre-line">
+          {downloadResult}
+        </div>
+      )}
+    </Sheet>
   );
 }

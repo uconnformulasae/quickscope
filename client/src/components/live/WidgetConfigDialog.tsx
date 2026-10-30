@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
+import { Sheet } from '../ui/Sheet';
+import { Button } from '../ui/Button';
 import { ChannelDatalist, ChannelPicker, type ChannelSources } from './ChannelPicker';
 import { compatibleUnits } from './units';
 import {
@@ -206,24 +208,17 @@ export function WidgetConfigDialog({
   const listId = `channels-${widget.id}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onMouseDown={onClose}>
-      <div
-        className="relative w-[640px] max-w-[calc(100vw-2rem)] max-h-[90vh] flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
-        onMouseDown={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label="Configure widget"
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <LayoutGrid className="w-4 h-4 text-primary" />
-            <h2 className="text-sm font-semibold text-foreground">Configure widget</h2>
-          </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded" title="Close">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+    <Sheet
+      title="Configure widget"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="plain" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={save}>Apply</Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
           <ChannelDatalist id={listId} sources={sources} />
 
           <div className="grid grid-cols-2 gap-3">
@@ -305,7 +300,7 @@ export function WidgetConfigDialog({
                           </button>
                           <button
                             onClick={() => set({ channels: draft.channels.filter((_, j) => j !== i) })}
-                            className="p-1 text-muted-foreground hover:text-red-500"
+                            className="p-1 text-muted-foreground hover:text-danger"
                             title="Remove channel"
                           >
                             <Trash2 className="w-3 h-3" />
@@ -329,17 +324,7 @@ export function WidgetConfigDialog({
               className={`${INPUT} resize-y`}
             />
           </label>
-        </div>
-
-        <div className="flex justify-end gap-2 px-4 py-3 border-t border-border flex-shrink-0">
-          <button onClick={onClose} className="px-3 py-1.5 rounded-md text-xs font-medium bg-muted/50 text-foreground hover:bg-muted transition-colors">
-            Cancel
-          </button>
-          <button onClick={save} className="px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
-            Apply
-          </button>
-        </div>
       </div>
-    </div>
+    </Sheet>
   );
 }

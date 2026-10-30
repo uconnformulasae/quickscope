@@ -569,6 +569,7 @@ export default function App() {
           metadata={session.metadata}
           durationMs={session.durationMs}
           lapCount={Math.max(0, session.lapMarkers.length - 1)}
+          totalSamples={session.totalSamples}
           fileName={state.fileName}
           source={loadedSessionSource}
           onClose={() => setSessionInfoOpen(false)}

@@ -116,9 +116,9 @@ describe('SettingsDialog', () => {
     fireEvent.click(screen.getByText('Settings'));
     expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(document, { key: 'Escape' });
     fireEvent.click(screen.getByText('Cancel'));
-    fireEvent.click(container.firstChild as Element);
+    fireEvent.mouseDown(container.firstChild as Element);
     expect(onClose).toHaveBeenCalledTimes(3);
   });
 });
@@ -131,6 +131,7 @@ describe('SessionInfoModal', () => {
     },
     durationMs: 65_500,
     lapCount: 0,
+    totalSamples: 1000,
     fileName: 'run.xrk',
   };
 
@@ -141,6 +142,11 @@ describe('SessionInfoModal', () => {
     expect(screen.getByText('1:05.50')).toBeTruthy();
     // Unknown venue, empty championship and zero laps all render as an em dash
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('shows the sample count', () => {
+    render(<SessionInfoModal {...props} totalSamples={6141017} onClose={() => {}} />);
+    expect(screen.getByText('6,141,017')).toBeTruthy();
   });
 
   it('renames the session file', async () => {
@@ -187,7 +193,7 @@ describe('SessionInfoModal', () => {
     const onClose = vi.fn();
     const { container } = render(<SessionInfoModal {...props} onClose={onClose} />);
     fireEvent.keyDown(document, { key: 'Escape' });
-    fireEvent.click(container.firstChild as Element);
+    fireEvent.mouseDown(container.firstChild as Element);
     fireEvent.click(screen.getByText('Session Info'));
     expect(onClose).toHaveBeenCalledTimes(2);
   });

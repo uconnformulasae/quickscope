@@ -150,9 +150,9 @@ describe('AimSessionPicker', () => {
     routes['/api/aim/sessions'] = () => ({ ok: true, sessions: [] });
     const props = renderPicker();
     await screen.findByText('No sessions found on device');
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(document, { key: 'Escape' });
     fireEvent.click(screen.getByText('AiM Device Sessions'));
-    fireEvent.click(document.querySelector('.fixed') as Element);
+    fireEvent.mouseDown(screen.getByRole('dialog').parentElement as Element);
     expect(props.onClose).toHaveBeenCalledTimes(2);
   });
 });

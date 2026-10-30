@@ -149,8 +149,8 @@ describe('DerivedChannelDialog', () => {
     fireEvent.click(screen.getByText('Create Derived Channel'));
     expect(props.onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Cancel'));
-    const backdrop = document.querySelector('[data-backdrop]') as Element;
-    fireEvent.click(backdrop);
+    const backdrop = screen.getByRole('dialog').parentElement as Element;
+    fireEvent.mouseDown(backdrop);
     expect(props.onClose).toHaveBeenCalledTimes(2);
   });
 });

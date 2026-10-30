@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback } from 'react';
-import { X, Download, Search, CheckSquare, Square } from 'lucide-react';
+import { Download, Search, CheckSquare, Square } from 'lucide-react';
 import type { XRKSession } from '../lib/xrk-parser';
+import { Sheet } from './ui/Sheet';
+import { Button } from './ui/Button';
 import { exportCSV } from '../lib/api';
 
 interface ExportDialogProps {
@@ -138,28 +140,34 @@ export function ExportDialog({
   }, [selectedIds, allChannels, fileName, onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col overflow-hidden"
-        style={{ maxHeight: '80vh' }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Download className="w-4 h-4 text-primary" />
-            <span className="text-sm font-semibold text-foreground">Export CSV</span>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+    <Sheet
+      title="Export CSV"
+      subtitle={
+        exportError ? (
+          <span className="text-danger" role="alert">Export failed: {exportError}</span>
+        ) : totalRows > 0 ? (
+          <>~{totalRows.toLocaleString()} rows</>
+        ) : (
+          'Select channels to export'
+        )
+      }
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="plain" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            onClick={handleExport}
+            disabled={selectedIds.size === 0 || isExporting}
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
+            <Download className="w-3.5 h-3.5" />
+            {isExporting ? 'Exporting...' : `Export ${selectedCount > 0 ? selectedCount : ''} channels`}
+          </Button>
+        </>
+      }
+    >
         {/* Search + Select All/None */}
-        <div className="px-4 pt-3 pb-2 flex-shrink-0 space-y-2">
+        <div className="pb-2 flex-shrink-0 space-y-2">
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
             <input
@@ -188,7 +196,7 @@ export function ExportDialog({
         </div>
 
         {/* Channel list */}
-        <div className="flex-1 overflow-y-auto px-4 pb-2 space-y-0.5 min-h-0">
+        <div className="space-y-0.5">
           {filteredChannels.map(ch => {
             const isSelected = selectedIds.has(ch.id);
             return (
@@ -221,35 +229,6 @@ export function ExportDialog({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-border flex-shrink-0 bg-muted/10">
-          <div className="text-xs text-muted-foreground">
-            {exportError ? (
-              <span className="text-red-500" role="alert">Export failed: {exportError}</span>
-            ) : totalRows > 0 ? (
-              <>~{totalRows.toLocaleString()} rows</>
-            ) : (
-              'Select channels to export'
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onClose}
-              className="px-3 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors border border-border"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={selectedIds.size === 0 || isExporting}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" />
-              {isExporting ? 'Exporting...' : `Export ${selectedCount > 0 ? selectedCount : ''} channels`}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </Sheet>
   );
 }

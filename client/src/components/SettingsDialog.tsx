@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Save } from 'lucide-react';
+import { Save } from 'lucide-react';
+import { Sheet } from './ui/Sheet';
+import { Button } from './ui/Button';
 import { getSettings, updateSettings, type Settings } from '../lib/api';
 
 interface SettingsDialogProps {
@@ -24,13 +26,6 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
     return () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); };
   }, []);
 
-  // Dismiss on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
-
   const handleSave = async () => {
     setSaving(true);
     setError(null);
@@ -53,21 +48,20 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-          <h2 className="text-sm font-semibold text-foreground">Settings</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-muted/50 text-muted-foreground">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="px-5 py-4 space-y-4">
+    <Sheet
+      title="Settings"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="plain" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={handleSave} disabled={saving}>
+            <Save className="w-3.5 h-3.5" />
+            {saving ? 'Saving...' : 'Save'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
           {/* AiM */}
           <div>
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
@@ -110,31 +104,12 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
 
           {/* Error / Success */}
           {error && (
-            <p className="text-xs text-red-500 dark:text-red-400">{error}</p>
+            <p className="text-xs text-danger">{error}</p>
           )}
           {saved && (
-            <p className="text-xs text-emerald-500 dark:text-emerald-400">Settings saved.</p>
+            <p className="text-xs text-success">Settings saved.</p>
           )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex justify-end gap-2 px-5 py-3 border-t border-border">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-          >
-            <Save className="w-3.5 h-3.5" />
-            {saving ? 'Saving...' : 'Save'}
-          </button>
-        </div>
       </div>
-    </div>
+    </Sheet>
   );
 }

@@ -87,7 +87,7 @@ describe('ExportDialog', () => {
     fireEvent.click(screen.getByText('Export CSV'));
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Cancel'));
-    fireEvent.click(container.firstChild as Element);
+    fireEvent.mouseDown(container.firstChild as Element);
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 });

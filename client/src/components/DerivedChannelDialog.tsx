@@ -4,9 +4,11 @@
  * mode (script evaluated by the backend's restricted sandbox).
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, FlaskConical, Code2, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Search } from 'lucide-react';
+import { FlaskConical, Code2, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Search } from 'lucide-react';
 import type { DerivedChannel } from '../lib/useXRKStore';
 import type { XRKSession } from '../lib/xrk-parser';
+import { Sheet } from './ui/Sheet';
+import { Button } from './ui/Button';
 
 interface DerivedChannelDialogProps {
   session: XRKSession;
@@ -176,39 +178,26 @@ export function DerivedChannelDialog({
     }
   };
 
-  // Backdrop click closes
-  const handleBackdrop = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).dataset.backdrop) onClose();
-  };
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      data-backdrop="1"
-      onClick={handleBackdrop}
-    >
-      <div
-        className="relative w-[480px] max-h-[90vh] flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <FlaskConical className="w-4 h-4 text-primary" />
-            <h2 className="text-sm font-semibold text-foreground">
-              {editing ? 'Edit Derived Channel' : 'Create Derived Channel'}
-            </h2>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded"
+    <Sheet
+      title={editing ? 'Edit Derived Channel' : 'Create Derived Channel'}
+      onClose={onClose}
+      width={640}
+      footer={
+        <>
+          <Button variant="plain" onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            onClick={handleSubmit}
+            disabled={!name.trim() || !expression.trim() || isEvaluating}
+            data-testid="btn-create-derived"
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {isEvaluating ? 'Evaluating...' : (editing ? 'Update Channel' : 'Create Channel')}
+          </Button>
+        </>
+      }
+    >
+        <div className="space-y-4">
           {/* Name + Units row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -384,25 +373,26 @@ export function DerivedChannelDialog({
 
           {/* Preview button + result */}
           <div className="space-y-2">
-            <button
+            <Button
+              variant="tinted"
               onClick={handlePreview}
               disabled={!name.trim() || !expression.trim() || isEvaluating}
-              className="w-full py-1.5 rounded text-xs border border-primary/50 text-primary hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="w-full"
               data-testid="btn-preview"
             >
               {isEvaluating ? 'Evaluating...' : 'Preview'}
-            </button>
+            </Button>
 
             {previewResult !== null && (
               <div>
                 {typeof previewResult === 'string' ? (
-                  <div className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400">
+                  <div className="flex items-start gap-2 p-2 bg-danger/10 border border-danger/30 rounded text-xs text-danger">
                     <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
                     <span className="font-mono">{previewResult}</span>
                   </div>
                 ) : (
                   <div className="space-y-1">
-                    <div className="flex items-center gap-1.5 text-xs text-green-400">
+                    <div className="flex items-center gap-1.5 text-xs text-success">
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       <span>{previewResult.values.length.toLocaleString()} samples computed</span>
                     </div>
@@ -418,31 +408,12 @@ export function DerivedChannelDialog({
 
           {/* Submit error */}
           {submitError && (
-            <div className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400">
+            <div className="flex items-start gap-2 p-2 bg-danger/10 border border-danger/30 rounded text-xs text-danger">
               <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
               <span className="font-mono">{submitError}</span>
             </div>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border flex-shrink-0">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={!name.trim() || !expression.trim() || isEvaluating}
-            className="px-4 py-1.5 rounded text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
-            data-testid="btn-create-derived"
-          >
-            {isEvaluating ? 'Evaluating...' : (editing ? 'Update Channel' : 'Create Channel')}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Sheet>
   );
 }
