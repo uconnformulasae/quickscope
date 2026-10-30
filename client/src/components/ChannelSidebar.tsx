@@ -234,7 +234,11 @@ function ChannelRow({ chan, isActive, onToggle }: ChannelRowProps) {
   const displayCount = chan.fileSampleCount ?? 0;
   const fileHasData = displayCount > 0;
   const title = fileHasData
-    ? [formatSampleCount(displayCount), chan.sampleRateHz > 0 ? `${chan.sampleRateHz} Hz` : ''].filter(Boolean).join(' · ')
+    ? [
+        chan.longName && chan.longName !== chan.shortName ? chan.longName : '',
+        formatSampleCount(displayCount),
+        chan.sampleRateHz > 0 ? `${chan.sampleRateHz} Hz` : '',
+      ].filter(Boolean).join(' · ')
     : 'No data recorded for this channel in this session';
   return (
     <button

@@ -124,7 +124,7 @@ describe('ChannelSidebar', () => {
     renderSidebar();
     fireEvent.click(screen.getByText('Other'));
     expect(screen.getByPlaceholderText('Filter 3 channels')).toBeTruthy();
-    expect(screen.getByTestId('channel-row-1').title).toBe('2K pts · 50 Hz');
+    expect(screen.getByTestId('channel-row-1').title).toBe('Engine Speed · 2K pts · 50 Hz');
     expect(screen.getByTestId('channel-row-3').title).toBe('No data recorded for this channel in this session');
   });
 
@@ -133,6 +133,9 @@ describe('ChannelSidebar', () => {
       activeChannels: [{ channelId: 1, color: '#f00', visible: true }],
     });
     expect(screen.getByText('Active · 1')).toBeTruthy();
+    // Channel 1 sits in the collapsed "Other" group but is still pinned in Active.
+    expect(screen.getByTestId('active-row-1')).toBeTruthy();
+    expect(screen.queryByTestId('channel-row-1')).toBeNull();
     fireEvent.click(screen.getByTitle('Remove'));
     expect(handlers.onToggleChannel).toHaveBeenCalledTimes(1);
     expect(handlers.onToggleChannel).toHaveBeenCalledWith(1, '#f00');
@@ -150,13 +153,16 @@ describe('ChannelSidebar', () => {
       channels: new Map([
         [1, makeChannel(1, 'BMS_A', { fileSampleCount: 10 })],
         [2, makeChannel(2, 'BMS_B', { fileSampleCount: 10 })],
+        [3, makeChannel(3, 'Speed', { fileSampleCount: 10 })],
       ]),
     });
     const { unmount } = renderSidebar({ session: s, derivedChannels: [] });
     expect(screen.queryByTestId('channel-row-1')).toBeNull();
     unmount();
-    renderSidebar({ session: s, derivedChannels: [], search: 'bms_a' });
+    renderSidebar({ session: s, derivedChannels: [], search: 'bms' });
     expect(screen.getByTestId('channel-row-1')).toBeTruthy();
+    expect(screen.getByTestId('channel-row-2')).toBeTruthy();
+    expect(screen.queryByTestId('channel-row-3')).toBeNull();
   });
 
   it('remembers collapsed groups', () => {
