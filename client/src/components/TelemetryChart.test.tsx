@@ -14,7 +14,7 @@ const active = [1, 2, 3, 4].map(channelId => ({ channelId, color: '#f00' }));
 
 function renderChart(props: Partial<Parameters<typeof TelemetryChart>[0]> = {}) {
   return render(
-    <TelemetryChart session={session} activeChannels={active} viewRange={null} onViewRangeChange={() => {}} {...props} />,
+    <TelemetryChart session={session} activeChannels={active} viewRange={null} onViewRangeChange={() => {}} onChartModeChange={() => {}} {...props} />,
   );
 }
 
@@ -86,5 +86,27 @@ describe('TelemetryChart drawing', () => {
       act(() => pending.forEach(cb => cb(performance.now())));
     }
     expect(frames).toHaveLength(0);
+  });
+});
+
+describe('TelemetryChart toolbar', () => {
+  it('switches chart layout from the toolbar', () => {
+    fakeLayout({ width: 1000, height: 900 });
+    const onChartModeChange = vi.fn();
+    renderChart({ onChartModeChange });
+    fireEvent.click(screen.getByRole('radio', { name: 'Overlay' }));
+    expect(onChartModeChange).toHaveBeenCalledWith('overlay');
+  });
+
+  it('shows the first-run tip once', () => {
+    fakeLayout({ width: 1000, height: 900 });
+    try { localStorage.removeItem('quickscope-chart-tip-dismissed'); } catch { /* ignore */ }
+    const first = renderChart();
+    expect(screen.getByText(/Scroll to zoom/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
+    expect(screen.queryByText(/Scroll to zoom/)).toBeNull();
+    first.unmount();
+    renderChart();
+    expect(screen.queryByText(/Scroll to zoom/)).toBeNull();
   });
 });

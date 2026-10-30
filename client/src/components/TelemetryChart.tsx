@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { formatChartElapsed } from '../lib/time-format';
 import type { ChannelSample } from '../lib/xrk-parser';
 import { RotateCcw, ImageDown } from 'lucide-react';
+import { SegmentedControl } from './ui/SegmentedControl';
+import { Button, IconButton } from './ui/Button';
 import {
   type TelemetryChartProps, type StripLayout, type DrawContext,
   LEFT_MARGIN, RIGHT_MARGIN, BOTTOM_AXIS_HEIGHT, MIN_STRIP_HEIGHT, AXIS_WIDTH,
@@ -25,6 +27,7 @@ export function TelemetryChart({
   cursorTime,
   onCursorTimeChange,
   chartMode = 'separate',
+  onChartModeChange,
   fileName = null,
 }: TelemetryChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -759,6 +762,14 @@ export function TelemetryChart({
     setImageExportSpec(spec);
   }, [fileName, session, visibleChannels, channelDataMap, getEffectiveXRange, sessionDuration, chartMode]);
 
+  const [showTip, setShowTip] = useState(() => {
+    try { return localStorage.getItem('quickscope-chart-tip-dismissed') !== '1'; } catch { return true; }
+  });
+  const dismissTip = useCallback(() => {
+    setShowTip(false);
+    try { localStorage.setItem('quickscope-chart-tip-dismissed', '1'); } catch { /* session-only */ }
+  }, []);
+
   const closeImageExport = useCallback(() => setImageExportSpec(null), []);
 
   // ─── Empty state ──────────────────────────────────────────────────────
@@ -776,60 +787,70 @@ export function TelemetryChart({
   return (
     <div className="flex flex-col h-full" data-testid="chart-container">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">
-            {viewRange
-              ? `${formatChartElapsed(viewRange.startMs, session.logStartMs)} — ${formatChartElapsed(viewRange.endMs, session.logStartMs)}`
-              : session.logStartMs !== null
-                ? `${formatChartElapsed(0, session.logStartMs)} — ${formatChartElapsed(session.durationMs, session.logStartMs)}`
-                : `Full session: ${formatChartElapsed(session.durationMs, session.logStartMs)}`
-            }
-          </span>
-        </div>
+      <div className="flex h-[42px] items-center justify-between gap-3 px-3 border-b border-separator bg-canvas flex-shrink-0">
+        <span className="font-mono text-xs text-muted-foreground truncate">
+          {viewRange
+            ? `${formatChartElapsed(viewRange.startMs, session.logStartMs)} — ${formatChartElapsed(viewRange.endMs, session.logStartMs)}`
+            : session.logStartMs !== null
+              ? `${formatChartElapsed(0, session.logStartMs)} — ${formatChartElapsed(session.durationMs, session.logStartMs)}`
+              : `Full session: ${formatChartElapsed(session.durationMs, session.logStartMs)}`
+          }
+        </span>
         <div className="flex items-center gap-1.5">
+          <SegmentedControl
+            size="sm"
+            ariaLabel="Chart layout"
+            value={chartMode}
+            onChange={onChartModeChange}
+            options={[
+              { value: 'separate', label: 'Separate' },
+              { value: 'overlay', label: 'Overlay' },
+            ]}
+          />
           <button
             onClick={toggleDelta}
-            className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
+            className={`flex h-7 items-center gap-1 px-2 rounded-md text-xs transition-colors ${
               deltaMode
-                ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
+                ? 'bg-primary/15 text-primary'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
             }`}
             title="Toggle delta measurement mode"
+            aria-pressed={deltaMode}
             data-testid="delta-toggle"
           >
             Δ Delta
           </button>
-          <button
-            onClick={openImageExport}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-            title="Save image"
-            aria-label="Save image"
-            data-testid="save-image"
-          >
+          <IconButton label="Save image" onClick={openImageExport} data-testid="save-image">
             <ImageDown className="w-4 h-4" />
-          </button>
+          </IconButton>
           {viewRange && (
-            <button
-              onClick={resetZoom}
-              className="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-              title="Reset zoom"
-              data-testid="reset-zoom"
-            >
+            <Button variant="plain" size="sm" onClick={resetZoom} title="Reset zoom" data-testid="reset-zoom">
               <RotateCcw className="w-3 h-3" />
               Reset
-            </button>
+            </Button>
           )}
-          <span className="text-xs text-muted-foreground/40 ml-1">
-            {canScroll ? 'scroll for channels · ⌘/Ctrl+scroll to zoom · drag to pan' : 'scroll to zoom · drag to pan'}
-          </span>
         </div>
       </div>
+
+      {showTip && (
+        <div className="flex flex-shrink-0 justify-center px-3 py-1.5 bg-canvas">
+          <div className="inline-flex items-center gap-2 rounded-full border border-separator bg-muted/40 py-0.5 pl-3 pr-1 text-xs text-muted-foreground">
+            <span>Scroll to zoom · drag to pan · double-click to reset</span>
+            <button
+              type="button"
+              onClick={dismissTip}
+              className="rounded-full px-2 py-0.5 text-foreground hover:bg-muted"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Canvas container — scrollable in separate mode when many channels */}
       <div
         ref={containerRef}
-        className="flex-1 min-h-0 relative overflow-y-auto overflow-x-hidden"
+        className="flex-1 min-h-0 relative overflow-y-auto overflow-x-hidden bg-canvas"
         style={{ cursor: cursorStyle }}
       >
         <canvas

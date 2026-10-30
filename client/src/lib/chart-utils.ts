@@ -18,6 +18,7 @@ export interface TelemetryChartProps {
   cursorTime?: number | null;
   onCursorTimeChange?: (t: number | null) => void;
   chartMode?: ChartMode;
+  onChartModeChange: (mode: ChartMode) => void;
   /** Loaded session file name, used by Save image */
   fileName?: string | null;
 }
@@ -303,4 +304,16 @@ export function minMaxTrace(
   }
 
   return trace;
+}
+
+/** Which lap labels to draw: the first, then any at least `minGapPx` after the last drawn one. */
+export function thinLapLabels(xs: number[], minGapPx = 30): boolean[] {
+  let last = -Infinity;
+  return xs.map((x, i) => {
+    if (i === 0 || x - last >= minGapPx) {
+      last = x;
+      return true;
+    }
+    return false;
+  });
 }

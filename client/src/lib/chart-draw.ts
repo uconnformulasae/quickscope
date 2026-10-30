@@ -7,7 +7,7 @@ import type { DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT, AXIS_WIDTH,
   BOTTOM_AXIS_HEIGHT,
-  niceAxisTicks, formatValue, clamp, brightenColor, minMaxTrace,
+  niceAxisTicks, thinLapLabels, formatValue, clamp, brightenColor, minMaxTrace,
 } from './chart-utils';
 import { formatChartAxisTime } from './time-format';
 
@@ -161,14 +161,19 @@ export function drawStrips(
       ctx.setLineDash([]);
 
       if (strip === strips[0]) {
-        ctx.font = `9px ${MONO_FONT}`;
+        ctx.font = `10px ${MONO_FONT}`;
         ctx.fillStyle = dc.colors.lapText;
         ctx.textAlign = 'center';
+        const visible: { label: string; x: number }[] = [];
         session.lapMarkers.forEach((lap, i) => {
           const lt = lap.timestamp / 1000;
           if (lt >= xRange[0] && lt <= xRange[1]) {
-            ctx.fillText(`L${i + 1}`, dc.timeToX(lt, xRange, plotW), strip.top + 10);
+            visible.push({ label: `L${i + 1}`, x: dc.timeToX(lt, xRange, plotW) });
           }
+        });
+        const show = thinLapLabels(visible.map(v => v.x));
+        visible.forEach((v, k) => {
+          if (show[k]) ctx.fillText(v.label, v.x, strip.top + 10);
         });
       }
 

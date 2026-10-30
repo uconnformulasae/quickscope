@@ -8,6 +8,7 @@ import {
   minMaxTrace,
   nearestSample,
   niceAxisTicks,
+  thinLapLabels,
 } from './chart-utils';
 
 const s = (timestamp: number, value: number) => ({ timestamp, value });
@@ -122,5 +123,19 @@ describe('minMaxTrace', () => {
     expect(Math.min(...out.map(p => p.value))).toBe(Math.min(...dense.map(p => p.value)));
     const times = out.map(p => p.timestamp);
     expect(times).toEqual([...times].sort((a, b) => a - b));
+  });
+});
+
+describe('thinLapLabels', () => {
+  it('keeps the first and drops labels closer than the gap', () => {
+    expect(thinLapLabels([0, 10, 20, 40, 75, 80])).toEqual([true, false, false, true, true, false]);
+    expect(thinLapLabels([])).toEqual([]);
+  });
+  it('never lets drawn labels overlap when 31 laps share 300px', () => {
+    const xs = Array.from({ length: 31 }, (_, i) => (i * 300) / 30);
+    const flags = thinLapLabels(xs);
+    expect(flags[0]).toBe(true);
+    const drawn = xs.filter((_, i) => flags[i]);
+    for (let i = 1; i < drawn.length; i++) expect(drawn[i]! - drawn[i - 1]!).toBeGreaterThanOrEqual(30);
   });
 });
