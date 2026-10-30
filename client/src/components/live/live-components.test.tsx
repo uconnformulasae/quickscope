@@ -197,6 +197,41 @@ describe('stat tone styling', () => {
   });
 });
 
+describe('static tone vs threshold', () => {
+  const mk = (extra: object): LiveLayout => ({
+    id: 't', name: 'T', vehicle: 'ev',
+    widgets: [{ id: 'w', type: 'stats', title: 'Power', style: 'tile', channels: [{ name: 'P', label: 'P', precision: 1, tone: 'amber', ...extra }] }],
+    grid: [{ i: 'w', x: 0, y: 0, w: 4, h: 6 }],
+  } as LiveLayout);
+  const snap = { ts: 1, subsystem: 'Syst', channels: { P: 60 }, units: {} } as unknown as Snapshot;
+  const valueP = () => screen.getByText((_, el) => el?.tagName === 'P' && el.firstChild?.textContent === '60.0');
+
+  it('configured amber without a crossed threshold colors text only', () => {
+    renderDashboard(mk({}), snap);
+    expect(valueP().className).toContain('text-warning');
+    expect((valueP().parentElement as HTMLElement).className).not.toContain('bg-warning');
+  });
+
+  it('no value with a configured amber tone has no tint', () => {
+    renderDashboard(mk({}), null);
+    expect(document.querySelector('[class*="bg-warning"]')).toBeNull();
+  });
+
+  it('a value at or above warn tints the tile', () => {
+    renderDashboard(mk({ warn: 50 }), snap);
+    expect((valueP().parentElement as HTMLElement).className).toContain('bg-warning');
+  });
+
+  it('stale dashboards mark values and indicators for dimming', () => {
+    const { container } = render(
+      <LiveDashboard layout={EV_DEFAULT_LAYOUT} latest={snap} totalReceived={1} stale editing={false}
+        onGridChange={() => {}} onEditWidget={() => {}} onRemoveWidget={() => {}} unitOverrides={{}} onCycleUnit={() => {}} />,
+    );
+    expect(container.querySelector('.live-stale .live-value')).not.toBeNull();
+    expect(container.querySelector('.live-stale .live-indicator')).not.toBeNull();
+  });
+});
+
 describe('LiveView', () => {
   class FakeWebSocket {
     static CONNECTING = 0;

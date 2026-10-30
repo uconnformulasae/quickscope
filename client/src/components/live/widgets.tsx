@@ -39,7 +39,7 @@ const BAR_TONE: Record<StatTone, string> = {
 };
 
 const TILE_BASE = 'rounded-[9px] bg-background dark:bg-card';
-const tile = (tone: StatTone | undefined) => (tone && TILE_TONE[tone] ? `rounded-[9px] ${TILE_TONE[tone]}` : TILE_BASE);
+const tile = (tone: StatTone | undefined, alert: boolean | undefined) => (alert && tone && TILE_TONE[tone] ? `rounded-[9px] ${TILE_TONE[tone]}` : TILE_BASE);
 
 export const CLICKABLE =
   'cursor-pointer select-none transition-shadow hover:ring-1 hover:ring-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60';
@@ -70,6 +70,8 @@ interface StatProps {
   value: string;
   unit: string;
   tone?: StatTone;
+  /** True only when a warn/crit threshold is crossed; a static configured tone colors text only. */
+  alert?: boolean;
   unitChanged?: boolean;
   onClick?: () => void;
 }
@@ -104,14 +106,14 @@ export function Panel({
   );
 }
 
-export function BigStat({ label, value, unit, tone, unitChanged, onClick }: StatProps) {
+export function BigStat({ label, value, unit, tone, alert, unitChanged, onClick }: StatProps) {
   return (
     <div
       {...clickableProps(onClick)}
-      className={`${tile(tone)} px-3 py-2 ${onClick ? CLICKABLE : ''}`}
+      className={`${tile(tone, alert)} px-3 py-2 ${onClick ? CLICKABLE : ''}`}
     >
       <p className="text-[11px] font-medium text-muted-foreground truncate">{label}</p>
-      <p className={`font-display text-2xl font-medium tabular mt-0.5 ${TEXT_TONE[tone ?? 'primary']}`}>
+      <p className={`font-display text-2xl font-medium tabular live-value mt-0.5 ${TEXT_TONE[tone ?? 'primary']}`}>
         {value}
         <span className={`text-xs font-normal ml-1 ${unitTone(unitChanged)}`}>{unit}</span>
       </p>
@@ -119,14 +121,14 @@ export function BigStat({ label, value, unit, tone, unitChanged, onClick }: Stat
   );
 }
 
-export function CoolStat({ label, value, unit, tone, unitChanged, onClick }: StatProps) {
+export function CoolStat({ label, value, unit, tone, alert, unitChanged, onClick }: StatProps) {
   return (
     <div
       {...clickableProps(onClick)}
-      className={`${tile(tone)} px-2.5 py-2 ${onClick ? CLICKABLE : ''}`}
+      className={`${tile(tone, alert)} px-2.5 py-2 ${onClick ? CLICKABLE : ''}`}
     >
       <p className="text-[11px] font-medium text-muted-foreground truncate">{label}</p>
-      <p className={`font-display text-base font-medium tabular mt-0.5 ${TEXT_TONE[tone ?? 'muted']}`}>
+      <p className={`font-display text-base font-medium tabular live-value mt-0.5 ${TEXT_TONE[tone ?? 'muted']}`}>
         {value}
         <span className={`text-[10px] font-normal ml-1 ${unitTone(unitChanged)}`}>{unit}</span>
       </p>
@@ -134,14 +136,14 @@ export function CoolStat({ label, value, unit, tone, unitChanged, onClick }: Sta
   );
 }
 
-export function VehicleStat({ label, value, unit, tone, unitChanged, onClick }: StatProps) {
+export function VehicleStat({ label, value, unit, tone, alert, unitChanged, onClick }: StatProps) {
   return (
     <div
       {...clickableProps(onClick)}
-      className={`${tile(tone)} px-2 py-1.5 text-center ${onClick ? CLICKABLE : ''}`}
+      className={`${tile(tone, alert)} px-2 py-1.5 text-center ${onClick ? CLICKABLE : ''}`}
     >
       <p className="text-[11px] font-medium text-muted-foreground truncate" title={label}>{label}</p>
-      <p className={`font-display text-sm font-medium tabular mt-0.5 ${TEXT_TONE[tone ?? 'muted']}`}>
+      <p className={`font-display text-sm font-medium tabular live-value mt-0.5 ${TEXT_TONE[tone ?? 'muted']}`}>
         {value}
         {unit && <span className={`text-[9px] font-normal ml-0.5 ${unitTone(unitChanged)}`}>{unit}</span>}
       </p>
@@ -163,14 +165,14 @@ export function BarRow({
     <div {...clickableProps(onClick)} className={onClick ? `rounded-sm ${CLICKABLE}` : undefined}>
       <div className="flex items-baseline justify-between text-[11px] mb-1 gap-2">
         <span className="font-medium text-muted-foreground truncate">{label}</span>
-        <span className={`tabular font-semibold ${TEXT_TONE[tone ?? 'primary']}`}>
+        <span className={`tabular live-value font-semibold ${TEXT_TONE[tone ?? 'primary']}`}>
           {value}
           {unit && <span className={`font-normal ml-0.5 ${unitTone(unitChanged)}`}>{unit}</span>}
         </span>
       </div>
       <div className="h-1.5 bg-muted rounded-full overflow-hidden">
         {fraction !== undefined && (
-          <div className={`h-full rounded-full ${BAR_TONE[tone ?? 'primary']}`} style={{ width: `${fraction * 100}%` }} />
+          <div className={`live-indicator h-full rounded-full ${BAR_TONE[tone ?? 'primary']}`} style={{ width: `${fraction * 100}%` }} />
         )}
       </div>
     </div>
@@ -194,7 +196,7 @@ export function BoolPill({
   if (kind === 'state') {
     return (
       <div
-        className={`flex items-center justify-between rounded-md px-2 py-1.5 border text-[11px] ${
+        className={`live-indicator flex items-center justify-between rounded-md px-2 py-1.5 border text-[11px] ${
           !hasValue
             ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
             : on
@@ -210,7 +212,7 @@ export function BoolPill({
   }
   return (
     <div
-      className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 border text-[11px] ${
+      className={`live-indicator flex items-center gap-1.5 rounded-md px-2 py-1.5 border text-[11px] ${
         !hasValue
           ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
           : on
@@ -246,7 +248,7 @@ export function GForceCircle({
   for (let g = 0.5; g <= range + 1e-9; g += 0.5) rings.push(g);
   return (
     <div className="flex flex-col items-center gap-1.5 h-full">
-      <svg viewBox="-50 -50 100 100" className="flex-1 min-h-0 w-full max-h-64" role="img" aria-label="G-force circle">
+      <svg viewBox="-50 -50 100 100" className="live-indicator flex-1 min-h-0 w-full max-h-64" role="img" aria-label="G-force circle">
         {rings.map((g) => (
           <circle key={g} cx={0} cy={0} r={(g / range) * r} fill="none" className="stroke-border" strokeWidth={0.6} />
         ))}
@@ -258,7 +260,7 @@ export function GForceCircle({
         )}
       </svg>
       <div className="flex gap-3 text-[10px] text-muted-foreground tabular">
-        <span>Lat <span className="text-foreground font-semibold">{fmt(lat, 2)}</span> g</span>
+        <span>Lat <span className="live-value text-foreground font-semibold">{fmt(lat, 2)}</span> g</span>
         <span>Long <span className="text-foreground font-semibold">{fmt(long, 2)}</span> g</span>
       </div>
     </div>

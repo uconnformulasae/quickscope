@@ -205,8 +205,12 @@
   box-shadow: 0 0 0 1.5px hsl(var(--primary)), 0 0 0 5.5px hsl(var(--primary) / 0.15);
 }
 /* Values from before the disconnect read as secondary, not live. */
-.live-stale .tabular {
+.live-stale .live-value {
   color: hsl(var(--label-3));
+}
+/* Bars, state/fault pills and the g-force graphic no longer read as live. */
+.live-stale .live-indicator {
+  opacity: 0.5;
 }
 .react-grid-item > .react-resizable-handle::after {
   border-color: hsl(var(--muted-foreground));

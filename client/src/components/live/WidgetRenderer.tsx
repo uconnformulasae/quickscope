@@ -77,14 +77,17 @@ function unitOf(ref: ChannelRef, deviceUnits: Record<string, string>): string {
   return ref.unit ?? sourceUnit(ref, deviceUnits) ?? '';
 }
 
-/** Threshold color wins over the configured tone; on/off tiles go green when on. */
-function toneFor(ref: ChannelRef, v: number | undefined): StatTone | undefined {
+/**
+ * Threshold color wins over the configured tone; on/off tiles go green when on.
+ * `alert` is true only for a crossed warn/crit threshold, so static tones don't tint tiles.
+ */
+function toneFor(ref: ChannelRef, v: number | undefined): { tone: StatTone | undefined; alert: boolean } {
   if (v !== undefined) {
-    if (ref.crit !== undefined && v >= ref.crit) return 'red';
-    if (ref.warn !== undefined && v >= ref.warn) return 'amber';
-    if (ref.format === 'onoff') return v >= 0.5 ? 'emerald' : 'muted';
+    if (ref.crit !== undefined && v >= ref.crit) return { tone: 'red', alert: true };
+    if (ref.warn !== undefined && v >= ref.warn) return { tone: 'amber', alert: true };
+    if (ref.format === 'onoff') return { tone: v >= 0.5 ? 'emerald' : 'muted', alert: false };
   }
-  return ref.tone;
+  return { tone: ref.tone, alert: false };
 }
 
 const MIN_TILE_PX: Record<StatStyle, number> = { big: 140, tile: 110, compact: 76 };
@@ -160,7 +163,7 @@ export function WidgetRenderer({
           {widget.channels.map((layoutRef, i) => {
             const { ref, unitChanged, onClick } = view(layoutRef);
             const v = read(ref);
-            const props = { label: label(ref), value: displayValue(ref, v), unit: unit(ref), tone: toneFor(ref, v), unitChanged, onClick };
+            const props = { label: label(ref), value: displayValue(ref, v), unit: unit(ref), ...toneFor(ref, v), unitChanged, onClick };
             return style === 'big' ? <BigStat key={i} {...props} />
               : style === 'compact' ? <VehicleStat key={i} {...props} />
               : <CoolStat key={i} {...props} />;
@@ -179,7 +182,7 @@ export function WidgetRenderer({
             const max = ref.max ?? 100;
             const fraction = v === undefined || max <= min ? undefined : Math.max(0, Math.min(1, (v - min) / (max - min)));
             return (
-              <BarRow key={i} label={label(ref)} value={displayValue(ref, v)} unit={unit(ref)} fraction={fraction} tone={toneFor(ref, v)} unitChanged={unitChanged} onClick={onClick} />
+              <BarRow key={i} label={label(ref)} value={displayValue(ref, v)} unit={unit(ref)} fraction={fraction} {...toneFor(ref, v)} unitChanged={unitChanged} onClick={onClick} />
             );
           })}
         </div>
