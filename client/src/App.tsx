@@ -404,8 +404,6 @@ export default function App() {
                 onSearchChange={setChannelSearch}
                 showOnlyWithData={state.showOnlyWithData}
                 onShowOnlyWithDataChange={setShowOnlyWithData}
-                chartMode={state.chartMode}
-                onChartModeChange={setChartMode}
               />
             ) : (
               <div className="flex items-center justify-center h-full bg-card border-r border-border">

@@ -16,6 +16,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  try { localStorage.clear(); } catch { /* ignore */ }
 });
 
 function session() {
@@ -103,7 +104,6 @@ describe('ChannelSidebar', () => {
       onCreateDerived: vi.fn(),
       onSearchChange: vi.fn(),
       onShowOnlyWithDataChange: vi.fn(),
-      onChartModeChange: vi.fn(),
     };
     const utils = render(
       <ChannelSidebar
@@ -113,7 +113,6 @@ describe('ChannelSidebar', () => {
         derivedSamplesMap={new Map([[10000, makeSamples([1, 2, 3])]])}
         search=""
         showOnlyWithData={false}
-        chartMode="separate"
         {...handlers}
         {...overrides}
       />,
@@ -121,29 +120,63 @@ describe('ChannelSidebar', () => {
     return { ...utils, handlers };
   }
 
-  it('lists session channels with sample counts, rates and no-data badges', () => {
+  it('lists session channels with sample counts and rates in row titles', () => {
     renderSidebar();
-    expect(screen.getByText('3 channels')).toBeTruthy();
-    expect(screen.getByText('Engine Speed')).toBeTruthy();
-    expect(screen.getByText('2K pts')).toBeTruthy();
-    expect(screen.getByText('50Hz')).toBeTruthy();
+    fireEvent.click(screen.getByText('Other'));
+    expect(screen.getByPlaceholderText('Filter 3 channels')).toBeTruthy();
+    expect(screen.getByTestId('channel-row-1').title).toBe('2K pts · 50 Hz');
     expect(screen.getByTestId('channel-row-3').title).toBe('No data recorded for this channel in this session');
   });
 
-  it('toggles channels and shows active chips', () => {
+  it('pins active channels in an Active section with a Remove control', () => {
     const { handlers } = renderSidebar({
-      activeChannels: [{ channelId: 1, color: '#f00', visible: true }, { channelId: 10000, color: '#0f0', visible: true }],
+      activeChannels: [{ channelId: 1, color: '#f00', visible: true }],
     });
-    expect(screen.getByText('2 active')).toBeTruthy();
-    expect(screen.getByText('Active channels')).toBeTruthy();
+    expect(screen.getByText('Active · 1')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('Remove'));
+    expect(handlers.onToggleChannel).toHaveBeenCalledTimes(1);
+    expect(handlers.onToggleChannel).toHaveBeenCalledWith(1, '#f00');
+  });
 
+  it('toggles channels from the list', () => {
+    const { handlers } = renderSidebar();
+    fireEvent.click(screen.getByText('Other'));
     fireEvent.click(screen.getByTestId('channel-row-2'));
     expect(handlers.onToggleChannel).toHaveBeenCalledWith(2, '#ff0000');
   });
 
+  it('expands groups that match the search', () => {
+    const s = makeSession({
+      channels: new Map([
+        [1, makeChannel(1, 'BMS_A', { fileSampleCount: 10 })],
+        [2, makeChannel(2, 'BMS_B', { fileSampleCount: 10 })],
+      ]),
+    });
+    const { unmount } = renderSidebar({ session: s, derivedChannels: [] });
+    expect(screen.queryByTestId('channel-row-1')).toBeNull();
+    unmount();
+    renderSidebar({ session: s, derivedChannels: [], search: 'bms_a' });
+    expect(screen.getByTestId('channel-row-1')).toBeTruthy();
+  });
+
+  it('remembers collapsed groups', () => {
+    const s = makeSession({
+      channels: new Map([
+        [1, makeChannel(1, 'BMS_A', { fileSampleCount: 10 })],
+        [2, makeChannel(2, 'BMS_B', { fileSampleCount: 10 })],
+      ]),
+    });
+    const first = renderSidebar({ session: s, derivedChannels: [] });
+    fireEvent.click(screen.getByText('BMS'));
+    expect(screen.getByTestId('channel-row-1')).toBeTruthy();
+    first.unmount();
+    renderSidebar({ session: s, derivedChannels: [] });
+    expect(screen.getByTestId('channel-row-1')).toBeTruthy();
+  });
+
   it('filters by search across short and long names', () => {
     renderSidebar({ search: 'engine' });
-    expect(screen.getByText('1 channels')).toBeTruthy();
+    expect(screen.getByTestId('channel-row-1')).toBeTruthy();
     expect(screen.queryByTestId('channel-row-2')).toBeNull();
     expect(screen.queryByText('Power')).toBeNull();
   });
@@ -155,18 +188,17 @@ describe('ChannelSidebar', () => {
 
   it('hides channels without file data when "Has data" is on', () => {
     renderSidebar({ showOnlyWithData: true });
-    expect(screen.getByText('2 channels')).toBeTruthy();
+    fireEvent.click(screen.getByText('Other'));
+    expect(screen.getByTestId('channel-row-2')).toBeTruthy();
     expect(screen.queryByTestId('channel-row-3')).toBeNull();
   });
 
-  it('wires search, has-data, chart-mode and create controls', () => {
+  it('wires search, has-data and create controls', () => {
     const { handlers } = renderSidebar({ search: 'rp' });
     fireEvent.change(screen.getByTestId('input-channel-search'), { target: { value: 'rpm' } });
     expect(handlers.onSearchChange).toHaveBeenCalledWith('rpm');
     fireEvent.click(screen.getByTestId('btn-has-data-toggle'));
     expect(handlers.onShowOnlyWithDataChange).toHaveBeenCalledWith(true);
-    fireEvent.click(screen.getByText('Overlay'));
-    expect(handlers.onChartModeChange).toHaveBeenCalledWith('overlay');
     fireEvent.click(screen.getByTestId('btn-create-derived-open'));
     expect(handlers.onCreateDerived).toHaveBeenCalled();
   });
