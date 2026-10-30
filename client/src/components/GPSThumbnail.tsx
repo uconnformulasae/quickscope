@@ -176,7 +176,7 @@ export function GPSThumbnail({
           cx={sx * size}
           cy={sy * size}
           r={1.5}
-          className="fill-emerald-500"
+          className="fill-success"
         />
       </svg>
     </div>

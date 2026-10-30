@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react';
 import { fetchUploadLog, fetchAimPullLog, type UploadLogEntry, type AimPullLogEntry } from '../../lib/api';
 import { IconButton } from '../ui/Button';
 import { Sheet } from '../ui/Sheet';
+import { SegmentedControl } from '../ui/SegmentedControl';
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -51,20 +52,16 @@ export function ActivitySheet({ onClose }: { onClose: () => void }) {
   return (
     <Sheet title="Activity" subtitle="Recent uploads and AiM pulls (server-side log)" onClose={onClose} width={760}>
       <div className="mb-3 flex items-center gap-2">
-        <div className="flex overflow-hidden rounded-md border border-border/50">
-          <button
-            onClick={() => setActivityTab('uploads')}
-            className={`px-2.5 py-1 text-[11px] ${activityTab === 'uploads' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted/50'}`}
-          >
-            Uploads
-          </button>
-          <button
-            onClick={() => setActivityTab('aim')}
-            className={`px-2.5 py-1 text-[11px] ${activityTab === 'aim' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted/50'}`}
-          >
-            AiM Pulls
-          </button>
-        </div>
+        <SegmentedControl
+          ariaLabel="Activity log"
+          size="sm"
+          value={activityTab}
+          onChange={setActivityTab}
+          options={[
+            { value: 'uploads', label: 'Uploads' },
+            { value: 'aim', label: 'AiM Pulls' },
+          ]}
+        />
         <div className="flex-1" />
         <IconButton label="Refresh" onClick={refresh}>
           <RefreshCw size={14} aria-hidden="true" />
@@ -101,8 +98,8 @@ export function ActivitySheet({ onClose }: { onClose: () => void }) {
                         <td className="px-3 py-1.5">
                           <span className={
                             e.status === 'ok'
-                              ? 'text-emerald-500 dark:text-emerald-400'
-                              : 'text-red-500 dark:text-red-400'
+                              ? 'text-success'
+                              : 'text-danger'
                           } title={e.error}>
                             {e.status}
                           </span>
@@ -141,8 +138,8 @@ export function ActivitySheet({ onClose }: { onClose: () => void }) {
                       <td className="px-3 py-1.5">
                         <span className={
                           e.status === 'ok' || e.status === 'list_ok'
-                            ? 'text-emerald-500 dark:text-emerald-400'
-                            : 'text-red-500 dark:text-red-400'
+                            ? 'text-success'
+                            : 'text-danger'
                         } title={e.error}>
                           {e.status}
                         </span>

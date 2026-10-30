@@ -134,7 +134,9 @@ export function SessionRow({
         ) : (
           <span className="tabular text-foreground">{formatDuration(session.duration_s)}</span>
         )}
-        {session.lap_count > 0 && <span>{session.lap_count} laps</span>}
+        <span className="inline-block w-14 text-right tabular">
+          {session.lap_count > 0 ? `${session.lap_count} laps` : ""}
+        </span>
         <span title={sourceCfg.label} className="inline-flex">
           <SourceIcon className="h-3.5 w-3.5" />
         </span>

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Search, X, FlaskConical, Pencil, Trash2, ChevronRight } from 'lucide-react';
+import { Search, X, FlaskConical, Pencil, Trash2, ChevronRight, Check } from 'lucide-react';
 import { IconButton } from './ui/Button';
 import { groupChannelsByPrefix, useCollapsedGroups } from '../lib/channel-groups';
 import type { XRKSession, ChannelDef } from '../lib/xrk-parser';
@@ -99,18 +99,28 @@ export function ChannelSidebar({
             </button>
           )}
         </div>
-        <button
-          onClick={() => onShowOnlyWithDataChange(!showOnlyWithData)}
-          aria-pressed={showOnlyWithData}
-          className={`mt-1.5 h-6 px-2 rounded-md text-[12px] transition-colors ${
-            showOnlyWithData
-              ? 'bg-primary/15 text-primary dark:text-[#8aa0ff]'
-              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-          data-testid="btn-has-data-toggle"
-        >
-          Has data
-        </button>
+        <div className="mt-1.5 flex items-center justify-between">
+          <button
+            onClick={() => onShowOnlyWithDataChange(!showOnlyWithData)}
+            aria-pressed={showOnlyWithData}
+            className={`inline-flex h-6 items-center gap-1 rounded-md px-2 text-[12px] transition-colors ${
+              showOnlyWithData
+                ? 'bg-primary/15 text-primary-text font-medium'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+            }`}
+            data-testid="btn-has-data-toggle"
+          >
+            {showOnlyWithData && <Check className="h-3 w-3" aria-hidden="true" />}
+            Has data
+          </button>
+          <IconButton
+            label="Create derived channel"
+            onClick={onCreateDerived}
+            data-testid="btn-create-derived-open"
+          >
+            <FlaskConical className="w-3.5 h-3.5" />
+          </IconButton>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto overscroll-contain pb-2">
@@ -118,13 +128,6 @@ export function ChannelSidebar({
           <div>
             <div className="flex items-center justify-between pl-3 pr-2 h-7">
               <span className="text-[11px] font-semibold text-label-3">{`Active · ${totalActive}`}</span>
-              <IconButton
-                label="Create derived channel"
-                onClick={onCreateDerived}
-                data-testid="btn-create-derived-open"
-              >
-                <FlaskConical className="w-3.5 h-3.5" />
-              </IconButton>
             </div>
             {activeChannels.map(ac => {
               const sessionChan = session.channels.get(ac.channelId);
@@ -151,17 +154,6 @@ export function ChannelSidebar({
                 </div>
               );
             })}
-          </div>
-        )}
-        {totalActive === 0 && (
-          <div className="flex justify-end px-2 h-7 items-center">
-            <IconButton
-              label="Create derived channel"
-              onClick={onCreateDerived}
-              data-testid="btn-create-derived-open"
-            >
-              <FlaskConical className="w-3.5 h-3.5" />
-            </IconButton>
           </div>
         )}
 
@@ -321,7 +313,7 @@ function DerivedChannelRow({ dc, isActive, sampleCount, onToggle, onEdit, onRemo
         </button>
         <button
           onClick={e => { e.stopPropagation(); onRemove(); }}
-          className="p-1 rounded text-muted-foreground/60 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+          className="p-1 rounded text-muted-foreground/60 hover:text-danger transition-colors"
           title="Delete"
         >
           <Trash2 className="w-3 h-3" />

@@ -55,12 +55,12 @@ export function ChannelPicker({
         placeholder={placeholder}
         spellCheck={false}
         className={`w-full px-2 py-1 bg-background border rounded text-xs text-foreground font-mono placeholder-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary ${
-          unseen ? 'border-amber-500/50 pr-16' : 'border-border'
+          unseen ? 'border-warning/50 pr-16' : 'border-border'
         }`}
       />
       {unseen && (
         <span
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px] text-amber-600 dark:text-amber-400 pointer-events-none"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px] text-warning pointer-events-none"
           title={`${sources.vehicleLabel} hasn't sent this channel on this laptop yet. It will show "—" until it does.`}
         >
           not seen

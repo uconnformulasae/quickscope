@@ -284,7 +284,7 @@ function isMac(): boolean {
 const BANNER_TONE = {
   red: 'bg-card text-danger',
   amber: 'bg-card text-warning',
-  primary: 'bg-primary/10 text-primary dark:text-[#8aa0ff]',
+  primary: 'bg-primary/10 text-primary-text',
   muted: 'bg-card text-muted-foreground',
 } as const;
 

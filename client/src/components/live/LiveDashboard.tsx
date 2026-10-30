@@ -94,7 +94,7 @@ export function LiveDashboard({
           </button>
           <button
             onClick={() => onRemoveWidget(w.id)}
-            className="p-1 rounded-md bg-card/90 border border-border text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition-colors"
+            className="p-1 rounded-md bg-card/90 border border-border text-muted-foreground hover:text-danger hover:bg-danger/10 transition-colors"
             title="Remove widget"
           >
             <X className="w-3 h-3" />

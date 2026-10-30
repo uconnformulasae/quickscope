@@ -33,6 +33,7 @@
 
     --primary: 229 83% 60%;
     --primary-foreground: 0 0% 100%;
+    --primary-text: 229 100% 78%;
 
     --secondary: var(--surface-3);
     --secondary-foreground: 224 14% 68%;
@@ -94,6 +95,7 @@
     --popover-foreground: 240 3% 12%;
 
     --primary: 230 74% 54%;
+    --primary-text: 230 74% 54%;
     --secondary-foreground: 240 4% 38%;
     --muted-foreground: 240 4% 38%;
     --label-3: 240 2% 54%;
