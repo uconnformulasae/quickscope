@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { fetchLiveChannels, type AimStatus } from '../lib/api';
-import {
-  Activity, AlertCircle, ArrowLeft, Copy, Download, Loader2, MoreHorizontal, Pause, Pencil, Pin, PinOff,
-  Play, Plus, Save, Trash2, Upload, Wifi, WifiOff, X,
-} from 'lucide-react';
+import { AlertCircle, Pencil, Upload, WifiOff, X } from 'lucide-react';
+import { Button } from './ui/Button';
+import { LiveHeader } from './live/LiveHeader';
 import { BUILTIN_CHANNELS, BUILTIN_UNITS, vehicleKind, type VehicleKind } from './live/live-channels';
 import { useLiveStream } from './live/useLiveStream';
 import { useLiveLayouts } from './live/useLiveLayouts';
@@ -17,6 +16,8 @@ interface Props {
   onBack: () => void;
   /** Device already discovered on the session browser — live TCP starts immediately. */
   aimDevice?: AimStatus['device'];
+  /** Opens the app's settings (network section) from the offline notice. */
+  onOpenSettings: () => void;
 }
 
 const VEHICLE_LABEL: Record<VehicleKind, string> = { ev: 'EV', ic: 'IC' };
@@ -51,11 +52,7 @@ function downloadLayout(layout: LiveLayout) {
   URL.revokeObjectURL(url);
 }
 
-const BTN = 'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors disabled:opacity-50';
-const BTN_MUTED = `${BTN} bg-muted/50 text-foreground hover:bg-muted`;
-const BTN_PRIMARY = `${BTN} bg-primary/10 text-primary hover:bg-primary/20`;
-
-export function LiveView({ onBack, aimDevice = null }: Props) {
+export function LiveView({ onBack, aimDevice = null, onOpenSettings }: Props) {
   const {
     status, device, error, reconnecting, latest, totalReceived, receivedAt,
     connect, disconnect, togglePause,
@@ -68,11 +65,9 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
   const [draft, setDraft] = useState<LiveLayout | null>(null);
   const draftOrigin = useRef('');
   const [editingWidgetId, setEditingWidgetId] = useState<string | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [seenChannels, setSeenChannels] = useState<string[]>([]);
   const [seenUnits, setSeenUnits] = useState<Record<string, string>>({});
-  const fileInput = useRef<HTMLInputElement>(null);
 
   const layouts = useLiveLayouts(connectedKind, draft !== null);
   const units = useUnitOverrides();
@@ -108,7 +103,6 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
       : (JSON.parse(JSON.stringify(base)) as LiveLayout);
     draftOrigin.current = JSON.stringify(next);
     setDraft(next);
-    setMenuOpen(false);
   };
 
   const cancelEdit = () => {
@@ -179,232 +173,48 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
-      {/* Header — mirrors SessionBrowser */}
-      <header className="flex items-center gap-3 px-4 h-12 border-b border-border bg-card flex-shrink-0">
-        <button
-          onClick={handleBack}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-          title="Back to session browser"
-        >
-          <ArrowLeft className="w-4 h-4" />
-        </button>
-        <Activity className="w-4 h-4 text-primary" />
-        <h1 className="text-sm font-semibold">Live data</h1>
-
-        <div className="flex-1" />
-
-        {/* Device pill */}
-        {device && (
-          <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="font-mono">AiM {device.model}</span>
-            {device.serial && <span className="text-muted-foreground/50">·</span>}
-            {device.serial && <span className="font-mono">{device.serial}</span>}
-            {device.vehicle && <span className="text-muted-foreground/50">·</span>}
-            {device.vehicle && <span>{device.vehicle}</span>}
-          </div>
-        )}
-
-        {/* Status indicator — always shows something, so the dashboard can stay up offline */}
-        <div className="flex items-center gap-1.5 text-xs">
-          {status === 'streaming' && reconnecting && (
-            <span className="flex items-center gap-1.5 text-amber-500 dark:text-amber-400">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Reconnecting to logger…
-            </span>
-          )}
-          {status === 'streaming' && !reconnecting && (
-            <span className="flex items-center gap-1.5 text-emerald-500 dark:text-emerald-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse" />
-              Streaming
-            </span>
-          )}
-          {status === 'paused' && (
-            <span className="flex items-center gap-1.5 text-amber-500 dark:text-amber-400">
-              <Pause className="w-3 h-3" />
-              Paused
-            </span>
-          )}
-          {status === 'connecting' && (
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Connecting
-            </span>
-          )}
-          {status === 'idle' && (
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60" />
-              Disconnected
-            </span>
-          )}
-          {status === 'error' && (
-            <span className="flex items-center gap-1.5 text-red-500 dark:text-red-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 dark:bg-red-400" />
-              Not connected
-            </span>
-          )}
-        </div>
-      </header>
-
-      {/* Action bar — stream controls, then layout controls (or the editor's) */}
-      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-border/50 bg-card/50">
-        {!isLive && status !== 'connecting' && (
-          <button onClick={connect} className={BTN_PRIMARY}>
-            <Wifi className="w-3.5 h-3.5" />
-            {status === 'error' ? 'Retry' : 'Connect'}
-          </button>
-        )}
-        {isLive && (
-          <>
-            <button onClick={togglePause} className={BTN_MUTED}>
-              {status === 'paused' ? <><Play className="w-3.5 h-3.5" /> Resume</> : <><Pause className="w-3.5 h-3.5" /> Pause</>}
-            </button>
-            <button
-              onClick={disconnect}
-              className={`${BTN} bg-red-500/10 text-red-500 dark:text-red-400 hover:bg-red-500/20`}
-            >
-              <WifiOff className="w-3.5 h-3.5" />
-              Disconnect
-            </button>
-          </>
-        )}
-
-        <div className="w-px h-5 bg-border mx-1 hidden sm:block" />
-
-        {draft ? (
-          <>
-            <input
-              value={draft.name}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              className="px-2 py-1.5 w-48 bg-background border border-border rounded-md text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              placeholder="Layout name"
-              aria-label="Layout name"
-            />
-            <select
-              value={draft.vehicle}
-              onChange={(e) => setDraft({ ...draft, vehicle: e.target.value as VehicleKind })}
-              className="px-2 py-1.5 bg-background border border-border rounded-md text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              title="Which car this layout is for — used to auto-pick it on connect"
-              aria-label="Vehicle"
-            >
-              <option value="ev">EV</option>
-              <option value="ic">IC</option>
-            </select>
-            <button onClick={addWidget} className={BTN_PRIMARY}>
-              <Plus className="w-3.5 h-3.5" /> Add widget
-            </button>
-            <button onClick={cancelEdit} className={BTN_MUTED}>
-              <X className="w-3.5 h-3.5" /> Cancel
-            </button>
-            <button onClick={saveDraft} className={`${BTN} bg-primary text-primary-foreground hover:bg-primary/90`}>
-              <Save className="w-3.5 h-3.5" /> Save
-            </button>
-          </>
-        ) : (
-          <>
-            <select
-              value={layouts.current.id}
-              onChange={(e) => layouts.select(e.target.value)}
-              disabled={!layouts.loaded}
-              className="px-2 py-1.5 max-w-[14rem] bg-background border border-border rounded-md text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              aria-label="Dashboard layout"
-            >
-              {(['ev', 'ic'] as const).map((kind) => (
-                <optgroup key={kind} label={VEHICLE_LABEL[kind]}>
-                  {layouts.layouts.filter((l) => l.vehicle === kind).map((l) => (
-                    <option key={l.id} value={l.id}>{l.name}{l.builtIn ? ' (built-in)' : ''}</option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            <button
-              onClick={layouts.togglePin}
-              className={`p-1.5 rounded-md transition-colors ${
-                layouts.pinned ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-              title={layouts.pinned
-                ? 'Pinned: connecting to a car keeps this layout. Click to unpin.'
-                : "Pin this layout so connecting to a car doesn't switch away from it"}
-            >
-              {layouts.pinned ? <Pin className="w-3.5 h-3.5" /> : <PinOff className="w-3.5 h-3.5" />}
-            </button>
-            <button onClick={startEdit} className={BTN_MUTED} title={layouts.current.builtIn ? 'Built-in layouts are edited as a copy' : 'Edit layout'}>
-              <Pencil className="w-3.5 h-3.5" /> Edit
-            </button>
-            <div className="relative">
-              <button
-                onClick={() => setMenuOpen((o) => !o)}
-                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                title="More layout actions"
-                aria-haspopup="menu"
-                aria-expanded={menuOpen}
-              >
-                <MoreHorizontal className="w-4 h-4" />
-              </button>
-              {menuOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
-                  <div role="menu" className="absolute left-0 top-full mt-1 z-50 w-44 py-1 rounded-md border border-border bg-card shadow-xl text-xs">
-                    <MenuItem icon={Copy} label="Duplicate" onClick={() => { setMenuOpen(false); layouts.duplicate(layouts.current.id); }} />
-                    <MenuItem icon={Download} label="Export to file" onClick={() => { setMenuOpen(false); downloadLayout(layouts.current); }} />
-                    <MenuItem icon={Upload} label="Import from file…" onClick={() => { setMenuOpen(false); fileInput.current?.click(); }} />
-                    {!layouts.current.builtIn && (
-                      <MenuItem
-                        icon={Trash2}
-                        label="Delete"
-                        danger
-                        onClick={() => {
-                          setMenuOpen(false);
-                          if (window.confirm(`Delete the layout "${layouts.current.name}"?`)) layouts.remove(layouts.current.id);
-                        }}
-                      />
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-            <input
-              ref={fileInput}
-              type="file"
-              accept=".json,application/json"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (file) importFile(file);
-              }}
-            />
-          </>
-        )}
-
-        <div className="flex-1" />
-
-        {totalReceived > 0 && (
-          <span className="text-xs text-muted-foreground tabular" title="Total snapshots received this session">
-            Received {totalReceived}
-          </span>
-        )}
-      </div>
+      <LiveHeader
+        onBack={handleBack}
+        layouts={layouts}
+        draft={draft}
+        onDraftChange={setDraft}
+        status={status}
+        device={device}
+        reconnecting={reconnecting}
+        totalReceived={totalReceived}
+        onConnect={connect}
+        onDisconnect={disconnect}
+        onTogglePause={togglePause}
+        onEdit={startEdit}
+        onCancel={cancelEdit}
+        onDone={saveDraft}
+        onAddWidget={addWidget}
+        onExport={() => downloadLayout(layouts.current)}
+        onDelete={() => {
+          if (window.confirm(`Delete the layout "${layouts.current.name}"?`)) layouts.remove(layouts.current.id);
+        }}
+        onImportFile={importFile}
+      />
 
       <main className="flex-1 overflow-auto">
-        {/* Banners — slim, above the grid, never instead of it */}
-        <div className="max-w-[1600px] mx-auto px-3 pt-3 space-y-2 empty:hidden">
+        {/* Banners — slim full-width strips above the grid, never instead of it */}
+        <div className="empty:hidden">
           {status === 'error' && error && (
             <Banner tone="red" icon={<AlertCircle className="w-3.5 h-3.5" />}>
               <span className="font-medium">Connection error.</span> {error}
-            </Banner>
-          )}
-          {status === 'connecting' && !error && (
-            <Banner tone="muted" icon={<Loader2 className="w-3.5 h-3.5 animate-spin" />}>
-              {device
-                ? `Connecting to ${device.vehicle || device.model || 'AiM'} at ${device.ip}…`
-                : 'Connecting to the AiM logger…'}
+              {isMac() && ' Check System Settings → Privacy & Security → Local Network for QuickScope.'}
             </Banner>
           )}
           {status === 'idle' && (
-            <Banner tone="muted" icon={<WifiOff className="w-3.5 h-3.5" />}>
+            <Banner
+              tone="muted"
+              icon={<WifiOff className="w-3.5 h-3.5" />}
+              action={<Button variant="plain" size="sm" onClick={onOpenSettings}>Network Settings…</Button>}
+            >
               {receivedAt !== null && latest
                 ? <>Not connected — showing last values ({timeAgo(now - receivedAt)}).</>
                 : <>Not connected — previewing the layout. Connect to the car's AiM WiFi to see live values.</>}
+              {' You can still edit this layout.'}
             </Banner>
           )}
           {mismatch && !draft && connectedKind && (
@@ -467,43 +277,29 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
   );
 }
 
-function MenuItem({ icon: Icon, label, onClick, danger }: {
-  icon: typeof Copy;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      role="menuitem"
-      onClick={onClick}
-      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-        danger ? 'text-red-500 hover:bg-red-500/10' : 'text-foreground hover:bg-muted/60'
-      }`}
-    >
-      <Icon className="w-3.5 h-3.5" />
-      {label}
-    </button>
-  );
+function isMac(): boolean {
+  return typeof navigator !== 'undefined' && typeof navigator.platform === 'string' && navigator.platform.startsWith('Mac');
 }
 
 const BANNER_TONE = {
-  red: 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400',
-  amber: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
-  primary: 'border-primary/30 bg-primary/10 text-primary',
-  muted: 'border-border bg-card/60 text-muted-foreground',
+  red: 'bg-card text-danger',
+  amber: 'bg-card text-warning',
+  primary: 'bg-primary/10 text-primary dark:text-[#8aa0ff]',
+  muted: 'bg-card text-muted-foreground',
 } as const;
 
-function Banner({ tone, icon, children, onDismiss }: {
+function Banner({ tone, icon, children, onDismiss, action }: {
   tone: keyof typeof BANNER_TONE;
   icon: ReactNode;
   children: ReactNode;
   onDismiss?: () => void;
+  action?: ReactNode;
 }) {
   return (
-    <div className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs ${BANNER_TONE[tone]}`}>
+    <div className={`flex items-center gap-2 border-b border-separator px-4 py-1.5 text-xs ${BANNER_TONE[tone]}`}>
       <span className="flex-shrink-0">{icon}</span>
       <div className="flex-1 min-w-0">{children}</div>
+      {action}
       {onDismiss && (
         <button onClick={onDismiss} className="p-0.5 opacity-70 hover:opacity-100" title="Dismiss">
           <X className="w-3 h-3" />

@@ -355,7 +355,12 @@ export default function App() {
   if (view === 'live') {
     return (
       <div className="flex flex-col h-full bg-background overflow-hidden">
-        <LiveView onBack={() => setView('browser')} aimDevice={liveAimDevice} />
+        <LiveView
+          onBack={() => setView('browser')}
+          aimDevice={liveAimDevice}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+        {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
       </div>
     );
   }

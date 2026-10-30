@@ -202,8 +202,11 @@
   border-radius: var(--radius);
 }
 .live-grid-editing .react-grid-item > section {
-  outline: 1px dashed hsl(var(--primary) / 0.5);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 1.5px hsl(var(--primary)), 0 0 0 5.5px hsl(var(--primary) / 0.15);
+}
+/* Values from before the disconnect read as secondary, not live. */
+.live-stale .tabular {
+  color: hsl(var(--label-3));
 }
 .react-grid-item > .react-resizable-handle::after {
   border-color: hsl(var(--muted-foreground));

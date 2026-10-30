@@ -127,8 +127,8 @@ describe('EV default layout', () => {
 
   it('flags active faults in red and healthy ones in green', () => {
     renderDashboard(EV_DEFAULT_LAYOUT, snap);
-    expect(screen.getByTitle(/^RTD_Fault = 1 /).className).toContain('red');
-    expect(screen.getByTitle(/^BSE_Fault = 0 /).className).toContain('emerald');
+    expect(screen.getByTitle(/^RTD_Fault = 1 /).className).toContain('danger');
+    expect(screen.getByTitle(/^BSE_Fault = 0 /).className).toContain('success');
   });
 
   it('lists channels no widget shows under "Other channels"', () => {
@@ -162,8 +162,8 @@ describe('IC default layout', () => {
     expect(screen.getByText('3')).toBeTruthy();
     expect(screen.getByText('0.98')).toBeTruthy();
     expect(screen.getByText('85.3')).toBeTruthy();
-    expect(screen.getByTitle(/^S8_revCutActive = 1 /).className).toContain('red');
-    expect(screen.getByTitle(/^S8_engineEnable = 1 /).className).toContain('emerald');
+    expect(screen.getByTitle(/^S8_revCutActive = 1 /).className).toContain('danger');
+    expect(screen.getByTitle(/^S8_engineEnable = 1 /).className).toContain('success');
     expect(screen.getByTitle('Other_X')).toBeTruthy();
   });
 
@@ -171,6 +171,29 @@ describe('IC default layout', () => {
     renderDashboard(IC_DEFAULT_LAYOUT, { ts: 1000, subsystem: 'kkk', raw: '', channels: { LateralAcc: 0.5 } });
     expect(within(panel('Engine · ECU')).getByText('no data')).toBeTruthy();
     expect(screen.getByText(/ECU CAN feed/)).toBeTruthy();
+  });
+});
+
+describe('stat tone styling', () => {
+  const layout = (warn?: number): LiveLayout => ({
+    id: 't', name: 'T', vehicle: 'ev',
+    widgets: [{ id: 'w', type: 'stats', title: 'Temps', style: 'tile', channels: [{ name: 'Pack_Temp', label: 'Pack Temp', precision: 1, warn }] }],
+    grid: [{ i: 'w', x: 0, y: 0, w: 4, h: 6 }],
+  } as LiveLayout);
+  const snap: Snapshot = { ts: 1, subsystem: 'Syst', channels: { Pack_Temp: 60 }, units: {} } as Snapshot;
+
+  /** The <p> holding the tile's value (text node + unit span). */
+  const valueEl = () => screen.getByText((_, el) => el?.tagName === 'P' && el.firstChild?.textContent === '60.0');
+
+  it('tints a tile at or above its warn threshold', () => {
+    renderDashboard(layout(50), snap);
+    const tileEl = valueEl().parentElement as HTMLElement;
+    expect(tileEl.className).toContain('bg-warning');
+  });
+
+  it('renders primary-tone values in text-foreground', () => {
+    renderDashboard(layout(), snap);
+    expect(valueEl().className).toContain('text-foreground');
   });
 });
 
@@ -205,19 +228,21 @@ describe('LiveView', () => {
   const ws = () => FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
 
   it('shows the connecting state with the discovered device', () => {
-    render(<LiveView onBack={() => {}} aimDevice={{ ip: '10.0.0.1', ssid: '', device_name: '', vehicle: 'UConn-EV', model: 'EVO5' }} />);
+    render(<LiveView onOpenSettings={() => {}} onBack={() => {}} aimDevice={{ ip: '10.0.0.1', ssid: '', device_name: '', vehicle: 'UConn-EV', model: 'EVO5' }} />);
     expect(screen.getByText('Connecting')).toBeTruthy();
-    expect(screen.getByText('Connecting to UConn-EV at 10.0.0.1…')).toBeTruthy();
+    // The header shows the connection; there is no separate connecting banner.
+    expect(screen.queryByText('Connecting to UConn-EV at 10.0.0.1…')).toBeNull();
+    expect(screen.getByText('EVO5 · UConn-EV')).toBeTruthy();
   });
 
   it('renders the EV dashboard while streaming and supports pause/resume', () => {
-    render(<LiveView onBack={() => {}} />);
+    render(<LiveView onOpenSettings={() => {}} onBack={() => {}} />);
     ws().receive({ type: 'connected', device: { ip: '10.0.0.1', model: 'EVO5', serial: '740', vehicle: 'UConn-EV' } });
     ws().receive({ type: 'snapshot', ts: 1000, subsystem: 'Syst', channels: { Pack_Voltage: 380 } });
 
     expect(screen.getByText('Streaming')).toBeTruthy();
-    expect(screen.getByText('AiM EVO5')).toBeTruthy();
-    expect(screen.getByText('Received 1')).toBeTruthy();
+    expect(screen.getByText('EVO5 · UConn-EV')).toBeTruthy();
+    expect(screen.getByTitle('Received 1')).toBeTruthy();
     expect(screen.getByText(EV_DEFAULT_LAYOUT.widgets[0].title!)).toBeTruthy();
 
     fireEvent.click(screen.getByText('Pause'));
@@ -227,21 +252,21 @@ describe('LiveView', () => {
   });
 
   it('switches to the IC dashboard for an IC car', async () => {
-    render(<LiveView onBack={() => {}} />);
+    render(<LiveView onOpenSettings={() => {}} onBack={() => {}} />);
     ws().receive({ type: 'connected', device: { ip: '10.0.0.1', model: 'EVO5', serial: '1', vehicle: 'UConn-IC' } });
     // The auto-switch waits for the saved layouts to load.
     expect(await screen.findByText('Engine · ECU')).toBeTruthy();
   });
 
   it('shows the reconnecting banner during a device drop', () => {
-    render(<LiveView onBack={() => {}} />);
+    render(<LiveView onOpenSettings={() => {}} onBack={() => {}} />);
     ws().receive({ type: 'connected', device: { ip: '10.0.0.1', model: 'EVO5', serial: '1', vehicle: 'EV' } });
     ws().receive({ type: 'status', state: 'reconnecting' });
     expect(screen.getByText('Reconnecting to logger…')).toBeTruthy();
   });
 
   it('shows connection errors with a Retry button that reconnects', () => {
-    render(<LiveView onBack={() => {}} />);
+    render(<LiveView onOpenSettings={() => {}} onBack={() => {}} />);
     ws().receive({ type: 'error', message: 'device refused' });
     expect(screen.getByText('Connection error.')).toBeTruthy();
     expect(screen.getByText(/device refused/)).toBeTruthy();
@@ -251,7 +276,7 @@ describe('LiveView', () => {
   });
 
   it('disconnect stops the stream and shows the stopped state', () => {
-    render(<LiveView onBack={() => {}} />);
+    render(<LiveView onOpenSettings={() => {}} onBack={() => {}} />);
     const first = ws();
     first.receive({ type: 'connected', device: { ip: '10.0.0.1', model: 'EVO5', serial: '1', vehicle: 'EV' } });
     fireEvent.click(screen.getByText('Disconnect'));
@@ -262,8 +287,8 @@ describe('LiveView', () => {
 
   it('calls onBack', () => {
     const onBack = vi.fn();
-    render(<LiveView onBack={onBack} />);
-    fireEvent.click(screen.getByTitle('Back to session browser'));
+    render(<LiveView onOpenSettings={() => {}} onBack={onBack} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
     expect(onBack).toHaveBeenCalled();
   });
 });

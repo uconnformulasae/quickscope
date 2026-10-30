@@ -104,7 +104,7 @@ export function LiveDashboard({
     </>
   );
 
-  const dim = stale && !editing ? 'opacity-60' : '';
+  const dim = stale && !editing ? 'live-stale' : '';
 
   if (!wide) {
     const pos = new Map(layout.grid.map((g) => [g.i, g]));

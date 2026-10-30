@@ -14,28 +14,32 @@ export function directionLabel(v: number | undefined): string {
 export type StatTone = 'primary' | 'emerald' | 'amber' | 'red' | 'muted';
 
 const TEXT_TONE: Record<StatTone, string> = {
-  primary: 'text-primary',
-  emerald: 'text-emerald-600 dark:text-emerald-400',
-  amber: 'text-amber-600 dark:text-amber-400',
-  red: 'text-red-500 dark:text-red-400',
-  muted: 'text-muted-foreground',
+  primary: 'text-foreground',
+  emerald: 'text-success',
+  amber: 'text-warning',
+  red: 'text-danger',
+  muted: 'text-foreground',
 };
 
-const BORDER_TONE: Record<StatTone, string> = {
-  primary: 'border-primary/40',
-  emerald: 'border-emerald-500/40',
-  amber: 'border-amber-500/60',
-  red: 'border-red-500/60',
-  muted: 'border-muted-foreground/30',
+// Only warning and alarm states tint the tile.
+const TILE_TONE: Record<StatTone, string> = {
+  primary: '',
+  emerald: '',
+  amber: 'bg-warning/10',
+  red: 'bg-danger/10',
+  muted: '',
 };
 
 const BAR_TONE: Record<StatTone, string> = {
   primary: 'bg-primary',
-  emerald: 'bg-emerald-500',
-  amber: 'bg-amber-500',
-  red: 'bg-red-500',
-  muted: 'bg-muted-foreground/50',
+  emerald: 'bg-success',
+  amber: 'bg-warning',
+  red: 'bg-danger',
+  muted: 'bg-label-4',
 };
+
+const TILE_BASE = 'rounded-[9px] bg-background dark:bg-card';
+const tile = (tone: StatTone | undefined) => (tone && TILE_TONE[tone] ? `rounded-[9px] ${TILE_TONE[tone]}` : TILE_BASE);
 
 export const CLICKABLE =
   'cursor-pointer select-none transition-shadow hover:ring-1 hover:ring-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60';
@@ -58,7 +62,7 @@ export function clickableProps(onClick: (() => void) | undefined): React.HTMLAtt
 
 /** A unit the viewer switched away from the layout's is tinted so a stray tap is noticeable. */
 export function unitTone(changed: boolean | undefined): string {
-  return changed ? 'text-primary' : 'text-muted-foreground';
+  return changed ? 'text-primary' : 'text-label-3';
 }
 
 interface StatProps {
@@ -87,14 +91,12 @@ export function Panel({
 }) {
   return (
     <section
-      className={`flex flex-col rounded-lg bg-[hsl(225,30%,95%)] dark:bg-card border ${
-        tone === 'primary'
-          ? 'border-primary/30'
-          : 'border-[hsl(225,25%,85%)] dark:border-border/50'
+      className={`live-panel flex flex-col rounded-[13px] bg-popover ring-[0.5px] ring-separator dark:ring-0 ${
+        tone === 'primary' ? 'ring-primary/40' : ''
       } p-3 ${className}`}
     >
       <header className="flex items-center justify-between gap-2 mb-2.5 flex-shrink-0 min-w-0">
-        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground truncate">{title}</h3>
+        <h3 className="font-display text-[13px] font-semibold text-foreground truncate">{title}</h3>
         {rightSlot}
       </header>
       <div className="flex-1 min-h-0 overflow-auto">{children}</div>
@@ -106,10 +108,10 @@ export function BigStat({ label, value, unit, tone, unitChanged, onClick }: Stat
   return (
     <div
       {...clickableProps(onClick)}
-      className={`rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-3 py-2 ${onClick ? CLICKABLE : ''}`}
+      className={`${tile(tone)} px-3 py-2 ${onClick ? CLICKABLE : ''}`}
     >
-      <p className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{label}</p>
-      <p className={`text-2xl font-bold tabular mt-0.5 ${TEXT_TONE[tone ?? 'primary']}`}>
+      <p className="text-[11px] font-medium text-muted-foreground truncate">{label}</p>
+      <p className={`font-display text-2xl font-medium tabular mt-0.5 ${TEXT_TONE[tone ?? 'primary']}`}>
         {value}
         <span className={`text-xs font-normal ml-1 ${unitTone(unitChanged)}`}>{unit}</span>
       </p>
@@ -121,10 +123,10 @@ export function CoolStat({ label, value, unit, tone, unitChanged, onClick }: Sta
   return (
     <div
       {...clickableProps(onClick)}
-      className={`rounded-md border ${BORDER_TONE[tone ?? 'muted']} bg-background/60 dark:bg-background/30 px-2.5 py-2 ${onClick ? CLICKABLE : ''}`}
+      className={`${tile(tone)} px-2.5 py-2 ${onClick ? CLICKABLE : ''}`}
     >
-      <p className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">{label}</p>
-      <p className="text-base font-bold tabular mt-0.5 text-foreground">
+      <p className="text-[11px] font-medium text-muted-foreground truncate">{label}</p>
+      <p className={`font-display text-base font-medium tabular mt-0.5 ${TEXT_TONE[tone ?? 'muted']}`}>
         {value}
         <span className={`text-[10px] font-normal ml-1 ${unitTone(unitChanged)}`}>{unit}</span>
       </p>
@@ -136,10 +138,10 @@ export function VehicleStat({ label, value, unit, tone, unitChanged, onClick }: 
   return (
     <div
       {...clickableProps(onClick)}
-      className={`rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5 text-center ${onClick ? CLICKABLE : ''}`}
+      className={`${tile(tone)} px-2 py-1.5 text-center ${onClick ? CLICKABLE : ''}`}
     >
-      <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={label}>{label}</p>
-      <p className={`text-sm font-bold tabular mt-0.5 ${tone && tone !== 'muted' ? TEXT_TONE[tone] : 'text-foreground'}`}>
+      <p className="text-[11px] font-medium text-muted-foreground truncate" title={label}>{label}</p>
+      <p className={`font-display text-sm font-medium tabular mt-0.5 ${TEXT_TONE[tone ?? 'muted']}`}>
         {value}
         {unit && <span className={`text-[9px] font-normal ml-0.5 ${unitTone(unitChanged)}`}>{unit}</span>}
       </p>
@@ -159,14 +161,14 @@ export function BarRow({
 }: StatProps & { fraction: number | undefined }) {
   return (
     <div {...clickableProps(onClick)} className={onClick ? `rounded-sm ${CLICKABLE}` : undefined}>
-      <div className="flex items-baseline justify-between text-[10px] mb-1 gap-2">
+      <div className="flex items-baseline justify-between text-[11px] mb-1 gap-2">
         <span className="font-medium text-muted-foreground truncate">{label}</span>
         <span className={`tabular font-semibold ${TEXT_TONE[tone ?? 'primary']}`}>
           {value}
           {unit && <span className={`font-normal ml-0.5 ${unitTone(unitChanged)}`}>{unit}</span>}
         </span>
       </div>
-      <div className="h-1.5 bg-muted/50 rounded-full overflow-hidden">
+      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
         {fraction !== undefined && (
           <div className={`h-full rounded-full ${BAR_TONE[tone ?? 'primary']}`} style={{ width: `${fraction * 100}%` }} />
         )}
@@ -196,7 +198,7 @@ export function BoolPill({
           !hasValue
             ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
             : on
-            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
+            ? 'bg-success/10 border-success/30 text-success'
             : 'bg-muted/40 border-border/40 text-muted-foreground'
         }`}
         title={`${name} = ${hasValue ? value : '—'} (1 = on, 0 = off)`}
@@ -212,14 +214,14 @@ export function BoolPill({
         !hasValue
           ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
           : on
-          ? 'bg-red-500/10 border-red-500/40 text-red-600 dark:text-red-400'
-          : 'bg-emerald-500/5 border-emerald-500/20 text-muted-foreground'
+          ? 'bg-danger/10 border-danger/40 text-danger'
+          : 'bg-success/5 border-success/20 text-muted-foreground'
       }`}
       title={`${name} = ${hasValue ? value : '—'} (1 = active fault, 0 = healthy)`}
     >
       <span
         className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-          !hasValue ? 'bg-muted-foreground/30' : on ? 'bg-red-500 animate-pulse' : 'bg-emerald-500/60'
+          !hasValue ? 'bg-muted-foreground/30' : on ? 'bg-danger animate-pulse' : 'bg-success/60'
         }`}
       />
       <span className="truncate">{label}</span>

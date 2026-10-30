@@ -146,7 +146,7 @@ export function WidgetRenderer({
   const noData = valueWidget && latest !== null && widget.channels.length > 0
     && widget.channels.every((ref) => read(ref) === undefined);
   const rightSlot = noData ? (
-    <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0" title="The logger reports no value for any channel in this widget">
+    <span className="text-[10px] text-warning shrink-0" title="The logger reports no value for any channel in this widget">
       no data
     </span>
   ) : undefined;
@@ -222,9 +222,9 @@ export function WidgetRenderer({
               <div
                 key={name}
                 {...clickableProps(onClick)}
-                className={`rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5 ${onClick ? CLICKABLE : ''}`}
+                className={`rounded-[9px] bg-background dark:bg-card px-2 py-1.5 ${onClick ? CLICKABLE : ''}`}
               >
-                <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={name}>{name}</p>
+                <p className="text-[11px] font-medium text-muted-foreground truncate" title={name}>{name}</p>
                 <p className="text-sm font-semibold tabular mt-0.5 text-foreground">
                   {displayValue(ref, val)}
                   {unit(ref) && <span className={`text-[9px] font-normal ml-1 ${unitTone(unitChanged)}`}>{unit(ref)}</span>}
