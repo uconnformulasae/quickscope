@@ -50,7 +50,8 @@ function renderBrowser(onSessionLoaded = vi.fn()) {
 describe('SessionBrowser rename', () => {
   it('renames once when Enter is followed by the input blurring', async () => {
     renderBrowser();
-    fireEvent.click(await screen.findByTitle('Rename'));
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
     const input = screen.getByDisplayValue('run1');
     fireEvent.change(input, { target: { value: 'Heat2' } });
     // In Chrome, removing the focused input fires blur before React has
@@ -66,7 +67,8 @@ describe('SessionBrowser rename', () => {
 
   it('does not rename on Escape', async () => {
     renderBrowser();
-    fireEvent.click(await screen.findByTitle('Rename'));
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
     const input = screen.getByDisplayValue('run1');
     fireEvent.change(input, { target: { value: 'Nope' } });
     act(() => {

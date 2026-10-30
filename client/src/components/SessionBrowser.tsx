@@ -1,19 +1,19 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   listSessions, loadSession, deleteSession,
-  renameSession, getAimStatus, uploadFile, fetchUploadLog, fetchAimPullLog,
-  type LocalSession, type SessionInfo, type AimStatus, type UploadLogEntry,
-  type AimPullLogEntry,
+  renameSession, getAimStatus, uploadFile,
+  type LocalSession, type SessionInfo, type AimStatus,
 } from '../lib/api';
-import {
-  RefreshCw, Wifi, WifiOff, Upload, Trash2,
-  Download, Loader2, Radio,
-  ChevronRight, Search, Settings, Pencil, Activity, FileClock,
-} from 'lucide-react';
+import { Loader2, MoreHorizontal, Plus, Search, Upload, X, FileClock, Settings } from 'lucide-react';
 import { AimSessionPicker } from './AimSessionPicker';
 import { QuickScopeLogo } from './QuickScopeLogo';
 import { ThemeToggle } from './ThemeToggle';
-import { GPSThumbnail } from './GPSThumbnail';
+import { Button } from './ui/Button';
+import { MenuButton } from './ui/Menu';
+import { AimStatusChip } from './sessions/AimStatusChip';
+import { ActivitySheet, formatBytes, formatRate } from './sessions/ActivitySheet';
+import { SessionRow } from './sessions/SessionRow';
+import { groupSessionsByDate } from '../lib/session-groups';
 
 interface SessionBrowserProps {
   onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string, source: LocalSession['source']) => void;
@@ -23,56 +23,10 @@ interface SessionBrowserProps {
   onToggleTheme: () => void;
 }
 
-function formatDuration(seconds: number): string {
-  if (!seconds || seconds <= 0) return '--:--';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function formatRate(bytesPerSec: number): string {
-  if (bytesPerSec < 1) return '0 B/s';
-  if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
-  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-  return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
-}
-
-function formatRelativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  const sec = Math.floor((now - then) / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
-  return new Date(iso).toLocaleString();
-}
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '';
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-    + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-}
-
 function pathStem(filename: string): string {
   const dot = filename.lastIndexOf('.');
   return dot > 0 ? filename.slice(0, dot) : filename;
 }
-
-const SOURCE_CONFIG = {
-  manual_upload: { icon: Upload, label: 'Uploaded' },
-  aim_device: { icon: Radio, label: 'AiM' },
-} as const;
 
 export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, theme, onToggleTheme }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<LocalSession[]>([]);
@@ -88,12 +42,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
   const [uploadProgress, setUploadProgress] = useState<{
     loaded: number; total: number; ratePerSec: number;
   } | null>(null);
-  const [uploadLog, setUploadLog] = useState<UploadLogEntry[]>([]);
-  const [aimPullLog, setAimPullLog] = useState<AimPullLogEntry[]>([]);
   const [showActivityLog, setShowActivityLog] = useState(false);
-  const [activityTab, setActivityTab] = useState<'uploads' | 'aim'>('uploads');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const renameInputRef = useRef<HTMLInputElement>(null);
   // Enter commits and then the input's blur fires too; only the first counts.
   const renameDoneRef = useRef(false);
 
@@ -147,8 +97,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     }
   }, [onSessionLoaded]);
 
-  const handleDelete = useCallback(async (e: React.MouseEvent, sessionId: string) => {
-    e.stopPropagation();
+  const handleDelete = useCallback(async (sessionId: string) => {
     if (!window.confirm('Delete this session from local storage?')) return;
     try {
       await deleteSession(sessionId);
@@ -158,12 +107,15 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     }
   }, [refreshSessions]);
 
-  const startRename = useCallback((e: React.MouseEvent, session: LocalSession) => {
-    e.stopPropagation();
+  const startRename = useCallback((session: LocalSession) => {
     renameDoneRef.current = false;
     setRenamingId(session.id);
     setRenameValue(session.aim_session_id || pathStem(session.filename));
-    setTimeout(() => renameInputRef.current?.select(), 0);
+  }, []);
+
+  const cancelRename = useCallback(() => {
+    renameDoneRef.current = true;
+    setRenamingId(null);
   }, []);
 
   const submitRename = useCallback(async () => {
@@ -221,454 +173,163 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     if (file) handleFileUpload(file);
   }, [handleFileUpload]);
 
-  const sortedSessions = useMemo(() => {
-    const filtered = sessions.filter(s => {
-      if (!search) return true;
-      const q = search.toLowerCase();
-      return (
-        s.filename.toLowerCase().includes(q) ||
-        s.track_name?.toLowerCase().includes(q) ||
-        s.driver_name?.toLowerCase().includes(q) ||
-        s.vehicle_name?.toLowerCase().includes(q)
-      );
-    });
-    return filtered.sort((a, b) => {
-      const da = a.recorded_at || a.created_at;
-      const db = b.recorded_at || b.created_at;
-      return db.localeCompare(da);
-    });
+  const filteredSessions = useMemo(() => {
+    if (!search) return sessions;
+    const q = search.toLowerCase();
+    return sessions.filter(s =>
+      s.filename.toLowerCase().includes(q) ||
+      s.track_name?.toLowerCase().includes(q) ||
+      s.driver_name?.toLowerCase().includes(q) ||
+      s.vehicle_name?.toLowerCase().includes(q)
+    );
   }, [sessions, search]);
+
+  const groups = useMemo(() => groupSessionsByDate(filteredSessions, new Date()), [filteredSessions]);
 
   return (
     <div
-      className="flex flex-col h-full bg-background"
+      className="relative flex flex-col h-full bg-background"
       onDragOver={e => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
     >
       {/* Header */}
-      <header className="flex items-center gap-3 px-4 h-12 border-b border-border bg-card flex-shrink-0">
+      <header className="flex items-center gap-3 px-4 h-[52px] border-b border-separator bg-card flex-shrink-0">
         <QuickScopeLogo />
         <div className="flex-1" />
-
-        {/* Connection indicators */}
-        <div className="flex items-center gap-3 text-xs">
-          {aimStatus?.connected ? (
-            <div className="flex items-center gap-1.5 text-emerald-500 dark:text-emerald-400" title={aimStatus.device?.device_name || aimStatus.device?.ip}>
-              <Wifi className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">
-                AiM {aimStatus.device?.device_name ? `(${aimStatus.device.device_name})` : 'Connected'}
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 text-muted-foreground/50">
-              <WifiOff className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">AiM</span>
-            </div>
-          )}
-        </div>
-
+        <AimStatusChip
+          status={aimStatus}
+          onPull={() => setAimPickerOpen(true)}
+          onOpenLive={() => onOpenLive(aimStatus?.connected ? aimStatus.device : null)}
+          onRecheck={checkAimStatus}
+          onOpenSettings={onOpenSettings}
+        />
+        <MenuButton
+          label="More"
+          align="right"
+          icon={<MoreHorizontal size={16} aria-hidden="true" />}
+          items={[
+            { label: 'Activity', icon: FileClock, onSelect: () => setShowActivityLog(true) },
+            { label: 'Settings…', icon: Settings, onSelect: onOpenSettings },
+          ]}
+        />
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-
-        <button
-          onClick={onOpenSettings}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-          title="Settings"
-        >
-          <Settings className="w-4 h-4" />
-        </button>
       </header>
 
-      {/* Action bar */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border/50 bg-card/50">
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-        >
-          <Upload className="w-3.5 h-3.5" />
-          Upload File
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".xrk,.xrz,.XRK,.XRZ"
-          className="hidden"
-          onChange={e => {
-            const file = e.target.files?.[0];
-            if (file) handleFileUpload(file);
-            e.target.value = '';
-          }}
-        />
-
-        <button
-          onClick={() => setAimPickerOpen(true)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            aimStatus?.connected
-              ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20'
-              : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-          title={aimStatus?.connected ? 'Download sessions from AiM device' : 'Pull from AiM (device not currently reachable via WiFi)'}
-        >
-          <Download className="w-3.5 h-3.5" />
-          Pull from AiM
-        </button>
-
-        {/*
-         * Live opens the dashboard and starts the live TCP session immediately
-         * (same idea as Race Studio’s first screen after selecting the logger).
-         */}
-        <button
-          onClick={() => onOpenLive(aimStatus?.connected ? aimStatus.device : null)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            aimStatus?.connected
-              ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20'
-              : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-          title={aimStatus?.connected ? 'Stream live data from the AiM device' : 'Open live view (offline preview: AiM device not reachable)'}
-        >
-          <Activity className="w-3.5 h-3.5" />
-          Live
-        </button>
-
-        <button
-          onClick={async () => {
-            if (!showActivityLog) {
-              try {
-                const [uploads, aimPulls] = await Promise.all([
-                  fetchUploadLog(),
-                  fetchAimPullLog(),
-                ]);
-                setUploadLog(uploads);
-                setAimPullLog(aimPulls);
-              } catch {
-                setUploadLog([]);
-                setAimPullLog([]);
-              }
-            }
-            setShowActivityLog(v => !v);
-          }}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            showActivityLog
-              ? 'bg-primary/20 text-primary'
-              : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-          title="Recent uploads and AiM pulls (server-side log)"
-        >
-          <FileClock className="w-3.5 h-3.5" />
-          Activity
-        </button>
-
-        <div className="flex-1" />
-
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/50" />
-          <input
-            type="text"
-            placeholder="Search sessions..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="pl-7 pr-3 py-1.5 w-48 rounded-md text-xs bg-muted/30 border border-border/50 text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50"
-          />
-        </div>
-      </div>
-
-      {/* Error banner */}
-      {error && (
-        <div className="mx-4 mt-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20">
-          {error}
-          <button onClick={() => setError(null)} className="ml-2 underline">dismiss</button>
-        </div>
-      )}
-
-      {/* Upload progress banner */}
-      {uploadProgress && (
-        <div className="mx-4 mt-2 px-3 py-2 rounded-md text-xs bg-primary/10 border border-primary/20">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-primary font-medium flex items-center gap-1.5">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Uploading {formatBytes(uploadProgress.loaded)} / {formatBytes(uploadProgress.total)}
-            </span>
-            <span className="text-muted-foreground tabular">{formatRate(uploadProgress.ratePerSec)}</span>
-          </div>
-          <div className="h-1 bg-muted/50 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-primary transition-[width] duration-150"
-              style={{ width: `${Math.max(2, (uploadProgress.loaded / Math.max(1, uploadProgress.total)) * 100)}%` }}
+      {/* Scroll body */}
+      <div id="session-list-scroll" className="flex-1 overflow-y-auto px-10 py-8">
+        <div className="mx-auto max-w-[1080px]">
+          <div className="flex items-baseline gap-3">
+            <h1 className="m-0 font-display text-[28px] font-bold tracking-[-0.022em] text-foreground">Sessions</h1>
+            {!sessionsLoading && (
+              <span aria-label={`${sessions.length} session${sessions.length !== 1 ? 's' : ''}`} className="text-[17px] text-label-3">
+                {sessions.length}
+              </span>
+            )}
+            <div className="flex-1" />
+            <div className="relative self-center">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-label-3" aria-hidden="true" />
+              <input
+                type="text"
+                aria-label="Search sessions"
+                placeholder="Search"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="h-8 w-[250px] rounded-[7px] bg-muted pl-8 pr-3 text-[13px] text-foreground placeholder:text-label-3 outline-none focus-visible:outline-2 focus-visible:outline-primary"
+              />
+            </div>
+            <Button variant="primary" size="lg" className="self-center" onClick={() => fileInputRef.current?.click()}>
+              <Plus size={14} aria-hidden="true" />
+              Import
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xrk,.xrz,.XRK,.XRZ"
+              className="hidden"
+              onChange={e => {
+                const file = e.target.files?.[0];
+                if (file) handleFileUpload(file);
+                e.target.value = '';
+              }}
             />
           </div>
-        </div>
-      )}
 
-      {/* Activity log panel */}
-      {showActivityLog && (
-        <div className="mx-4 mt-2 rounded-md border border-border/50 bg-card/50 overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border/50">
-            <div className="flex items-center gap-2 text-xs font-medium">
-              <FileClock className="w-3.5 h-3.5 text-primary" />
-              Activity (server-side log)
-              <div className="flex rounded-md border border-border/50 overflow-hidden ml-2">
-                <button
-                  onClick={() => setActivityTab('uploads')}
-                  className={`px-2 py-0.5 text-[10px] ${activityTab === 'uploads' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted/50'}`}
-                >
-                  Uploads
-                </button>
-                <button
-                  onClick={() => setActivityTab('aim')}
-                  className={`px-2 py-0.5 text-[10px] ${activityTab === 'aim' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted/50'}`}
-                >
-                  AiM Pulls
-                </button>
+          {/* Status strip: error or upload progress, never both */}
+          {error ? (
+            <div className="mt-4 flex items-center gap-3 rounded-lg bg-danger/10 px-3 py-2 text-[12.5px] text-danger">
+              <span className="min-w-0 flex-1">{error}</span>
+              <Button variant="plain" size="sm" onClick={() => setError(null)}>
+                <X size={12} aria-hidden="true" />
+                Dismiss
+              </Button>
+            </div>
+          ) : uploadProgress ? (
+            <div className="mt-4 rounded-lg bg-primary/10 px-3 py-2 text-[12.5px]">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 font-medium text-primary">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Uploading {formatBytes(uploadProgress.loaded)} / {formatBytes(uploadProgress.total)}
+                </span>
+                <span className="tabular text-muted-foreground">{formatRate(uploadProgress.ratePerSec)}</span>
+              </div>
+              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full bg-primary transition-[width] duration-150"
+                  style={{ width: `${Math.max(2, (uploadProgress.loaded / Math.max(1, uploadProgress.total)) * 100)}%` }}
+                />
               </div>
             </div>
-            <button
-              onClick={async () => {
-                try {
-                  const [uploads, aimPulls] = await Promise.all([
-                    fetchUploadLog(),
-                    fetchAimPullLog(),
-                  ]);
-                  setUploadLog(uploads);
-                  setAimPullLog(aimPulls);
-                } catch {
-                  setUploadLog([]);
-                  setAimPullLog([]);
-                }
-              }}
-              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50"
-              title="Refresh"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
-          </div>
-          <div className="max-h-48 overflow-y-auto">
-            {activityTab === 'uploads' ? (
-              uploadLog.length === 0 ? (
-                <p className="text-xs text-muted-foreground px-3 py-3">No uploads recorded since the backend started.</p>
+          ) : null}
+
+          {sessionsLoading ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-24 text-muted-foreground">
+              <Loader2 className="w-8 h-8 text-primary animate-spin" aria-hidden />
+              <p className="text-sm font-medium">Loading sessions...</p>
+            </div>
+          ) : groups.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-24 text-muted-foreground">
+              {sessions.length === 0 ? (
+                <>
+                  <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
+                    <Upload className="w-7 h-7" />
+                  </div>
+                  <p className="text-sm font-medium text-foreground">No sessions yet</p>
+                  <p className="text-xs text-center max-w-xs">
+                    Upload a <span className="font-mono text-primary">.xrk</span> file or pull from an AiM device to get started.
+                  </p>
+                </>
               ) : (
-                <table className="w-full text-xs">
-                  <thead className="text-muted-foreground bg-muted/30">
-                    <tr>
-                      <th className="text-left px-3 py-1.5 font-medium">When</th>
-                      <th className="text-left px-3 py-1.5 font-medium">File</th>
-                      <th className="text-right px-3 py-1.5 font-medium">Size</th>
-                      <th className="text-right px-3 py-1.5 font-medium">Time</th>
-                      <th className="text-right px-3 py-1.5 font-medium">Rate</th>
-                      <th className="text-left px-3 py-1.5 font-medium">From</th>
-                      <th className="text-left px-3 py-1.5 font-medium">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {uploadLog.map((e, i) => (
-                      <tr key={i} className="border-t border-border/30 hover:bg-muted/20">
-                        <td className="px-3 py-1.5 text-muted-foreground tabular">{formatRelativeTime(e.ts)}</td>
-                        <td className="px-3 py-1.5 font-mono truncate max-w-[200px]" title={e.filename}>{e.filename}</td>
-                        <td className="px-3 py-1.5 text-right tabular">{formatBytes(e.size)}</td>
-                        <td className="px-3 py-1.5 text-right tabular">{e.duration_s.toFixed(2)}s</td>
-                        <td className="px-3 py-1.5 text-right tabular">
-                          {e.duration_s > 0 ? formatRate(e.size / e.duration_s) : '—'}
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{e.client_ip}</td>
-                        <td className="px-3 py-1.5">
-                          <span className={
-                            e.status === 'ok'
-                              ? 'text-emerald-500 dark:text-emerald-400'
-                              : 'text-red-500 dark:text-red-400'
-                          } title={e.error}>
-                            {e.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )
-            ) : aimPullLog.length === 0 ? (
-              <p className="text-xs text-muted-foreground px-3 py-3">No AiM list/pull attempts recorded since the backend started.</p>
-            ) : (
-              <table className="w-full text-xs">
-                <thead className="text-muted-foreground bg-muted/30">
-                  <tr>
-                    <th className="text-left px-3 py-1.5 font-medium">When</th>
-                    <th className="text-left px-3 py-1.5 font-medium">Action</th>
-                    <th className="text-left px-3 py-1.5 font-medium">File</th>
-                    <th className="text-right px-3 py-1.5 font-medium">Size</th>
-                    <th className="text-right px-3 py-1.5 font-medium">Time</th>
-                    <th className="text-left px-3 py-1.5 font-medium">Device</th>
-                    <th className="text-left px-3 py-1.5 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {aimPullLog.map((e, i) => (
-                    <tr key={i} className="border-t border-border/30 hover:bg-muted/20">
-                      <td className="px-3 py-1.5 text-muted-foreground tabular">{formatRelativeTime(e.ts)}</td>
-                      <td className="px-3 py-1.5">{e.action}</td>
-                      <td className="px-3 py-1.5 font-mono truncate max-w-[160px]" title={e.filename}>
-                        {e.filename || (e.session_count != null ? `${e.session_count} sessions` : '—')}
-                      </td>
-                      <td className="px-3 py-1.5 text-right tabular">{e.size > 0 ? formatBytes(e.size) : '—'}</td>
-                      <td className="px-3 py-1.5 text-right tabular">{e.duration_s > 0 ? `${e.duration_s.toFixed(2)}s` : '—'}</td>
-                      <td className="px-3 py-1.5 font-mono text-muted-foreground">{e.device_ip || '—'}</td>
-                      <td className="px-3 py-1.5">
-                        <span className={
-                          e.status === 'ok' || e.status === 'list_ok'
-                            ? 'text-emerald-500 dark:text-emerald-400'
-                            : 'text-red-500 dark:text-red-400'
-                        } title={e.error}>
-                          {e.status}
-                        </span>
-                      </td>
-                    </tr>
+                <p className="text-sm">No sessions match your search</p>
+              )}
+            </div>
+          ) : (
+            groups.map(group => (
+              <section key={group.label} className="mt-6">
+                <h2 className="mb-2 ml-1 text-[13px] font-semibold text-muted-foreground">{group.label}</h2>
+                <div className="overflow-hidden rounded-xl bg-popover">
+                  {group.sessions.map((session, i) => (
+                    <div key={session.id} className="relative">
+                      {i > 0 && <div className="pointer-events-none absolute left-[74px] right-0 top-0 h-[0.5px] bg-separator" />}
+                      <SessionRow
+                        session={session}
+                        loading={loadingId === session.id}
+                        renaming={renamingId === session.id}
+                        renameValue={renameValue}
+                        onOpen={() => handleSessionClick(session)}
+                        onStartRename={() => startRename(session)}
+                        onRenameChange={setRenameValue}
+                        onRenameSubmit={submitRename}
+                        onRenameCancel={cancelRename}
+                        onDelete={() => handleDelete(session.id)}
+                      />
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+                </div>
+              </section>
+            ))
+          )}
         </div>
-      )}
-
-      {/* Session list */}
-      <div id="session-list-scroll" className="flex-1 overflow-y-auto px-4 py-3">
-        {sessionsLoading ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/60">
-            <Loader2 className="w-8 h-8 text-primary animate-spin" aria-hidden />
-            <p className="text-sm font-medium text-foreground/60">Loading sessions...</p>
-          </div>
-        ) : sortedSessions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/60">
-            {sessions.length === 0 ? (
-              <>
-                <div className="w-16 h-16 rounded-full bg-muted/20 border border-border/50 flex items-center justify-center">
-                  <Upload className="w-7 h-7" />
-                </div>
-                <p className="text-sm font-medium text-foreground/60">No sessions yet</p>
-                <p className="text-xs text-center max-w-xs">
-                  Upload a <span className="font-mono text-primary/80">.xrk</span> file or pull from an AiM device to get started.
-                </p>
-              </>
-            ) : (
-              <p className="text-sm">No sessions match your search</p>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            {sortedSessions.map(session => {
-              const isLoading = loadingId === session.id;
-              const sourceCfg = SOURCE_CONFIG[session.source];
-              const SourceIcon = sourceCfg.icon;
-
-              return (
-                // A div, not a <button>: the row contains its own <input> and action buttons,
-                // and interactive content nested in a button is invalid HTML.
-                <div
-                  key={session.id}
-                  role="button"
-                  tabIndex={isLoading ? -1 : 0}
-                  aria-disabled={isLoading}
-                  onClick={() => { if (!isLoading) handleSessionClick(session); }}
-                  onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget || isLoading) return;
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      handleSessionClick(session);
-                    }
-                  }}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 hover:bg-[hsl(225,35%,91%)] dark:hover:bg-muted hover:border-[hsl(225,30%,78%)] dark:hover:border-border transition-colors group ${isLoading ? 'opacity-60' : 'cursor-pointer'}`}
-                >
-                  {/* GPS thumbnail (only for sessions with a local file) */}
-                  {session.local_path && (
-                    <GPSThumbnail sessionId={session.id} size={36} />
-                  )}
-
-                  {/* Main info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {renamingId === session.id ? (
-                        <input
-                          ref={renameInputRef}
-                          value={renameValue}
-                          onChange={e => setRenameValue(e.target.value)}
-                          onBlur={submitRename}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') submitRename();
-                            if (e.key === 'Escape') {
-                              renameDoneRef.current = true;
-                              setRenamingId(null);
-                            }
-                          }}
-                          onClick={e => e.stopPropagation()}
-                          className="text-sm font-medium text-foreground bg-muted/50 border border-primary/50 rounded px-1.5 py-0.5 outline-none w-full max-w-[260px]"
-                          autoFocus
-                        />
-                      ) : (
-                        <span className="text-sm font-medium text-foreground truncate">
-                          {session.aim_session_id || session.filename}
-                        </span>
-                      )}
-                      {session.track_name && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary dark:text-primary border border-primary/20 flex-shrink-0">
-                          {session.track_name}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                      {session.driver_name && <span>{session.driver_name}</span>}
-                      {session.vehicle_name && <span>{session.vehicle_name}</span>}
-                      {session.recorded_at && <span>{formatDate(session.recorded_at)}</span>}
-                    </div>
-                  </div>
-
-                  {/* Meta pills */}
-                  <div className="hidden sm:flex items-center gap-2 flex-shrink-0 text-xs text-muted-foreground">
-                    {session.index_status === 'pending' ? (
-                      <span
-                        className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary"
-                        title="Downloaded; reading laps and metadata in the background"
-                      >
-                        <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                        Indexing
-                      </span>
-                    ) : (
-                      <span className="tabular">{formatDuration(session.duration_s)}</span>
-                    )}
-                    {session.lap_count > 0 && (
-                      <span>{session.lap_count} laps</span>
-                    )}
-                    <span title={sourceCfg.label} className="inline-flex">
-                      <SourceIcon className="w-3 h-3" />
-                    </span>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    {isLoading ? (
-                      <Loader2 className="w-4 h-4 text-primary animate-spin" />
-                    ) : (
-                      <>
-                        <button
-                          onClick={(e) => startRename(e, session)}
-                          className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary transition-all"
-                          title="Rename"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={(e) => handleDelete(e, session.id)}
-                          className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 dark:hover:text-red-400 transition-all"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                        <ChevronRight className="w-4 h-4 text-muted-foreground/30 group-hover:text-muted-foreground transition-colors" />
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
 
       {/* Drag overlay */}
@@ -681,6 +342,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         </div>
       )}
 
+      {showActivityLog && <ActivitySheet onClose={() => setShowActivityLog(false)} />}
+
       {/* AiM Session Picker */}
       {aimPickerOpen && (
         <AimSessionPicker
@@ -688,15 +351,6 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
           onDownloaded={handleAimPickerDownloaded}
         />
       )}
-
-      {/* Footer */}
-      <div className="px-4 py-2 border-t border-border/50 bg-card/30 text-xs text-muted-foreground/50">
-        {sessionsLoading
-          ? 'Loading sessions…'
-          : `${sessions.length} session${sessions.length !== 1 ? 's' : ''}`}
-      </div>
     </div>
   );
 }
-
-

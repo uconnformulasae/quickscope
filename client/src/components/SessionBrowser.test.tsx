@@ -69,6 +69,11 @@ function renderBrowser() {
   return props;
 }
 
+function chooseRowAction(row: HTMLElement, name: string) {
+  fireEvent.click(within(row).getByRole('button', { name: 'More actions' }));
+  fireEvent.click(screen.getByRole('menuitem', { name }));
+}
+
 const rows = () => screen.getAllByRole('button').filter((b) => b.getAttribute('tabindex') !== null);
 
 describe('SessionBrowser', () => {
@@ -84,20 +89,41 @@ describe('SessionBrowser', () => {
     expect(within(second).getByText('1:05')).toBeTruthy();
     expect(within(second).getByText('3 laps')).toBeTruthy();
     expect(within(second).getByText('Lot')).toBeTruthy();
-    expect(screen.getByText('2 sessions')).toBeTruthy();
+    expect(screen.getByLabelText('2 sessions')).toBeTruthy();
+  });
+
+  it('opens the row menu on right-click', async () => {
+    renderBrowser();
+    await screen.findByText('old.xrk');
+    fireEvent.contextMenu(rows()[1]);
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeTruthy();
+  });
+
+  it('groups sessions under date headings', async () => {
+    const d = (n: number) => new Date(Date.now() - n * 86400000).toISOString();
+    routes['/api/sessions'] = () => [
+      session({ id: 'z', filename: 'z.xrk', recorded_at: '2020-03-05T10:00:00' }),
+      session({ id: 'y', filename: 'y.xrk', recorded_at: new Date().toISOString() }),
+      session({ id: 'x', filename: 'x.xrk', recorded_at: d(3) }),
+    ];
+    renderBrowser();
+    await screen.findByText('y.xrk');
+    const heads = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(heads[0]).toBe('Today');
+    expect(heads[heads.length - 1]).toBe('March 2020');
   });
 
   it('shows an empty state with no sessions', async () => {
     routes['/api/sessions'] = () => [];
     renderBrowser();
     expect(await screen.findByText('No sessions yet')).toBeTruthy();
-    expect(screen.getByText('0 sessions')).toBeTruthy();
+    expect(screen.getByLabelText('0 sessions')).toBeTruthy();
   });
 
   it('filters by filename, track, driver and vehicle', async () => {
     renderBrowser();
     await screen.findByText('Endurance');
-    const search = screen.getByPlaceholderText('Search sessions...');
+    const search = screen.getByPlaceholderText('Search');
 
     fireEvent.change(search, { target: { value: 'driver a' } });
     expect(rows()).toHaveLength(1);
@@ -137,7 +163,7 @@ describe('SessionBrowser', () => {
 
     fireEvent.click(screen.getByText('old.xrk'));
     expect(await screen.findByText('Failed to parse session file')).toBeTruthy();
-    fireEvent.click(screen.getByText('dismiss'));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByText('Failed to parse session file')).toBeNull();
   });
 
@@ -148,7 +174,7 @@ describe('SessionBrowser', () => {
     renderBrowser();
     await screen.findByText('old.xrk');
 
-    fireEvent.click(within(rows()[1]).getByTitle('Delete'));
+    chooseRowAction(rows()[1], 'Delete');
     await waitFor(() => expect(deleted).toEqual(['DELETE']));
   });
 
@@ -158,7 +184,7 @@ describe('SessionBrowser', () => {
     renderBrowser();
     await screen.findByText('old.xrk');
 
-    fireEvent.click(within(rows()[1]).getByTitle('Delete'));
+    chooseRowAction(rows()[1], 'Delete');
     await new Promise((r) => setTimeout(r, 0));
     expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/api/sessions/old'))).toBe(false);
   });
@@ -169,7 +195,7 @@ describe('SessionBrowser', () => {
     renderBrowser();
     await screen.findByText('old.xrk');
 
-    fireEvent.click(within(rows()[1]).getByTitle('Rename'));
+    chooseRowAction(rows()[1], 'Rename');
     const input = screen.getByDisplayValue('old');
     fireEvent.change(input, { target: { value: 'Autocross 1' } });
     fireEvent.blur(input);
@@ -182,11 +208,11 @@ describe('SessionBrowser', () => {
     renderBrowser();
     await screen.findByText('old.xrk');
 
-    fireEvent.click(within(rows()[1]).getByTitle('Rename'));
+    chooseRowAction(rows()[1], 'Rename');
     fireEvent.keyDown(screen.getByDisplayValue('old'), { key: 'Escape' });
     expect(screen.queryByDisplayValue('old')).toBeNull();
 
-    fireEvent.click(within(rows()[1]).getByTitle('Rename'));
+    chooseRowAction(rows()[1], 'Rename');
     fireEvent.blur(screen.getByDisplayValue('old'));
     await new Promise((r) => setTimeout(r, 0));
     expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/rename'))).toBe(false);
@@ -197,22 +223,25 @@ describe('SessionBrowser', () => {
     routes['/api/aim/status'] = () => ({ connected: true, device });
     const props = renderBrowser();
 
-    expect(await screen.findByText('AiM (EVO5 Logger)')).toBeTruthy();
-    fireEvent.click(screen.getByText('Live'));
+    expect(await screen.findByRole('button', { name: /EVO5 Logger/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /EVO5 Logger/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open Live View' }));
     expect(props.onOpenLive).toHaveBeenCalledWith(device);
   });
 
   it('opens Live without a device when AiM is unreachable', async () => {
     const props = renderBrowser();
     await screen.findByText('old.xrk');
-    fireEvent.click(screen.getByText('Live'));
+    fireEvent.click(screen.getByRole('button', { name: /AiM/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open Live View' }));
     expect(props.onOpenLive).toHaveBeenCalledWith(null);
   });
 
   it('opens settings and toggles theme', async () => {
     const props = renderBrowser();
     await screen.findByText('old.xrk');
-    fireEvent.click(screen.getByTitle('Settings'));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Settings…' }));
     fireEvent.click(screen.getByTitle('Switch to light mode'));
     expect(props.onOpenSettings).toHaveBeenCalled();
     expect(props.onToggleTheme).toHaveBeenCalled();
@@ -222,7 +251,8 @@ describe('SessionBrowser', () => {
     routes['/api/aim/sessions'] = () => ({ ok: true, sessions: [] });
     renderBrowser();
     await screen.findByText('old.xrk');
-    fireEvent.click(screen.getByText('Pull from AiM'));
+    fireEvent.click(screen.getByRole('button', { name: /AiM/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Pull Sessions…' }));
     expect(screen.getByText('AiM Device Sessions')).toBeTruthy();
   });
 
@@ -236,7 +266,8 @@ describe('SessionBrowser', () => {
     renderBrowser();
     await screen.findByText('old.xrk');
 
-    fireEvent.click(screen.getByText('Activity'));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Activity' }));
     expect(await screen.findByText('up.xrk')).toBeTruthy();
     expect(screen.getByText('2.0 KB')).toBeTruthy();
     expect(screen.getByText('1.0 KB/s')).toBeTruthy();
@@ -252,7 +283,8 @@ describe('SessionBrowser', () => {
     renderBrowser();
     await screen.findByText('old.xrk');
 
-    fireEvent.click(screen.getByText('Activity'));
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Activity' }));
     expect(await screen.findByText('No uploads recorded since the backend started.')).toBeTruthy();
     fireEvent.click(screen.getByText('AiM Pulls'));
     expect(screen.getByText('No AiM list/pull attempts recorded since the backend started.')).toBeTruthy();
@@ -261,7 +293,7 @@ describe('SessionBrowser', () => {
   it('ignores dropped files that are not .xrk/.xrz', async () => {
     renderBrowser();
     await screen.findByText('old.xrk');
-    const root = screen.getByText('2 sessions').parentElement as HTMLElement;
+    const root = screen.getByLabelText('2 sessions').parentElement as HTMLElement;
     fireEvent.drop(root, { dataTransfer: { files: [new File(['x'], 'notes.txt')] } });
     expect(screen.queryByText(/Uploading/)).toBeNull();
   });
