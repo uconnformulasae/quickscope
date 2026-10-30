@@ -210,6 +210,7 @@ export function WidgetConfigDialog({
   return (
     <Sheet
       title="Configure widget"
+      width={640}
       onClose={onClose}
       footer={
         <>
