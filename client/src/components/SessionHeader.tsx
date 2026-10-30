@@ -91,7 +91,7 @@ export function SessionHeader({
         >
           {leftOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
         </button>
-        <QuickScopeLogo size={24} textClass="text-sm" />
+        <QuickScopeLogo />
       </div>
 
       {/* Chart / Table segmented toggle */}

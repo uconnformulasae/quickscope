@@ -5,6 +5,7 @@ import { ThemeToggle } from './ThemeToggle';
 import { SettingsDialog } from './SettingsDialog';
 import { SessionInfoModal } from './SessionInfoModal';
 import { SessionHeader } from './SessionHeader';
+import { QuickScopeLogo } from './QuickScopeLogo';
 import { useTheme } from '../lib/useTheme';
 import { makeSession } from '../test-fixtures';
 
@@ -281,5 +282,18 @@ describe('SessionHeader', () => {
     fireEvent.click(screen.getByTitle('Menu'));
     expect(screen.getByText('Load File')).toBeTruthy();
     expect(screen.queryByText('Export CSV')).toBeNull();
+  });
+});
+
+describe('QuickScopeLogo', () => {
+  it('renders the gauge mark with an accessible name and the wordmark', () => {
+    const { container, rerender } = render(<QuickScopeLogo />);
+    const img = screen.getByRole('img', { name: 'QuickScope' });
+    expect(img.querySelector('circle[fill="#f77f00"]')).not.toBeNull();
+    expect(container.textContent).toContain('QuickScope');
+
+    rerender(<QuickScopeLogo showWordmark={false} />);
+    expect(screen.getByRole('img', { name: 'QuickScope' })).toBeTruthy();
+    expect(container.textContent).not.toContain('QuickScope');
   });
 });
