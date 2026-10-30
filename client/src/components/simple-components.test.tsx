@@ -6,6 +6,7 @@ import { SettingsDialog } from './SettingsDialog';
 import { SessionInfoModal } from './SessionInfoModal';
 import { SessionHeader } from './SessionHeader';
 import { GaugeGlyph, QuickScopeLogo } from './QuickScopeLogo';
+import { sessionSubtitle } from '../lib/session-subtitle';
 import { useTheme } from '../lib/useTheme';
 import { makeSession } from '../test-fixtures';
 
@@ -220,7 +221,6 @@ describe('SessionHeader', () => {
         fileName="run.xrk"
         leftOpen
         rightOpen={false}
-        totalSamples={12345}
         theme="dark"
         viewMode="chart"
         {...handlers}
@@ -230,23 +230,30 @@ describe('SessionHeader', () => {
     return { ...utils, handlers };
   }
 
-  it('shows file name, metadata, duration, lap count and sample count', () => {
-    renderHeader();
+  it('shows file name and subtitle, no sample count', () => {
+    const session = makeSession({
+      durationMs: 61_234,
+      lapMarkers: [{ timestamp: 0, lapNumber: 0 }, { timestamp: 30_000, lapNumber: 1 }, { timestamp: 60_000, lapNumber: 2 }],
+    });
+    renderHeader({ session });
     expect(screen.getByText('run.xrk')).toBeTruthy();
-    expect(screen.getByText('CT16-EV')).toBeTruthy();
-    expect(screen.getByText('Driver A')).toBeTruthy();
-    expect(screen.getByText('01:01.234')).toBeTruthy();
-    expect(screen.getByText('2 laps')).toBeTruthy();
-    expect(screen.getByText('Lot')).toBeTruthy();
-    expect(screen.getByText((12345).toLocaleString())).toBeTruthy();
+    const m = session.metadata;
+    expect(screen.getByText(sessionSubtitle(m, session.durationMs, 2))).toBeTruthy();
+    expect(screen.queryByText(/samples/)).toBeNull();
+  });
+
+  it('opens session info from the title', () => {
+    const { handlers } = renderHeader();
+    fireEvent.click(screen.getByText('run.xrk'));
+    expect(handlers.onSessionInfoOpen).toHaveBeenCalled();
   });
 
   it('wires navigation, sidebar and view-mode buttons', () => {
     const { handlers } = renderHeader();
-    fireEvent.click(screen.getByTitle('Back to sessions'));
-    fireEvent.click(screen.getByTitle('Hide channels'));
-    fireEvent.click(screen.getByTitle('Show analysis'));
-    fireEvent.click(screen.getByText('Table'));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to sessions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hide channels' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show analysis' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Table' }));
     fireEvent.click(screen.getByTitle('Switch to light mode'));
     expect(handlers.onBack).toHaveBeenCalled();
     expect(handlers.onToggleLeft).toHaveBeenCalled();
@@ -257,22 +264,23 @@ describe('SessionHeader', () => {
 
   it('opens the menu for export and session info', () => {
     const { handlers } = renderHeader();
-    fireEvent.click(screen.getByTitle('Menu'));
-    fireEvent.click(screen.getByText('Export CSV'));
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export CSV…' }));
     expect(handlers.onExportOpen).toHaveBeenCalled();
-    expect(screen.queryByText('Export CSV')).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Get Info' })).toBeNull();
 
-    fireEvent.click(screen.getByTitle('Menu'));
-    fireEvent.click(screen.getByText('Session Info'));
-    expect(handlers.onSessionInfoOpen).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Get Info' }));
+    expect(handlers.onSessionInfoOpen).toHaveBeenCalledTimes(1);
   });
 
-  it('closes the menu on an outside click', () => {
+  it('Open… triggers the hidden file input', () => {
     renderHeader();
-    fireEvent.click(screen.getByTitle('Menu'));
-    expect(screen.getByText('Load File')).toBeTruthy();
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByText('Load File')).toBeNull();
+    const input = screen.getByTestId('input-file-hidden') as HTMLInputElement;
+    const click = vi.spyOn(input, 'click');
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open…' }));
+    expect(click).toHaveBeenCalled();
   });
 
   it('passes a picked file to onFileSelected', () => {
@@ -284,10 +292,10 @@ describe('SessionHeader', () => {
 
   it('hides session-only controls without a session', () => {
     renderHeader({ session: null, fileName: null });
-    expect(screen.queryByText('Chart')).toBeNull();
-    fireEvent.click(screen.getByTitle('Menu'));
-    expect(screen.getByText('Load File')).toBeTruthy();
-    expect(screen.queryByText('Export CSV')).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'Chart' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    expect(screen.getByRole('menuitem', { name: 'Open…' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Export CSV…' })).toBeNull();
   });
 });
 

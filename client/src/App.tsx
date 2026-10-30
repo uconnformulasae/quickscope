@@ -373,7 +373,6 @@ export default function App() {
         onToggleRight={toggleRightSidebar}
         onFileSelected={handleFileSelected}
         onExportOpen={session ? () => setExportDialogOpen(true) : undefined}
-        totalSamples={session?.totalSamples ?? 0}
         onBack={handleBackToBrowser}
         theme={theme}
         onToggleTheme={toggleTheme}
