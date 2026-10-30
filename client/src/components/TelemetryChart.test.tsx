@@ -110,3 +110,12 @@ describe('TelemetryChart toolbar', () => {
     expect(screen.queryByText(/Scroll to zoom/)).toBeNull();
   });
 });
+
+describe('TelemetryChart tip wording', () => {
+  it('mentions channel scrolling when the strips overflow', () => {
+    fakeLayout({ width: 1000, height: 300, scrollHeight: 800 });
+    try { localStorage.removeItem('quickscope-chart-tip-dismissed'); } catch { /* ignore */ }
+    renderChart();
+    expect(screen.getByText(/Scroll for channels · ⌘\/Ctrl\+scroll to zoom/)).toBeTruthy();
+  });
+});

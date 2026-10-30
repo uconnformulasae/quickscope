@@ -835,14 +835,14 @@ export function TelemetryChart({
       {showTip && (
         <div className="flex flex-shrink-0 justify-center px-3 py-1.5 bg-canvas">
           <div className="inline-flex items-center gap-2 rounded-full border border-separator bg-muted/40 py-0.5 pl-3 pr-1 text-xs text-muted-foreground">
-            <span>Scroll to zoom · drag to pan · double-click to reset</span>
-            <button
-              type="button"
-              onClick={dismissTip}
-              className="rounded-full px-2 py-0.5 text-foreground hover:bg-muted"
-            >
+            <span>
+              {canScroll
+                ? 'Scroll for channels · ⌘/Ctrl+scroll to zoom · drag to pan · double-click to reset'
+                : 'Scroll to zoom · drag to pan · double-click to reset'}
+            </span>
+            <Button variant="plain" size="sm" onClick={dismissTip} className="rounded-full">
               Got it
-            </button>
+            </Button>
           </div>
         </div>
       )}
