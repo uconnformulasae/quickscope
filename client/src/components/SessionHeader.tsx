@@ -72,7 +72,7 @@ export function SessionHeader({
   const lapCount = session ? Math.max(0, session.lapMarkers.length - 1) : 0;
 
   return (
-    <header className="flex items-center gap-3 px-3 h-10 border-b border-border bg-card flex-shrink-0 overflow-visible relative z-20">
+    <header className="flex items-center gap-3 px-3 h-10 border-b border-border bg-card flex-shrink-0 overflow-visible relative z-[1100]">
       {/* Back + Logo + toggle */}
       <div className="flex items-center gap-2">
         {onBack && (
@@ -165,7 +165,16 @@ export function SessionHeader({
             <MoreVertical className="w-4 h-4" />
           </button>
           {menuOpen && (
-            <div className="absolute right-0 top-full mt-1 w-40 bg-card border border-border rounded-md shadow-lg z-50 py-1">
+            <>
+              <div
+                className="fixed inset-0 z-[1090]"
+                aria-hidden
+                onClick={() => setMenuOpen(false)}
+              />
+              <div
+                role="menu"
+                className="absolute right-0 top-full mt-1 w-40 bg-card border border-border rounded-md shadow-xl z-[1100] py-1"
+              >
               <button
                 onClick={() => { handleLoadClick(); setMenuOpen(false); }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
@@ -191,7 +200,8 @@ export function SessionHeader({
                   Session Info
                 </button>
               )}
-            </div>
+              </div>
+            </>
           )}
         </div>
 

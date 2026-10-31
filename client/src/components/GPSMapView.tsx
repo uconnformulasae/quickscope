@@ -214,7 +214,7 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full relative isolate z-0">
       <div
         ref={mapContainerRef}
         className="flex-1 min-h-0"
