@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteSession,
   exportCSV,
+  exportSessionCSV,
+  fetchSessionFile,
   fetchAimPullLog,
   fetchChannelData,
   fetchGPS,
@@ -194,6 +196,26 @@ describe('analysis endpoints', () => {
   it('throws when export fails', async () => {
     fetchMock.mockResolvedValue(jsonResponse({}, { status: 400 }));
     await expect(exportCSV(['RPM'])).rejects.toThrow('Export failed: 400');
+  });
+
+  it('exports a stored session CSV as a blob', async () => {
+    fetchMock.mockResolvedValue(jsonResponse('a,b'));
+    const blob = await exportSessionCSV('sid-1', ['RPM']);
+    expect(blob).toBeInstanceOf(Blob);
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/api/sessions/sid-1/export?channels=RPM`);
+  });
+
+  it('downloads the session file as a blob with filename from Content-Disposition', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: (name: string) => (name.toLowerCase() === 'content-disposition' ? 'attachment; filename="run.xrk"' : null) },
+      blob: async () => new Blob(['xrk']),
+    } as Response);
+    const { blob, filename } = await fetchSessionFile('sid-2');
+    expect(blob).toBeInstanceOf(Blob);
+    expect(filename).toBe('run.xrk');
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/api/sessions/sid-2/file`);
   });
 });
 

@@ -82,6 +82,6 @@ describe('SessionBrowser load', () => {
     const onSessionLoaded = renderBrowser();
     fireEvent.click(await screen.findByText('run1'));
     await vi.waitFor(() => expect(onSessionLoaded).toHaveBeenCalled());
-    expect(onSessionLoaded.mock.lastCall?.slice(1)).toEqual(['s1', 'run1.xrk', 'aim_device']);
+    expect(onSessionLoaded.mock.lastCall?.slice(1)).toEqual(['s1', 'run1.xrk', 'aim_device', 'run1']);
   });
 });

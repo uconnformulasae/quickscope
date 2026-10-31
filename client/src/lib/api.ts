@@ -3,6 +3,8 @@
  * Communicates with the Python/libxrk backend
  */
 
+import { filenameFromContentDisposition } from './contentDisposition';
+
 // In packaged Electron builds, preload.js injects window.__QUICKSCOPE_BACKEND__.
 // In browser dev (`npm run dev`), fall back to the current hostname on port 8000.
 declare global {
@@ -531,4 +533,29 @@ export async function exportCSV(channels: string[]): Promise<Blob> {
     throw new Error(`Export failed: ${res.status}`);
   }
   return res.blob();
+}
+
+export async function exportSessionCSV(sessionId: string, channels: string[]): Promise<Blob> {
+  const res = await fetch(
+    `${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/export?channels=${encodeURIComponent(channels.join(','))}`,
+  );
+  if (!res.ok) {
+    throw new Error(`Export failed: ${res.status}`);
+  }
+  return res.blob();
+}
+
+export interface SessionFileDownload {
+  blob: Blob;
+  filename: string;
+}
+
+export async function fetchSessionFile(sessionId: string): Promise<SessionFileDownload> {
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/file`);
+  if (!res.ok) {
+    throw new Error(`Download failed: ${res.status}`);
+  }
+  const filename =
+    filenameFromContentDisposition(res.headers.get('Content-Disposition')) ?? 'session.xrk';
+  return { blob: await res.blob(), filename };
 }
