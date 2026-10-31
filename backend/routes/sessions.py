@@ -4,8 +4,12 @@ import asyncio
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
+
+from services.csv_export import streaming_csv_response
+from services.xrk_export import read_xrk_export_bytes
 
 from services import (
     session_store,
@@ -66,6 +70,76 @@ async def load_session(session_id: str):
     if entry.get("source") == "aim_device" and entry.get("recorded_at"):
         info = apply_stored_recorded_at(info, entry["recorded_at"])
     return info
+
+
+async def _parsed_log_for_session(session_id: str):
+    """Load a session's parsed log from cache or disk without changing analysis UI state."""
+    entry = session_store.get_session(session_id)
+    if not entry:
+        raise HTTPException(404, "Session not found")
+
+    local_path = session_store.repair_session_path(session_id, entry)
+    if local_path is None:
+        raise HTTPException(400, "Session file not available locally. Pull it first.")
+
+    try:
+        log = await asyncio.to_thread(
+            session_cache.get_or_load,
+            session_id,
+            local_path,
+            lambda: parse_file(local_path, PRIORITY_INTERACTIVE),
+        )
+    except Exception:
+        logger.exception("Failed to parse session file")
+        raise HTTPException(500, "Failed to parse session file")
+
+    return entry, log, local_path
+
+
+@router.get("/sessions/{session_id}/file")
+async def download_session_file(session_id: str):
+    """Export session data as an uncompressed ``.xrk`` (decompresses ``.xrz`` on disk)."""
+    entry = session_store.get_session(session_id)
+    if not entry:
+        raise HTTPException(404, "Session not found")
+
+    local_path = session_store.repair_session_path(session_id, entry)
+    if local_path is None:
+        raise HTTPException(400, "Session file not available locally. Pull it first.")
+
+    try:
+        payload, download_name = await asyncio.to_thread(
+            read_xrk_export_bytes,
+            local_path,
+            entry.get("filename"),
+            entry.get("aim_session_id"),
+        )
+    except ValueError:
+        logger.exception("Failed to prepare XRK export")
+        raise HTTPException(500, "Failed to export session file")
+
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{download_name}"'},
+    )
+
+
+@router.get("/sessions/{session_id}/export")
+async def export_session_csv(session_id: str, channels: str = Query(...)):
+    """CSV export for a stored session without requiring it to be the active analysis session."""
+    names = [n.strip() for n in channels.split(",") if n.strip()]
+    if not names:
+        raise HTTPException(400, "No channels specified")
+
+    entry, log, _local_path = await _parsed_log_for_session(session_id)
+
+    try:
+        return streaming_csv_response(
+            log, entry["filename"], names, aim_session_id=entry.get("aim_session_id"),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 class RenameRequest(BaseModel):
