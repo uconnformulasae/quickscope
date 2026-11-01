@@ -337,6 +337,65 @@ def test_export_skips_unknown_channels_but_keeps_valid_ones(client_with_syntheti
     assert rows[0] == ["Time (s)", "RPM (rpm)"]
 
 
+def test_session_export_without_active_log(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    sid = client_with_synthetic_log.get("/api/sessions").json()[0]["id"]
+
+    session_cache.clear()
+    state.clear()
+
+    res = client_with_synthetic_log.get(
+        f"/api/sessions/{sid}/export",
+        params={"channels": "RPM,Throttle_Pos"},
+    )
+    assert res.status_code == 200
+    rows = list(csv.reader(io.StringIO(res.text)))
+    assert rows[0] == ["Time (s)", "RPM (rpm)", "Throttle_Pos (%)"]
+
+
+def test_session_file_download(client_with_synthetic_log, isolated_data_dir):
+    upload(client_with_synthetic_log)
+    sid = client_with_synthetic_log.get("/api/sessions").json()[0]["id"]
+    entry = client_with_synthetic_log.get("/api/sessions").json()[0]
+
+    res = client_with_synthetic_log.get(f"/api/sessions/{sid}/file")
+    assert res.status_code == 200
+    assert 'filename="run1.xrk"' in res.headers["content-disposition"]
+    assert len(res.content) > 0
+    on_disk = isolated_data_dir / "sessions" / entry["filename"]
+    assert res.content == on_disk.read_bytes()
+
+
+def test_session_file_download_decompresses_xrz(client_with_synthetic_log, isolated_data_dir):
+    import zlib
+
+    payload = b"synthetic-xrk-bytes"
+    xrz_name = "pulled.xrz"
+    xrz_path = isolated_data_dir / "sessions" / xrz_name
+    xrz_path.write_bytes(zlib.compress(payload))
+
+    entry = session_store.add_session(
+        filename=xrz_name,
+        source="aim_device",
+        aim_session_id="Endurance",
+        local_path=str(xrz_path),
+    )
+    sid = entry["id"]
+
+    res = client_with_synthetic_log.get(f"/api/sessions/{sid}/file")
+    assert res.status_code == 200
+    assert res.content == payload
+    assert 'filename="Endurance.xrk"' in res.headers["content-disposition"]
+
+
+def test_session_export_errors(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    sid = client_with_synthetic_log.get("/api/sessions").json()[0]["id"]
+    c = client_with_synthetic_log
+    assert c.get(f"/api/sessions/{sid}/export", params={"channels": ""}).status_code == 400
+    assert c.get(f"/api/sessions/nope/export", params={"channels": "RPM"}).status_code == 404
+
+
 # ─── Derived channels ────────────────────────────────────────────────────────
 
 @pytest.fixture
