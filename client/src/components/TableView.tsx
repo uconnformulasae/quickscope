@@ -98,7 +98,7 @@ export function TableView({
   if (columns.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <p className="text-sm text-muted-foreground/60">Select channels in the sidebar to view data</p>
+        <p className="text-sm text-muted-foreground">Select channels in the sidebar to view data</p>
       </div>
     );
   }
@@ -115,9 +115,9 @@ export function TableView({
           onChange={(e) => setSearchValue(e.target.value)}
           onKeyDown={handleSearchKeyDown}
           placeholder="Go to time (s)..."
-          className="w-36 px-2 py-1 bg-muted/30 border border-border/50 rounded text-xs text-foreground placeholder:text-muted-foreground/50 font-mono focus:outline-none focus:ring-1 focus:ring-primary/50"
+          className="w-36 px-2 py-1 bg-muted/30 border border-border/50 rounded text-xs text-foreground placeholder:text-muted-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary/50"
         />
-        <span className="text-[10px] text-muted-foreground/40 font-mono">Ctrl+G</span>
+        <span className="text-[10px] text-muted-foreground font-mono">Ctrl+G</span>
         <span className="ml-auto text-[11px] text-muted-foreground">
           {table.rowCount.toLocaleString()} rows
         </span>
@@ -179,7 +179,7 @@ export function TableView({
                   }}
                 >
                   <div className={`w-24 flex-shrink-0 px-3 flex items-center text-[11px] font-mono border-r border-border/10 ${
-                    isHighlighted ? 'text-primary font-semibold' : 'text-muted-foreground'
+                    isHighlighted ? 'text-primary-text font-semibold' : 'text-muted-foreground'
                   }`}>
                     {(row.timestamp / 1000).toFixed(3)}
                   </div>

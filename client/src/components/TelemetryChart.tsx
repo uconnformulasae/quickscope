@@ -12,6 +12,7 @@ import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawXAxis } from 
 import { drawCursors } from '../lib/chart-cursors';
 import type { ChartExportSpec } from '../lib/chart-export';
 import { ImageExportDialog } from './ImageExportDialog';
+import { Presence } from '../lib/motion';
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -820,7 +821,7 @@ export function TelemetryChart({
               Reset
             </button>
           )}
-          <span className="text-xs text-muted-foreground/40 ml-1">
+          <span className="text-xs text-muted-foreground ml-1">
             {canScroll ? 'scroll for channels · ⌘/Ctrl+scroll to zoom · drag to pan' : 'scroll to zoom · drag to pan'}
           </span>
         </div>
@@ -847,9 +848,11 @@ export function TelemetryChart({
         />
       </div>
 
-      {imageExportSpec && (
+      <Presence show={!!imageExportSpec}>
+        {imageExportSpec && (
         <ImageExportDialog spec={imageExportSpec} onClose={closeImageExport} />
-      )}
+        )}
+      </Presence>
     </div>
   );
 }

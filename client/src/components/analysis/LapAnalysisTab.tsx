@@ -96,7 +96,7 @@ export function LapAnalysisTab({
       {bestTime && (
         <div className="mb-3 p-2.5 rounded-lg bg-primary/10 border border-primary/20">
           <p className="text-xs text-muted-foreground">Best Lap</p>
-          <p className="text-lg font-bold text-primary tabular mt-0.5">{formatLapTime(bestTime)}</p>
+          <p className="text-lg font-bold text-primary-text tabular mt-0.5">{formatLapTime(bestTime)}</p>
         </div>
       )}
       <div className="space-y-1.5">
@@ -107,14 +107,14 @@ export function LapAnalysisTab({
           >
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2">
-                <span className={`text-xs font-semibold tabular ${lap.isBest ? 'text-primary' : 'text-foreground'}`}>
+                <span className={`text-xs font-semibold tabular ${lap.isBest ? 'text-primary-text' : 'text-foreground'}`}>
                   Lap {lap.lapNum}
                 </span>
                 {lap.isBest && (
-                  <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">Best</span>
+                  <span className="text-xs bg-primary/20 text-primary-text px-1.5 py-0.5 rounded-full">Best</span>
                 )}
               </div>
-              <span className={`text-sm font-bold tabular ${lap.isBest ? 'text-primary' : 'text-foreground'}`}>
+              <span className={`text-sm font-bold tabular ${lap.isBest ? 'text-primary-text' : 'text-foreground'}`}>
                 {formatLapTime(lap.lapTimeS)}
               </span>
             </div>
@@ -122,7 +122,7 @@ export function LapAnalysisTab({
               {Object.entries(lap.channelStats).map(([name, s]: [string, any]) => (
                 <div key={name} className="text-center">
                   <p className="text-xs tabular font-medium" style={{ color: s.color }}>{formatNum(s.mean)}</p>
-                  <p className="text-xs text-muted-foreground/50">{name}</p>
+                  <p className="text-xs text-muted-foreground">{name}</p>
                 </div>
               ))}
             </div>

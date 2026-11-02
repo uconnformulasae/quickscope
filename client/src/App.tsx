@@ -18,6 +18,7 @@ import { SessionInfoModal } from './components/SessionInfoModal';
 import { SessionBrowser } from './components/SessionBrowser';
 import { SettingsDialog } from './components/SettingsDialog';
 import { LiveView } from './components/LiveView';
+import { Presence } from './lib/motion';
 import { ResizeHandle } from './components/ResizeHandle';
 import { Upload } from 'lucide-react';
 
@@ -346,7 +347,7 @@ export default function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
         />
-        {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+        <Presence show={settingsOpen}>{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}</Presence>
       </div>
     );
   }
@@ -389,7 +390,7 @@ export default function App() {
           <div
             ref={leftPanelRef}
             style={{ width: widths.left }}
-            className="flex-shrink-0 overflow-hidden"
+            className="qs-slide-in-left flex-shrink-0 overflow-hidden"
           >
             {session ? (
               <ChannelSidebar
@@ -410,7 +411,7 @@ export default function App() {
               />
             ) : (
               <div className="flex items-center justify-center h-full bg-card border-r border-border">
-                <p className="text-xs text-muted-foreground/60 text-center px-3">Load a file to see channels</p>
+                <p className="text-xs text-muted-foreground text-center px-3">Load a file to see channels</p>
               </div>
             )}
           </div>
@@ -480,12 +481,12 @@ export default function App() {
               ) : (
                 <div className={`flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-dashed transition-colors ${isDragOver ? 'border-primary/60 bg-primary/5' : 'border-border/40'}`}>
                   <div className="w-12 h-12 rounded-full bg-muted/40 border border-border flex items-center justify-center">
-                    <Upload className="w-5 h-5 text-muted-foreground/60" />
+                    <Upload className="w-5 h-5 text-muted-foreground" />
                   </div>
                   <div className="text-center">
                     <p className="text-sm font-medium text-foreground">No file loaded</p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Click <span className="font-medium text-foreground">Load File</span> or drop a <span className="font-mono text-xs text-primary/80">.xrk</span> file here
+                      Click <span className="font-medium text-foreground">Load File</span> or drop a <span className="font-mono text-xs text-primary-text/80">.xrk</span> file here
                     </p>
                   </div>
                 </div>
@@ -497,7 +498,7 @@ export default function App() {
           {isDragOver && session && (
             <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary/50 flex items-center justify-center pointer-events-none z-10">
               <div className="bg-card/90 rounded-xl px-6 py-4 text-center">
-                <Upload className="w-6 h-6 text-primary mx-auto mb-2" />
+                <Upload className="w-6 h-6 text-primary-text mx-auto mb-2" />
                 <p className="text-sm font-medium text-foreground">Drop .xrk file to load</p>
               </div>
             </div>
@@ -519,7 +520,7 @@ export default function App() {
           <div
             ref={rightPanelRef}
             style={{ width: widths.right }}
-            className="flex-shrink-0 overflow-hidden"
+            className="qs-slide-in-right flex-shrink-0 overflow-hidden"
           >
             <AnalysisPanel
               session={session}
@@ -543,7 +544,8 @@ export default function App() {
       </div>
 
       {/* Derived channel dialog */}
-      {derivedDialogOpen && session && (
+      <Presence show={!!(derivedDialogOpen && session)}>
+        {derivedDialogOpen && session && (
         <DerivedChannelDialog
           session={session}
           editing={editingDerived}
@@ -551,19 +553,23 @@ export default function App() {
           onPreview={handlePreviewDerived}
           onSubmit={handleSubmitDerived}
         />
-      )}
+        )}
+      </Presence>
 
       {/* Export CSV dialog */}
-      {exportDialogOpen && session && (
+      <Presence show={!!(exportDialogOpen && session)}>
+        {exportDialogOpen && session && (
         <ExportDialog
           session={session}
           fileName={state.fileName}
           onClose={() => setExportDialogOpen(false)}
         />
-      )}
+        )}
+      </Presence>
 
       {/* Session Info modal */}
-      {sessionInfoOpen && session && state.fileName && loadedSessionId && (
+      <Presence show={!!(sessionInfoOpen && session && state.fileName && loadedSessionId)}>
+        {sessionInfoOpen && session && state.fileName && loadedSessionId && (
         <SessionInfoModal
           sessionId={loadedSessionId}
           metadata={session.metadata}
@@ -574,7 +580,8 @@ export default function App() {
           onClose={() => setSessionInfoOpen(false)}
           onFileRenamed={handleFileRenamed}
         />
-      )}
+        )}
+      </Presence>
     </div>
   );
 }

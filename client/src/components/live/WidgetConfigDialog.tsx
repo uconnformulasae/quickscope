@@ -37,7 +37,7 @@ function NumField({ label, value, onChange, placeholder }: {
   }, [value]);
   return (
     <label className="block min-w-0">
-      <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">{label}</span>
+      <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">{label}</span>
       <input
         value={text}
         inputMode="decimal"
@@ -60,7 +60,7 @@ function SelectField<T extends string>({ label, value, options, onChange }: {
 }) {
   return (
     <label className="block min-w-0">
-      <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">{label}</span>
+      <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">{label}</span>
       <select value={value ?? ''} onChange={(e) => onChange((e.target.value || undefined) as T | undefined)} className={INPUT}>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
@@ -86,7 +86,7 @@ function UnitField({ ch, sourceUnit, set }: { ch: ChannelRef; sourceUnit?: strin
   if (choices.length === 0) {
     return (
       <label className="block min-w-0">
-        <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">Unit</span>
+        <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">Unit</span>
         <input value={ch.unit ?? ''} onChange={(e) => set({ unit: e.target.value || undefined })} placeholder={sourceUnit || 'auto'} className={INPUT} />
       </label>
     );
@@ -148,7 +148,7 @@ function ChannelDetails({ type, ch, sourceUnit, set }: {
         <NumField label="No data ≤" value={ch.invalidBelow} onChange={(v) => set({ invalidBelow: v })} />
       </div>
       <label className="block">
-        <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">
+        <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">
           Formula (optional — replaces the channel, e.g. Pack_Voltage * Pack_Current / 1000)
         </span>
         <input value={ch.expr ?? ''} onChange={(e) => set({ expr: e.target.value || undefined })} spellCheck={false} className={`${INPUT} font-mono`} />
@@ -206,16 +206,16 @@ export function WidgetConfigDialog({
   const listId = `channels-${widget.id}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onMouseDown={onClose}>
       <div
-        className="relative w-[640px] max-w-[calc(100vw-2rem)] max-h-[90vh] flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
+        className="qs-dialog relative w-[640px] max-w-[calc(100vw-2rem)] max-h-[90vh] flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Configure widget"
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2">
-            <LayoutGrid className="w-4 h-4 text-primary" />
+            <LayoutGrid className="w-4 h-4 text-primary-text" />
             <h2 className="text-sm font-semibold text-foreground">Configure widget</h2>
           </div>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded" title="Close">
@@ -272,14 +272,14 @@ export function WidgetConfigDialog({
                 {draft.type !== 'gForce' && (
                   <button
                     onClick={() => set({ channels: [...draft.channels, { name: '' }] })}
-                    className="flex items-center gap-1 text-[11px] text-primary hover:underline"
+                    className="flex items-center gap-1 text-[11px] text-primary-text hover:underline"
                   >
                     <Plus className="w-3 h-3" /> Add channel
                   </button>
                 )}
               </div>
               {draft.channels.length === 0 && (
-                <p className="text-[11px] text-muted-foreground/70">No channels yet.</p>
+                <p className="text-[11px] text-muted-foreground">No channels yet.</p>
               )}
               <div className="space-y-2">
                 {draft.channels.map((ch, i) => (

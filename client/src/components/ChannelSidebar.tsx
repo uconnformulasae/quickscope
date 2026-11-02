@@ -90,12 +90,12 @@ export function ChannelSidebar({
           <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Channels</h2>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs text-primary font-medium tabular">
+            <span className="text-xs text-primary-text font-medium tabular">
               {totalActive} active
             </span>
             <button
               onClick={onCreateDerived}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/15 border border-primary/30 text-primary hover:bg-primary/25 transition-colors text-xs"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/15 border border-primary/30 text-primary-text hover:bg-primary/25 transition-colors text-xs"
               title="Create derived channel"
               data-testid="btn-create-derived-open"
             >
@@ -110,7 +110,7 @@ export function ChannelSidebar({
             onClick={() => onChartModeChange('separate')}
             className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
               chartMode === 'separate'
-                ? 'bg-primary/20 text-primary border border-primary/40'
+                ? 'bg-primary/20 text-primary-text border border-primary/40'
                 : 'text-muted-foreground border border-border hover:text-foreground hover:border-muted-foreground/40'
             }`}
           >
@@ -120,7 +120,7 @@ export function ChannelSidebar({
             onClick={() => onChartModeChange('overlay')}
             className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
               chartMode === 'overlay'
-                ? 'bg-primary/20 text-primary border border-primary/40'
+                ? 'bg-primary/20 text-primary-text border border-primary/40'
                 : 'text-muted-foreground border border-border hover:text-foreground hover:border-muted-foreground/40'
             }`}
           >
@@ -155,14 +155,14 @@ export function ChannelSidebar({
             onClick={() => onShowOnlyWithDataChange(!showOnlyWithData)}
             className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-xs border transition-colors ${
               showOnlyWithData
-                ? 'bg-primary/20 border-primary/40 text-primary'
+                ? 'bg-primary/20 border-primary/40 text-primary-text'
                 : 'border-border text-muted-foreground hover:text-foreground hover:border-muted-foreground/40'
             }`}
             data-testid="btn-has-data-toggle"
           >
             Has data
           </button>
-          <span className="text-xs text-muted-foreground/50">
+          <span className="text-xs text-muted-foreground">
             {filteredChannels.length} channels
           </span>
         </div>
@@ -174,9 +174,9 @@ export function ChannelSidebar({
         {filteredDerived.length > 0 && (
           <div className="border-b border-border/50">
             <div className="px-3 py-1.5 flex items-center gap-1.5">
-              <FlaskConical className="w-3 h-3 text-primary/70" />
-              <span className="text-xs font-medium text-muted-foreground/70">Derived</span>
-              <span className="text-xs text-muted-foreground/40">{filteredDerived.length}</span>
+              <FlaskConical className="w-3 h-3 text-primary-text/70" />
+              <span className="text-xs font-medium text-muted-foreground">Derived</span>
+              <span className="text-xs text-muted-foreground">{filteredDerived.length}</span>
             </div>
             {filteredDerived.map(dc => {
               const isActive = activeSet.has(dc.id);
@@ -263,7 +263,7 @@ function ChannelRow({ chan, isActive, onToggle }: ChannelRowProps) {
     <button
       onClick={onToggle}
       className={`
-        flex items-center gap-2 w-full px-2 py-1 text-left
+        no-press flex items-center gap-2 w-full px-2 py-1 text-left
         hover:bg-muted/30 transition-colors group
         ${isActive ? 'bg-muted/20' : ''}
         ${!fileHasData ? 'opacity-50' : ''}
@@ -287,27 +287,27 @@ function ChannelRow({ chan, isActive, onToggle }: ChannelRowProps) {
             {chan.shortName}
           </span>
           {chan.units && (
-            <span className="text-xs text-muted-foreground/50 flex-shrink-0">{chan.units}</span>
+            <span className="text-xs text-muted-foreground flex-shrink-0">{chan.units}</span>
           )}
         </div>
         {chan.longName && chan.longName !== chan.shortName && (
-          <p className="text-xs text-muted-foreground/50 truncate leading-tight">{chan.longName}</p>
+          <p className="text-xs text-muted-foreground truncate leading-tight">{chan.longName}</p>
         )}
       </div>
 
       {/* Data indicator */}
       <div className="flex-shrink-0 flex flex-col items-end gap-0.5">
         {fileHasData ? (
-          <span className="text-xs text-muted-foreground/40 tabular">
+          <span className="text-xs text-muted-foreground tabular">
             {formatSampleCount(displayCount)}
           </span>
         ) : (
-          <span className="text-xs px-1 py-0.5 rounded bg-muted/60 text-muted-foreground/50 leading-none">
+          <span className="text-xs px-1 py-0.5 rounded bg-muted/60 text-muted-foreground leading-none">
             No data
           </span>
         )}
         {fileHasData && chan.sampleRateHz > 0 && (
-          <span className="text-xs text-muted-foreground/30 tabular">
+          <span className="text-xs text-muted-foreground tabular">
             {chan.sampleRateHz}Hz
           </span>
         )}
@@ -340,7 +340,7 @@ function DerivedChannelRow({ dc, isActive, sampleCount, onToggle, onEdit, onRemo
       {/* Toggle / color swatch */}
       <button
         onClick={onToggle}
-        className="flex items-center gap-2 flex-1 min-w-0 text-left"
+        className="no-press flex items-center gap-2 flex-1 min-w-0 text-left"
       >
         <div
           className="w-3 h-3 rounded-sm flex-shrink-0 transition-all"
@@ -351,15 +351,15 @@ function DerivedChannelRow({ dc, isActive, sampleCount, onToggle, onEdit, onRemo
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
-            <FlaskConical className="w-2.5 h-2.5 text-primary/60 flex-shrink-0" />
+            <FlaskConical className="w-2.5 h-2.5 text-primary-text/60 flex-shrink-0" />
             <span className={`text-xs font-medium truncate ${isActive ? 'text-foreground' : 'text-muted-foreground'}`}>
               {dc.name}
             </span>
             {dc.units && (
-              <span className="text-xs text-muted-foreground/50 flex-shrink-0">{dc.units}</span>
+              <span className="text-xs text-muted-foreground flex-shrink-0">{dc.units}</span>
             )}
           </div>
-          <p className="text-xs text-muted-foreground/40 leading-tight">
+          <p className="text-xs text-muted-foreground leading-tight">
             {sampleCount > 0 ? formatSampleCount(sampleCount) : 'No data'}
           </p>
         </div>
@@ -369,14 +369,14 @@ function DerivedChannelRow({ dc, isActive, sampleCount, onToggle, onEdit, onRemo
       <div className="flex items-center gap-0.5 opacity-60 sm:opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={e => { e.stopPropagation(); onEdit(); }}
-          className="p-1 rounded text-muted-foreground/60 hover:text-primary transition-colors"
+          className="p-1 rounded text-muted-foreground hover:text-primary-text transition-colors"
           title="Edit"
         >
           <Pencil className="w-3 h-3" />
         </button>
         <button
           onClick={e => { e.stopPropagation(); onRemove(); }}
-          className="p-1 rounded text-muted-foreground/60 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+          className="p-1 rounded text-muted-foreground hover:text-red-500 dark:hover:text-red-400 transition-colors"
           title="Delete"
         >
           <Trash2 className="w-3 h-3" />

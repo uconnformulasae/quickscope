@@ -66,9 +66,9 @@ export function ImageExportDialog({ spec, onClose }: ImageExportDialogProps) {
   }, [result]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onClick={onClose}>
       <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-5xl mx-4 flex flex-col overflow-hidden"
+        className="qs-dialog bg-card border border-border rounded-xl shadow-2xl w-full max-w-5xl mx-4 flex flex-col overflow-hidden"
         style={{ maxHeight: '90vh' }}
         onClick={e => e.stopPropagation()}
         data-testid="image-export-dialog"
@@ -76,7 +76,7 @@ export function ImageExportDialog({ spec, onClose }: ImageExportDialogProps) {
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2 min-w-0">
-            <ImageDown className="w-4 h-4 text-primary flex-shrink-0" />
+            <ImageDown className="w-4 h-4 text-primary-text flex-shrink-0" />
             <span className="text-sm font-semibold text-foreground flex-shrink-0">Save image</span>
             {result && (
               <span className="text-xs text-muted-foreground font-mono truncate ml-2" title={result.fileName}>

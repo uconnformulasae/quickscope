@@ -182,7 +182,7 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 p-6">
-        <Loader2 className="w-5 h-5 text-primary animate-spin" />
+        <Loader2 className="w-5 h-5 text-primary-text animate-spin" />
         <p className="text-xs text-muted-foreground">Loading GPS data...</p>
       </div>
     );
@@ -201,7 +201,7 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 p-6 text-center">
         <div className="w-12 h-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
-          <MapPin className="w-5 h-5 text-primary/60" />
+          <MapPin className="w-5 h-5 text-primary-text/60" />
         </div>
         <div>
           <p className="text-sm font-medium text-foreground mb-1">No GPS Data</p>

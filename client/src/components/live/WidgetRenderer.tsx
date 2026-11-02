@@ -138,7 +138,7 @@ export function WidgetRenderer({
   };
   const label = (ref: ChannelRef) => ref.label || ref.name || ref.expr || '—';
   const note = widget.note && widget.type !== 'note' && (
-    <p className="mt-2 text-[10px] text-muted-foreground/70 leading-snug whitespace-pre-wrap">{widget.note}</p>
+    <p className="mt-2 text-[10px] text-muted-foreground leading-snug whitespace-pre-wrap">{widget.note}</p>
   );
   // With a snapshot in hand but nothing for any of this widget's channels,
   // the source isn't transmitting (e.g. ECU unpowered) — say so instead of a wall of dashes.
@@ -208,7 +208,7 @@ export function WidgetRenderer({
     case 'otherChannels': {
       const entries = otherChannelEntries(ch, usedChannels);
       body = entries.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground/60">
+        <p className="text-[11px] text-muted-foreground">
           {latest
             ? 'Every channel in this snapshot is already on the dashboard.'
             : 'Channels the car sends that no other widget shows will appear here.'}
@@ -224,10 +224,10 @@ export function WidgetRenderer({
                 {...clickableProps(onClick)}
                 className={`rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5 ${onClick ? CLICKABLE : ''}`}
               >
-                <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={name}>{name}</p>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground truncate" title={name}>{name}</p>
                 <p className="text-sm font-semibold tabular mt-0.5 text-foreground">
                   {displayValue(ref, val)}
-                  {unit(ref) && <span className={`text-[9px] font-normal ml-1 ${unitTone(unitChanged)}`}>{unit(ref)}</span>}
+                  {unit(ref) && <span className={`text-[10px] font-normal ml-1 ${unitTone(unitChanged)}`}>{unit(ref)}</span>}
                 </p>
               </div>
             );

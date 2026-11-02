@@ -181,7 +181,7 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
       </div>
 
       {xChan && yChan && (!xHasData || !yHasData) ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground/50 text-xs italic">
+        <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs italic">
           {!xHasData && !yHasData
             ? `No data for ${xChan.shortName} or ${yChan.shortName}`
             : !xHasData

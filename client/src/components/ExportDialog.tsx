@@ -138,16 +138,16 @@ export function ExportDialog({
   }, [selectedIds, allChannels, fileName, onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onClick={onClose}>
       <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col overflow-hidden"
+        className="qs-dialog bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col overflow-hidden"
         style={{ maxHeight: '80vh' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Download className="w-4 h-4 text-primary" />
+            <Download className="w-4 h-4 text-primary-text" />
             <span className="text-sm font-semibold text-foreground">Export CSV</span>
           </div>
           <button
@@ -195,7 +195,7 @@ export function ExportDialog({
               <button
                 key={ch.id}
                 onClick={() => toggleChannel(ch.id)}
-                className={`flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-left transition-colors hover:bg-muted/30 ${isSelected ? 'bg-muted/20' : ''}`}
+                className={`no-press flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-left transition-colors hover:bg-muted/30 ${isSelected ? 'bg-muted/20' : ''}`}
               >
                 <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-border'}`}>
                   {isSelected && (
@@ -207,10 +207,10 @@ export function ExportDialog({
                 <div className="flex-1 min-w-0">
                   <span className={`text-xs font-medium ${isSelected ? 'text-foreground' : 'text-muted-foreground'}`}>
                     {ch.name}
-                    {ch.units && <span className="ml-1 text-muted-foreground/50">{ch.units}</span>}
+                    {ch.units && <span className="ml-1 text-muted-foreground">{ch.units}</span>}
                   </span>
                 </div>
-                <span className="text-xs text-muted-foreground/40 tabular flex-shrink-0">
+                <span className="text-xs text-muted-foreground tabular flex-shrink-0">
                   {ch.sampleCount >= 1000 ? `${(ch.sampleCount / 1000).toFixed(0)}K` : ch.sampleCount}
                 </span>
               </button>

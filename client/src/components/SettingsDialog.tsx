@@ -53,9 +53,9 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onClick={onClose}>
       <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4"
+        className="qs-dialog bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -81,7 +81,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                   value={settings.aim_wifi_ssid}
                   onChange={e => setSettings({ ...settings, aim_wifi_ssid: e.target.value })}
                   placeholder="AiM-EVO5-00740-UConn-EV"
-                  className="w-full px-3 py-2 rounded-md text-sm bg-muted/30 border border-border text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50"
+                  className="w-full px-3 py-2 rounded-md text-sm bg-muted/30 border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50"
                 />
               </div>
               <div className="flex gap-2">
@@ -91,7 +91,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                     type="text"
                     value={settings.aim_device_ip}
                     onChange={e => setSettings({ ...settings, aim_device_ip: e.target.value })}
-                    className="w-full px-3 py-2 rounded-md text-sm bg-muted/30 border border-border text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50"
+                    className="w-full px-3 py-2 rounded-md text-sm bg-muted/30 border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50"
                   />
                 </div>
                 <div className="w-24">
@@ -101,7 +101,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                     value={settings.aim_device_port === 0 ? '' : settings.aim_device_port}
                     onChange={e => setSettings({ ...settings, aim_device_port: e.target.value === '' ? 0 : parseInt(e.target.value, 10) || 0 })}
                     placeholder="2000"
-                    className="w-full px-3 py-2 rounded-md text-sm bg-muted/30 border border-border text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50"
+                    className="w-full px-3 py-2 rounded-md text-sm bg-muted/30 border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50"
                   />
                 </div>
               </div>

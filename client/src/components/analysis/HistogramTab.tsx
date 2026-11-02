@@ -113,7 +113,7 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
       </select>
 
       {chan && !hasData ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground/50 text-xs italic">
+        <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs italic">
           No data recorded for {chan.shortName} in this session
         </div>
       ) : (

@@ -55,8 +55,8 @@ function pickIndexing(queue: string[], server: AimPullProgress): Record<string, 
 }
 
 const INDEX_BADGE: Record<AimIndexStatus, { label: string; className: string }> = {
-  pending: { label: 'indexing', className: 'bg-primary/10 text-primary' },
-  running: { label: 'indexing', className: 'bg-primary/10 text-primary' },
+  pending: { label: 'indexing', className: 'bg-primary/10 text-primary-text' },
+  running: { label: 'indexing', className: 'bg-primary/10 text-primary-text' },
   ok: { label: 'indexed', className: 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400' },
   failed: { label: 'parse warning', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
 };
@@ -198,9 +198,9 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
   const newCount = sessions.filter(s => !s.already_downloaded).length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onClick={onClose}>
       <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col"
+        className="qs-dialog bg-card border border-border rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -218,14 +218,14 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
         <div className="flex-1 overflow-y-auto min-h-0">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12 gap-3">
-              <Loader2 className="w-5 h-5 text-primary animate-spin" />
+              <Loader2 className="w-5 h-5 text-primary-text animate-spin" />
               <p className="text-xs text-muted-foreground">Listing sessions on device...</p>
             </div>
           ) : sessions.length === 0 && !error ? (
             <div className="flex flex-col items-center justify-center py-12 gap-2 px-5 text-center">
               <HardDrive className="w-6 h-6 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">No sessions found on device</p>
-              <p className="text-xs text-muted-foreground/70">
+              <p className="text-xs text-muted-foreground">
                 Connect to the AiM WiFi hotspot and verify the device IP in Settings (default 10.0.0.1).
               </p>
             </div>
@@ -328,7 +328,7 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
               <span>{sessions.length} on device</span>
               {newCount > 0 && <span>{newCount} new</span>}
               <span>{selected.size} selected</span>
-              <button onClick={selectAll} className="text-primary hover:underline">Select all</button>
+              <button onClick={selectAll} className="text-primary-text hover:underline">Select all</button>
               <button onClick={selectNone} className="hover:underline">Deselect all</button>
             </div>
             <button

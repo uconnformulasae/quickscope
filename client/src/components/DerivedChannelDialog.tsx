@@ -183,18 +183,18 @@ export function DerivedChannelDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center qs-scrim"
       data-backdrop="1"
       onClick={handleBackdrop}
     >
       <div
-        className="relative w-[480px] max-h-[90vh] flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
+        className="qs-dialog relative w-[480px] max-h-[90vh] flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2">
-            <FlaskConical className="w-4 h-4 text-primary" />
+            <FlaskConical className="w-4 h-4 text-primary-text" />
             <h2 className="text-sm font-semibold text-foreground">
               {editing ? 'Edit Derived Channel' : 'Create Derived Channel'}
             </h2>
@@ -301,32 +301,32 @@ export function DerivedChannelDialog({
               data-testid="textarea-expression"
             />
             {mode === 'formula' && (
-              <p className="mt-1 text-xs text-muted-foreground/60">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Use channel names as variables. Operators: +, −, ×, ÷, ^ (power). Functions: abs, sqrt, sin, cos, log, exp, diff, smooth, mavg, delay.
               </p>
             )}
             {mode === 'python' && (
-              <div className="mt-2 space-y-2 text-xs text-muted-foreground/70 bg-muted/20 border border-border/40 rounded p-2.5">
+              <div className="mt-2 space-y-2 text-xs text-muted-foreground bg-muted/20 border border-border/40 rounded p-2.5">
                 <p className="text-muted-foreground font-medium">Your script receives:</p>
                 <ul className="space-y-1.5 ml-1">
                   <li>
-                    <code className="text-primary/80">channels</code> — dict of all channel data.
-                    Access like <code className="text-primary/80">channels['Spd1']</code>,
-                    each is <code className="text-primary/80">{'{"timestamps": [...], "values": [...]}'}</code>
+                    <code className="text-primary-text/80">channels</code> — dict of all channel data.
+                    Access like <code className="text-primary-text/80">channels['Spd1']</code>,
+                    each is <code className="text-primary-text/80">{'{"timestamps": [...], "values": [...]}'}</code>
                   </li>
                   <li>
-                    <code className="text-primary/80">np</code> — numpy, for array math
+                    <code className="text-primary-text/80">np</code> — numpy, for array math
                   </li>
                   <li>
-                    <code className="text-primary/80">math</code> — Python math module
+                    <code className="text-primary-text/80">math</code> — Python math module
                   </li>
                   <li>
-                    <code className="text-primary/80">interpolate(ch, t)</code> — get a channel's value at timestamp <code className="text-primary/80">t</code>.
+                    <code className="text-primary-text/80">interpolate(ch, t)</code> — get a channel's value at timestamp <code className="text-primary-text/80">t</code>.
                     Useful when channels have different sample rates
                   </li>
                 </ul>
                 <p className="text-muted-foreground font-medium pt-1 border-t border-border/30">
-                  Must assign: <code className="text-primary/80">{"result = {'timestamps': [...], 'values': [...]}"}</code>
+                  Must assign: <code className="text-primary-text/80">{"result = {'timestamps': [...], 'values': [...]}"}</code>
                 </p>
               </div>
             )}
@@ -351,7 +351,7 @@ export function DerivedChannelDialog({
               return (
                 <div className="mt-2 space-y-2">
                   <div className="relative">
-                    <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground/60 pointer-events-none" />
+                    <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                     <input
                       type="text"
                       value={channelSearch}
@@ -363,7 +363,7 @@ export function DerivedChannelDialog({
                   </div>
                   <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-2 bg-muted/20 rounded border border-border/40">
                     {filtered.length === 0 ? (
-                      <span className="text-xs text-muted-foreground/60 italic">No channels match "{channelSearch}"</span>
+                      <span className="text-xs text-muted-foreground italic">No channels match "{channelSearch}"</span>
                     ) : filtered.map(n => (
                       <button
                         key={n}
@@ -387,7 +387,7 @@ export function DerivedChannelDialog({
             <button
               onClick={handlePreview}
               disabled={!name.trim() || !expression.trim() || isEvaluating}
-              className="w-full py-1.5 rounded text-xs border border-primary/50 text-primary hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="w-full py-1.5 rounded text-xs border border-primary/50 text-primary-text hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               data-testid="btn-preview"
             >
               {isEvaluating ? 'Evaluating...' : 'Preview'}

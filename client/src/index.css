@@ -24,6 +24,7 @@
 
     /* Primary: Electric Blue */
     --primary: 232 82% 59%;           /* #4361ee */
+    --primary-text: 232 82% 68%;      /* primary as small text: 5.0:1 on card (fill stays #4361ee) */
     --primary-foreground: 0 0% 100%;
 
     /* Secondary: subtle dark surface */
@@ -32,7 +33,7 @@
 
     /* Muted */
     --muted: 230 20% 14%;             /* #191d2b */
-    --muted-foreground: 220 10% 50%;  /* muted text */
+    --muted-foreground: 220 10% 58%;  /* muted text: 5.7:1 on card, 5.1:1 on muted (HIG 4.5:1) */
 
     /* Accent: Racing Orange */
     --accent: 28 100% 49%;            /* #f77f00 */
@@ -83,11 +84,12 @@
     --popover: 230 25% 10%;
     --popover-foreground: 220 15% 88%;
     --primary: 232 82% 59%;
+    --primary-text: 232 82% 68%;
     --primary-foreground: 0 0% 100%;
     --secondary: 230 20% 16%;
     --secondary-foreground: 220 15% 75%;
     --muted: 230 20% 14%;
-    --muted-foreground: 220 10% 50%;
+    --muted-foreground: 220 10% 58%;
     --accent: 28 100% 49%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 72% 51%;
@@ -124,6 +126,7 @@
     --popover-foreground: 230 25% 10%;
 
     --primary: 232 82% 50%;          /* slightly deeper blue for white bg */
+    --primary-text: 232 82% 50%;     /* 7.9:1 on white */
     --primary-foreground: 0 0% 100%;
 
     --secondary: 220 14% 92%;
@@ -222,7 +225,8 @@
 /* Live dashboard grid (react-grid-layout) — theme the library's edit chrome. */
 .react-grid-item.react-grid-placeholder {
   background: hsl(var(--primary));
-  opacity: 0.15;
+  opacity: 0.12;
+  transition: transform var(--dur-fast) var(--ease-out), width var(--dur-fast) var(--ease-out), height var(--dur-fast) var(--ease-out);
   border-radius: var(--radius);
 }
 .live-grid-editing .react-grid-item > section {
@@ -231,4 +235,119 @@
 }
 .react-grid-item > .react-resizable-handle::after {
   border-color: hsl(var(--muted-foreground));
+}
+
+/* Widgets settle into place on the shared curve; the one being dragged lifts
+   (scale + shadow on the panel, not the grid item, whose transform the
+   library owns). Extra .react-grid-layout prefix outranks the library CSS. */
+.react-grid-layout .react-grid-item.cssTransforms {
+  transition: transform var(--dur-panel) var(--ease-out), width var(--dur-panel) var(--ease-out), height var(--dur-panel) var(--ease-out);
+}
+.react-grid-layout .react-grid-item.react-draggable-dragging { transition: none; z-index: 3; }
+/* Resizing keeps the library's z-index (1) so the snap placeholder (2) stays visible. */
+.react-grid-layout .react-grid-item.resizing { transition: none; }
+.react-grid-item > section {
+  transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out);
+}
+.react-grid-item.react-draggable-dragging > section {
+  transform: scale(1.02);
+  box-shadow: 0 12px 32px rgb(0 0 0 / .35);
+}
+@media (prefers-reduced-motion: reduce) {
+  .react-grid-layout .react-grid-item.cssTransforms { transition: none; }
+  .react-grid-item.react-draggable-dragging > section { transform: none; }
+}
+
+/* =========================================================
+   Motion layer — see docs/superpowers/specs/2026-11-01-ui-motion-polish-design.md
+   Critically damped feel, no overshoot; exits ~70% of enters.
+   Never applied to live data values or chart interaction.
+   ========================================================= */
+:root {
+  --ease-out: cubic-bezier(.32, .72, 0, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --dur-press: 100ms;
+  --dur-fast: 150ms;
+  --dur-base: 220ms;
+  --dur-panel: 280ms;
+}
+
+/* Press feedback: every button responds on pointer-down. Uses the standalone
+   `scale` property so it never fights a button's own transform utilities.
+   Unlayered so it applies alongside Tailwind's transition-* utilities. */
+button {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, scale;
+  transition-timing-function: var(--ease-out);
+  transition-duration: var(--dur-fast);
+}
+button:not(:disabled):active,
+.press:active {
+  scale: .97;
+  transition-duration: var(--dur-press);
+}
+/* Wide buttons (rows, menu items, full-width actions, tabs) don't scale: Chrome
+   hit-tests the shrunken box, so a press starting near the edge would lose its
+   click — and a shrinking row reads as a glitch, not feedback. */
+button.no-press:active,
+button:is(.w-full, .flex-1):active { scale: none; }
+
+/* Sliding selection indicators (Chart/Table thumb, analysis tab underline). */
+.qs-indicator { transition: transform var(--dur-base) var(--ease-out), width var(--dur-base) var(--ease-out); }
+
+/* Overlays (dialogs, menus) — enter on mount; exit while wrapped in
+   <Presence> with data-presence="closing". */
+.qs-scrim {
+  background: rgb(0 0 0 / .55);
+  backdrop-filter: blur(4px);
+  animation: qs-fade-in var(--dur-base) var(--ease-out) both;
+}
+.qs-dialog { animation: qs-dialog-in var(--dur-base) var(--ease-out) both; }
+.qs-menu { animation: qs-menu-in var(--dur-base) var(--ease-out) both; }
+.qs-origin-tr { transform-origin: top right; }
+.qs-origin-tl { transform-origin: top left; }
+
+[data-presence="closing"] .qs-scrim { animation: qs-fade-out var(--dur-fast) var(--ease-out) forwards; }
+[data-presence="closing"] .qs-dialog { animation: qs-dialog-out var(--dur-fast) var(--ease-out) forwards; }
+[data-presence="closing"] .qs-menu { animation: qs-menu-out var(--dur-fast) var(--ease-out) forwards; }
+[data-presence="closing"] .qs-scrim,
+[data-presence="closing"] .qs-dialog,
+[data-presence="closing"] .qs-menu,
+[data-presence="closing"] .qs-menu-catcher { pointer-events: none; }
+
+/* Entrance-only helpers (in-place swaps never keep the old node around). */
+.qs-fade-in { animation: qs-fade-in var(--dur-fast) var(--ease-out) both; }
+.qs-slide-in-left { animation: qs-slide-in-left var(--dur-panel) var(--ease-out) both; }
+.qs-slide-in-right { animation: qs-slide-in-right var(--dur-panel) var(--ease-out) both; }
+.qs-slide-down { animation: qs-slide-down var(--dur-base) var(--ease-out) both; }
+
+/* Status indicators: a slow, shallow breath for "streaming"; a held-then-blink
+   pulse for warnings (reads as an alert, not a throb). */
+.qs-breathe { animation: qs-breathe 2.4s ease-in-out infinite; }
+.qs-alert-pulse { animation: qs-alert-pulse 1s linear infinite; }
+
+@keyframes qs-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes qs-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes qs-dialog-in { from { opacity: 0; transform: translateY(4px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes qs-dialog-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(4px) scale(.96); } }
+@keyframes qs-menu-in { from { opacity: 0; transform: scale(.95); } to { opacity: 1; transform: none; } }
+@keyframes qs-menu-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.95); } }
+@keyframes qs-slide-in-left { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+@keyframes qs-slide-in-right { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+@keyframes qs-slide-down { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes qs-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@keyframes qs-alert-pulse { 0%, 60% { opacity: 1; } 80% { opacity: .35; } 100% { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active, .press:active { scale: none; }
+  .qs-indicator { transition: none; }
+  .qs-slide-in-left, .qs-slide-in-right, .qs-slide-down,
+  .qs-breathe, .qs-alert-pulse { animation: none; }
+  .qs-dialog, .qs-menu, .qs-scrim, .qs-fade-in { animation: qs-fade-in var(--dur-fast) linear both; }
+  [data-presence="closing"] .qs-dialog,
+  [data-presence="closing"] .qs-menu,
+  [data-presence="closing"] .qs-scrim { animation: qs-fade-out var(--dur-fast) linear forwards; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .qs-scrim { backdrop-filter: none; background: rgb(0 0 0 / .7); }
 }
