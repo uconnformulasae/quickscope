@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Save } from 'lucide-react';
 import { getSettings, updateSettings, type Settings } from '../lib/api';
+import { DisplaySettings } from './settings/DisplaySettings';
 
 interface SettingsDialogProps {
   onClose: () => void;
@@ -68,6 +69,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
 
         {/* Content */}
         <div className="px-5 py-4 space-y-4">
+          <DisplaySettings />
           {/* AiM */}
           <div>
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
