@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { drawCursors } from './chart-cursors';
+import { drawCursors, hitTestCursor } from './chart-cursors';
 import type { ChartColors, DrawContext, StripLayout } from './chart-utils';
 import type { XRKSession } from './xrk-parser';
 
@@ -141,5 +141,21 @@ describe('drawCursors', () => {
     const { dc, calls } = makeDc({ channelDataMap: new Map() });
     drawCursors(dc, { cursorA: 5, cursorB: null, hoverT: null, deltaMode: false }, 280);
     expect(texts(calls)).not.toContain('RPM');
+  });
+});
+
+describe('hitTestCursor', () => {
+  it('hits a cursor within tolerance and misses outside it', () => {
+    expect(hitTestCursor(100, 103, null, 6)).toBe('A');
+    expect(hitTestCursor(100, 120, null, 6)).toBeNull();
+  });
+
+  it('picks the nearer cursor when both are within tolerance', () => {
+    expect(hitTestCursor(100, 104, 98, 6)).toBe('B');
+    expect(hitTestCursor(100, 99, 105, 6)).toBe('A');
+  });
+
+  it('hits B alone when A is unset', () => {
+    expect(hitTestCursor(100, null, 95, 6)).toBe('B');
   });
 });

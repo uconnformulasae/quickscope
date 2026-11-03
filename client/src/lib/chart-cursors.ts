@@ -316,3 +316,14 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
     drawDeltaPanel(dc, cursor.cursorA, cursor.cursorB);
   }
 }
+
+/** Which delta cursor (if any) is under the mouse. Inputs are canvas-px x
+ *  positions; the nearer cursor wins, ties go to B. */
+export function hitTestCursor(
+  mouseX: number, cursorAX: number | null, cursorBX: number | null, tolerancePx: number,
+): 'A' | 'B' | null {
+  const dA = cursorAX === null ? Infinity : Math.abs(mouseX - cursorAX);
+  const dB = cursorBX === null ? Infinity : Math.abs(mouseX - cursorBX);
+  if (Math.min(dA, dB) > tolerancePx) return null;
+  return dB <= dA ? 'B' : 'A';
+}

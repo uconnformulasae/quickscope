@@ -9,10 +9,13 @@ import {
   clamp, niceAxisTicks, getChartColors, toDarkChartColor,
 } from '../lib/chart-utils';
 import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawXAxis } from '../lib/chart-draw';
-import { drawCursors } from '../lib/chart-cursors';
+import { drawCursors, hitTestCursor } from '../lib/chart-cursors';
 import type { ChartExportSpec } from '../lib/chart-export';
 import { ImageExportDialog } from './ImageExportDialog';
 import { Presence } from '../lib/motion';
+
+/** Grab distance (px) for dragging a delta cursor. */
+const CURSOR_HIT_PX = 6;
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -43,6 +46,7 @@ export function TelemetryChart({
   const cursor2XRef = useRef<number | null>(null); // seconds (placed cursor B, delta mode)
   const hoverXRef = useRef<number | null>(null); // seconds (live mouse position, always tracks)
   const isDraggingRef = useRef(false);
+  const dragCursorRef = useRef<'A' | 'B' | null>(null); // delta cursor being dragged
   const dragStartRef = useRef<{ mouseX: number; xRange: [number, number] } | null>(null);
   const canvasSizeRef = useRef({ w: 0, h: 0 });
   const rafIdRef = useRef<number>(0);
@@ -182,6 +186,8 @@ export function TelemetryChart({
     // When turning delta mode off, clear cursor2
     if (!deltaMode) {
       cursor2XRef.current = null;
+      dragCursorRef.current = null;
+      if (canvasRef.current) delete canvasRef.current.dataset.cursorB;
       requestDraw();
     }
   }, [deltaMode]);
@@ -395,6 +401,50 @@ export function TelemetryChart({
     return xRangeRef.current || [0, sessionDuration];
   }, [sessionDuration]);
 
+  /** Mirror placed cursor times onto the canvas (data-cursor-a/b) for tests
+   *  and debugging — DOM only, no React state. */
+  const syncCursorAttrs = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const set = (k: 'cursorA' | 'cursorB', v: number | null) => {
+      if (v === null) delete c.dataset[k]; else c.dataset[k] = v.toFixed(3);
+    };
+    set('cursorA', cursorXRef.current);
+    set('cursorB', cursor2XRef.current);
+  }, []);
+
+  /** Delta cursor under the given canvas x, if any. */
+  const cursorAtX = useCallback((mouseX: number): 'A' | 'B' | null => {
+    if (!deltaModeRef.current) return null;
+    const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
+    if (plotW <= 0) return null;
+    const xRange = getEffectiveXRange();
+    const toPx = (t: number | null) => (t === null ? null : timeToX(t, xRange, plotW));
+    return hitTestCursor(mouseX, toPx(cursorXRef.current), toPx(cursor2XRef.current), CURSOR_HIT_PX);
+  }, [getEffectiveXRange, timeToX, leftMargin, rightMargin]);
+
+  /** Move a dragged delta cursor to canvas x. */
+  const moveDraggedCursor = useCallback((which: 'A' | 'B', mouseX: number) => {
+    const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
+    if (plotW <= 0) return;
+    const xRange = getEffectiveXRange();
+    const t = clamp(xToTime(mouseX, xRange, plotW), xRange[0], xRange[1]);
+    if (which === 'A') {
+      cursorXRef.current = t;
+      clickedXRef.current = t;
+      if (onCursorTimeChange && !cursorEmitTimer.current) {
+        cursorEmitTimer.current = setTimeout(() => {
+          cursorEmitTimer.current = null;
+          if (cursorXRef.current !== null) onCursorTimeChange(cursorXRef.current);
+        }, 60);
+      }
+    } else {
+      cursor2XRef.current = t;
+    }
+    syncCursorAttrs();
+    requestDraw();
+  }, [getEffectiveXRange, xToTime, leftMargin, rightMargin, onCursorTimeChange, syncCursorAttrs]);
+
   // Store wheel handler deps in a ref so the native listener stays stable
   const wheelDepsRef = useRef({ sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin });
   useEffect(() => {
@@ -456,13 +506,18 @@ export function TelemetryChart({
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
 
-    // Check if in delta mode and this is a click (not drag)
-    isDraggingRef.current = true;
-    setCursorStyle('grabbing');
     const rect = canvasRef.current!.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
+    const hit = cursorAtX(mouseX);
+    if (hit) {
+      dragCursorRef.current = hit;
+      setCursorStyle('ew-resize');
+      return;
+    }
+    isDraggingRef.current = true;
+    setCursorStyle('grabbing');
     dragStartRef.current = { mouseX, xRange: [...getEffectiveXRange()] as [number, number] };
-  }, [getEffectiveXRange]);
+  }, [getEffectiveXRange, cursorAtX]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -472,7 +527,9 @@ export function TelemetryChart({
     const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
     if (plotW <= 0) return;
 
-    if (isDraggingRef.current && dragStartRef.current) {
+    if (dragCursorRef.current) {
+      moveDraggedCursor(dragCursorRef.current, mouseX);
+    } else if (isDraggingRef.current && dragStartRef.current) {
       // Pan
       const dx = mouseX - dragStartRef.current.mouseX;
       const origRange = dragStartRef.current.xRange;
@@ -491,6 +548,7 @@ export function TelemetryChart({
       emitViewRange([newStart, newEnd]);
       requestDraw();
     } else {
+      if (deltaModeRef.current) setCursorStyle(cursorAtX(mouseX) ? 'ew-resize' : 'crosshair');
       // Update hover cursor (always, regardless of delta mode)
       const xRange = getEffectiveXRange();
       const t = xToTime(mouseX, xRange, plotW);
@@ -508,9 +566,15 @@ export function TelemetryChart({
       }
       requestDraw();
     }
-  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin, onCursorTimeChange]);
+  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin, onCursorTimeChange, moveDraggedCursor, cursorAtX]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    if (dragCursorRef.current) {
+      // End of a cursor drag — never a click/re-place.
+      dragCursorRef.current = null;
+      if (cursorXRef.current !== null) onCursorTimeChange?.(cursorXRef.current);
+      return;
+    }
     const wasDragging = isDraggingRef.current;
     const dragStart = dragStartRef.current;
     isDraggingRef.current = false;
@@ -554,14 +618,16 @@ export function TelemetryChart({
           }
           onCursorTimeChange?.(t);
         }
+        syncCursorAttrs();
         requestDraw();
       }
     }
     dragStartRef.current = null;
-  }, [getEffectiveXRange, xToTime, leftMargin, rightMargin, onCursorTimeChange]);
+  }, [getEffectiveXRange, xToTime, leftMargin, rightMargin, onCursorTimeChange, syncCursorAttrs]);
 
   const handleMouseLeave = useCallback(() => {
     isDraggingRef.current = false;
+    dragCursorRef.current = null;
     setCursorStyle('crosshair');
     dragStartRef.current = null;
     hoverXRef.current = null;
@@ -596,6 +662,7 @@ export function TelemetryChart({
       const t = touches[0];
       const x = t.clientX - rect.left;
       const y = t.clientY - rect.top;
+      dragCursorRef.current = cursorAtX(x);
       touchStartRef.current = {
         x, y,
         t: Date.now(),
@@ -613,8 +680,9 @@ export function TelemetryChart({
         centerX,
       };
       touchStartRef.current = null;
+      dragCursorRef.current = null;
     }
-  }, [getEffectiveXRange]);
+  }, [getEffectiveXRange, cursorAtX]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     e.preventDefault();
@@ -625,7 +693,9 @@ export function TelemetryChart({
     if (plotW <= 0) return;
     const touches = e.touches;
 
-    if (touches.length === 1 && touchStartRef.current) {
+    if (touches.length === 1 && dragCursorRef.current) {
+      moveDraggedCursor(dragCursorRef.current, touches[0].clientX - rect.left);
+    } else if (touches.length === 1 && touchStartRef.current) {
       // Single-finger pan
       const t = touches[0];
       const x = t.clientX - rect.left;
@@ -672,7 +742,7 @@ export function TelemetryChart({
       }
       requestDraw();
     }
-  }, [sessionDuration, xToTime, emitViewRange, leftMargin, rightMargin]);
+  }, [sessionDuration, xToTime, emitViewRange, leftMargin, rightMargin, moveDraggedCursor]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     e.preventDefault();
@@ -680,7 +750,11 @@ export function TelemetryChart({
     if (!canvas) return;
     const remainingTouches = e.touches.length;
 
-    if (remainingTouches === 0) {
+    if (remainingTouches === 0 && dragCursorRef.current) {
+      dragCursorRef.current = null;
+      touchStartRef.current = null;
+      if (cursorXRef.current !== null) onCursorTimeChange?.(cursorXRef.current);
+    } else if (remainingTouches === 0) {
       // Check for tap (no significant movement, short duration)
       if (touchStartRef.current && e.changedTouches.length > 0) {
         const touch = e.changedTouches[0];
@@ -699,6 +773,7 @@ export function TelemetryChart({
           const t = clamp(xToTime(endX, xRange, plotW), xRange[0], xRange[1]);
           cursorXRef.current = t;
           if (onCursorTimeChange) onCursorTimeChange(t);
+          syncCursorAttrs();
           requestDraw();
         }
       }
@@ -716,16 +791,17 @@ export function TelemetryChart({
         xRange: [...getEffectiveXRange()] as [number, number],
       };
     }
-  }, [getEffectiveXRange, xToTime, onCursorTimeChange, leftMargin, rightMargin]);
+  }, [getEffectiveXRange, xToTime, onCursorTimeChange, leftMargin, rightMargin, syncCursorAttrs]);
 
   // ─── Reset zoom from toolbar ──────────────────────────────────────────
   const resetZoom = useCallback(() => {
     xRangeRef.current = null;
     cursorXRef.current = null;
     cursor2XRef.current = null;
+    syncCursorAttrs();
     emitViewRange(null);
     requestDraw();
-  }, [emitViewRange]);
+  }, [emitViewRange, syncCursorAttrs]);
 
   // ─── Toggle delta mode ────────────────────────────────────────────────
   const toggleDelta = useCallback(() => {
