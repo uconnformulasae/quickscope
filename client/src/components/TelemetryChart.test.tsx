@@ -88,3 +88,38 @@ describe('TelemetryChart drawing', () => {
     expect(frames).toHaveLength(0);
   });
 });
+
+describe('TelemetryChart delta cursor drag', () => {
+  const at = (x: number) => ({ clientX: x, clientY: 50, button: 0 });
+  // 10 s session, 1000 px wide: x → time = (x - LEFT_MARGIN) / plotW * 10
+  function timeAt(x: number) { return ((x - 60) / (1000 - 60 - 12)) * 10; }
+
+  it('drags cursor B without panning, and a press on a cursor does not re-place it', async () => {
+    vi.useFakeTimers();
+    fakeLayout({ width: 1000, height: 300 });
+    const onViewRangeChange = vi.fn();
+    renderChart({ onViewRangeChange });
+    fireEvent.click(screen.getByTestId('delta-toggle'));
+    const canvas = screen.getByTestId('telemetry-canvas');
+
+    for (const x of [300, 600]) {
+      fireEvent.mouseDown(canvas, at(x));
+      fireEvent.mouseUp(canvas, at(x));
+    }
+    expect(Number(canvas.dataset.cursorB)).toBeCloseTo(timeAt(600), 2);
+
+    fireEvent.mouseDown(canvas, at(600));
+    fireEvent.mouseMove(canvas, at(700));
+    fireEvent.mouseUp(canvas, at(700));
+    expect(Number(canvas.dataset.cursorB)).toBeCloseTo(timeAt(700), 2);
+    expect(Number(canvas.dataset.cursorA)).toBeCloseTo(timeAt(300), 2);
+
+    fireEvent.mouseDown(canvas, at(702));
+    fireEvent.mouseUp(canvas, at(702));
+    expect(Number(canvas.dataset.cursorB)).toBeCloseTo(timeAt(700), 2);
+
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(onViewRangeChange).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});
