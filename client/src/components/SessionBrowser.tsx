@@ -261,9 +261,9 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
     >
-      {/* Toolbar — one bar, every action visible. Live leads: it's the
+      {/* Toolbar — one bar, every action visible. Views leads: it's the
           trackside entry point. Status colors mean status only (green = AiM
-          reachable); the Live button's tint is emphasis, its dot is status. */}
+          reachable); the Views button's tint is emphasis. */}
       <header className="flex items-center gap-2 px-4 h-14 border-b border-border bg-card flex-shrink-0">
         <QuickScopeLogo />
         <div className="w-px h-6 bg-border mx-2" />
@@ -277,10 +277,6 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
           className="flex items-center gap-2 h-8 px-3.5 rounded-lg text-[13px] font-semibold bg-primary/15 text-primary-text hover:bg-primary/25 transition-colors"
           title={aimStatus?.connected ? 'Open Views: stream live data from the AiM device' : 'Open Views (offline preview: AiM device not reachable)'}
         >
-          <span
-            aria-hidden
-            className={`w-2 h-2 rounded-full ${aimStatus?.connected ? 'bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_0_3px_rgb(16_185_129/0.2)]' : 'bg-muted-foreground/60'}`}
-          />
           <Activity className="w-4 h-4" />
           Views
         </button>
