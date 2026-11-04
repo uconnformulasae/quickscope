@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import json
 import csv
 import math
 import os
@@ -229,9 +230,22 @@ async def get_gps():
 # ─── Export ──────────────────────────────────────────────────────────────────
 
 @router.get("/export")
-async def export_csv(channels: str = Query(...)):
+async def export_csv(channels: str = Query(...), convert: str | None = Query(None)):
+    """``convert`` (optional) is JSON ``{name: {"unit", "scale", "offset"}}``:
+    the client's display-unit conversion, applied as ``value * scale + offset``."""
     if not state.loaded:
         raise HTTPException(400, "No file loaded")
+
+    conversions: dict = {}
+    if convert:
+        try:
+            parsed = json.loads(convert)
+            if not isinstance(parsed, dict):
+                raise ValueError
+            for cname, spec in parsed.items():
+                conversions[cname] = (str(spec["unit"]), float(spec["scale"]), float(spec.get("offset", 0.0)))
+        except (ValueError, TypeError, KeyError):
+            raise HTTPException(400, "Malformed convert parameter")
 
     names = [n.strip() for n in channels.split(",") if n.strip()]
     if not names:
@@ -262,6 +276,11 @@ async def export_csv(channels: str = Query(...)):
         _interp_on_timebase(cd["timestamps"], cd["values"], timebase)
         for cd in ch_data.values()
     ]
+    for idx, name in enumerate(ch_data):
+        if name in conversions:
+            unit, scale, offset = conversions[name]
+            columns[idx] = columns[idx] * scale + offset
+            units_map[name] = unit
 
     def _csv_chunks():
         """Yield the CSV a few thousand rows at a time so the whole file is

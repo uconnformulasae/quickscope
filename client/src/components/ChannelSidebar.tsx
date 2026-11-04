@@ -2,6 +2,8 @@ import { useMemo } from 'react';
 import { Search, X, FlaskConical, Pencil, Trash2 } from 'lucide-react';
 import type { XRKSession, ChannelDef } from '../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel, ChartMode } from '../lib/useXRKStore';
+import { usePreferences } from '../lib/usePreferences';
+import { convertibleUnits, resolveDisplayUnit } from '../lib/units';
 
 interface ChannelSidebarProps {
   session: XRKSession;
@@ -43,6 +45,12 @@ export function ChannelSidebar({
   chartMode,
   onChartModeChange,
 }: ChannelSidebarProps) {
+  const { prefs, update } = usePreferences();
+  const setUnitOverride = (shortName: string, unit: string) => {
+    const next = { ...prefs.unitOverrides };
+    if (unit) next[shortName] = unit; else delete next[shortName];
+    update({ unitOverrides: next });
+  };
   const activeSet = useMemo(() => new Set(activeChannels.map(c => c.channelId)), [activeChannels]);
 
   // Sorted flat list of session channels
@@ -226,17 +234,36 @@ export function ChannelSidebar({
               const sessionChan = session.channels.get(ac.channelId);
               const derivedChan = derivedChannels.find(d => d.id === ac.channelId);
               const label = sessionChan?.shortName ?? derivedChan?.name ?? `#${ac.channelId}`;
+              const rawUnit = sessionChan?.units ?? derivedChan?.units ?? '';
+              const unitOptions = convertibleUnits(rawUnit);
               return (
-                <button
+                <div
                   key={ac.channelId}
-                  onClick={() => onToggleChannel(ac.channelId, ac.color)}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors hover:opacity-80"
+                  className="flex items-center rounded-full text-xs border"
                   style={{ borderColor: ac.color + '60', background: ac.color + '20', color: ac.color }}
                 >
-                  {derivedChan && <FlaskConical className="w-2.5 h-2.5" />}
-                  {label}
-                  <X className="w-2.5 h-2.5" />
-                </button>
+                  <button
+                    onClick={() => onToggleChannel(ac.channelId, ac.color)}
+                    className="flex items-center gap-1 pl-2 pr-1.5 py-0.5 rounded-full transition-colors hover:opacity-80"
+                    title={`Remove ${label}`}
+                  >
+                    {derivedChan && <FlaskConical className="w-2.5 h-2.5" />}
+                    {label}
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                  {unitOptions.length > 0 && (
+                    <select
+                      aria-label={`${label} unit`}
+                      value={prefs.unitOverrides[label] ?? ''}
+                      onChange={e => setUnitOverride(label, e.target.value)}
+                      className="mr-1 bg-transparent text-xs outline-none cursor-pointer"
+                      style={{ color: ac.color }}
+                    >
+                      <option value="">{resolveDisplayUnit(label, rawUnit, { unitSystem: prefs.unitSystem, unitOverrides: {} })}</option>
+                      {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  )}
+                </div>
               );
             })}
           </div>

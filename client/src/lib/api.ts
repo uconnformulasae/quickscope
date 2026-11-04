@@ -523,10 +523,13 @@ export async function fetchLiveChannels(vehicle: 'ev' | 'ic'): Promise<LiveChann
   return res.json();
 }
 
-export async function exportCSV(channels: string[]): Promise<Blob> {
-  const res = await fetch(
-    `${API_BASE}/api/export?channels=${encodeURIComponent(channels.join(','))}`,
-  );
+/** Per-channel display-unit conversion for the CSV: value * scale + offset. */
+export type ExportConversions = Record<string, { unit: string; scale: number; offset: number }>;
+
+export async function exportCSV(channels: string[], convert?: ExportConversions): Promise<Blob> {
+  const params = new URLSearchParams({ channels: channels.join(',') });
+  if (convert && Object.keys(convert).length > 0) params.set('convert', JSON.stringify(convert));
+  const res = await fetch(`${API_BASE}/api/export?${params.toString()}`);
   if (!res.ok) {
     throw new Error(`Export failed: ${res.status}`);
   }

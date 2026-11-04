@@ -4,6 +4,7 @@ import { Clock } from 'lucide-react';
 import type { XRKSession, ChannelSample } from '../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../lib/useXRKStore';
 import { buildTableData, findRowByTimestamp } from '../lib/table-data';
+import { useDisplaySamples } from '../lib/useDisplaySamples';
 import { formatValue } from '../lib/chart-utils';
 
 interface TableViewProps {
@@ -26,7 +27,9 @@ export function TableView({
   const parentRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Build channel info for columns
+  const display = useDisplaySamples();
+
+  // Build channel info for columns (units are display units)
   const columns = useMemo(() => {
     return activeChannels
       .map(ac => {
@@ -36,25 +39,22 @@ export function TableView({
         return {
           channelId: ac.channelId,
           name: isDerived ? (derivedDef?.name || `DC${ac.channelId}`) : (channelDef?.shortName || `Ch${ac.channelId}`),
-          units: isDerived ? (derivedDef?.units || '') : (channelDef?.units || ''),
+          rawUnits: isDerived ? (derivedDef?.units || '') : (channelDef?.units || ''),
           color: ac.color,
         };
-      });
-  }, [activeChannels, session.channels, derivedChannels]);
+      })
+      .map(c => ({ ...c, units: display.unitOf(c.name, c.rawUnits) }));
+  }, [activeChannels, session.channels, derivedChannels, display]);
 
-  // Merge all samples maps
+  // Samples for the shown columns, in display units
   const allSamplesMap = useMemo(() => {
     const merged = new Map<number, ChannelSample[]>();
-    for (const [id, samples] of session.samples) {
-      merged.set(id, samples);
-    }
-    if (derivedSamplesMap) {
-      for (const [id, samples] of derivedSamplesMap) {
-        merged.set(id, samples);
-      }
+    for (const c of columns) {
+      const raw = session.samples.get(c.channelId) ?? derivedSamplesMap?.get(c.channelId);
+      if (raw) merged.set(c.channelId, display(c.channelId, c.name, c.rawUnits, raw).samples);
     }
     return merged;
-  }, [session.samples, derivedSamplesMap]);
+  }, [columns, session.samples, derivedSamplesMap, display]);
 
   // Build table data
   const channelIds = useMemo(() => columns.map(c => c.channelId), [columns]);

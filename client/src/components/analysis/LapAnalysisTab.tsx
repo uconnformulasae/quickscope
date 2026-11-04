@@ -4,6 +4,7 @@ import { computeStats, formatLapTime } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { Timer } from 'lucide-react';
 import { formatNum, resolveChannel, resolveSamples } from './analysis-helpers';
+import { useDisplaySamples } from '../../lib/useDisplaySamples';
 
 /** Laps shorter than this fraction of the median lap can't be the best lap. */
 const MIN_BEST_LAP_FRACTION = 0.5;
@@ -33,6 +34,7 @@ export function LapAnalysisTab({
   derivedChannels?: DerivedChannel[];
   derivedSamplesMap?: Map<number, any>;
 }) {
+  const display = useDisplaySamples();
   const lapData = useMemo(() => {
     const markers = session.lapMarkers;
     if (markers.length < 2) return [];
@@ -61,9 +63,9 @@ export function LapAnalysisTab({
 
       const channelStats: Record<string, any> = {};
       for (const ac of activeChannels.slice(0, 3)) {
-        const chan = resolveChannel(ac.channelId, session, derivedChannels);
+        const chan = resolveChannel(ac.channelId, session, derivedChannels, display);
         if (!chan) continue;
-        const allSamps = resolveSamples(ac.channelId, session, derivedSamplesMap);
+        const allSamps = resolveSamples(ac.channelId, session, derivedSamplesMap, display, derivedChannels);
         const samps = allSamps.filter(s => s.timestamp >= startMs && s.timestamp <= endMs);
         channelStats[chan.shortName] = { ...computeStats(samps), color: ac.color };
       }
@@ -73,7 +75,7 @@ export function LapAnalysisTab({
 
     if (bestLap >= 0) laps[bestLap].isBest = true;
     return laps;
-  }, [session, activeChannels, derivedChannels, derivedSamplesMap]);
+  }, [session, activeChannels, derivedChannels, derivedSamplesMap, display]);
 
   if (session.lapMarkers.length < 2) {
     return (
