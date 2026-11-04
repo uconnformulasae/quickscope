@@ -14,6 +14,7 @@ import type { ChartExportSpec } from '../lib/chart-export';
 import { ImageExportDialog } from './ImageExportDialog';
 import { Presence } from '../lib/motion';
 import { usePreferences } from '../lib/usePreferences';
+import { useDisplaySamples } from '../lib/useDisplaySamples';
 
 /** Grab distance (px) for dragging a delta cursor. */
 const CURSOR_HIT_PX = 6;
@@ -35,6 +36,7 @@ export function TelemetryChart({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { prefs } = usePreferences();
   const fontScale = prefs.uiScale;
+  const display = useDisplaySamples();
   const containerRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
   const [canScroll, setCanScroll] = useState(false); // separate mode with more strips than fit
@@ -93,23 +95,25 @@ export function TelemetryChart({
     for (const ac of visibleChannels) {
       const sessionChan = session.channels.get(ac.channelId);
       if (sessionChan) {
+        const d = display(ac.channelId, sessionChan.shortName, sessionChan.units, session.samples.get(ac.channelId) || []);
         map.set(ac.channelId, {
-          def: { shortName: sessionChan.shortName, units: sessionChan.units, color: ac.color },
-          allSamples: session.samples.get(ac.channelId) || [],
+          def: { shortName: sessionChan.shortName, units: d.unit, color: ac.color },
+          allSamples: d.samples,
         });
         continue;
       }
       // Check derived
       const dc = derivedChannels?.find(d => d.id === ac.channelId);
       if (dc) {
+        const d = display(ac.channelId, dc.name, dc.units, derivedSamplesMap?.get(ac.channelId) || []);
         map.set(ac.channelId, {
-          def: { shortName: dc.name, units: dc.units, color: ac.color },
-          allSamples: derivedSamplesMap?.get(ac.channelId) || [],
+          def: { shortName: dc.name, units: d.unit, color: ac.color },
+          allSamples: d.samples,
         });
       }
     }
     return map;
-  }, [visibleChannels, session, derivedChannels, derivedSamplesMap]);
+  }, [visibleChannels, session, derivedChannels, derivedSamplesMap, display]);
 
   // ─── Dynamic margins for overlay Y-axes ────────────────────────────────
   // Build unique unit groups for overlay axis layout

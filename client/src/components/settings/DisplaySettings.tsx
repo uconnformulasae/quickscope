@@ -1,4 +1,10 @@
-import { usePreferences, UI_SCALE_MAX, UI_SCALE_MIN } from '../../lib/usePreferences';
+import { usePreferences, UI_SCALE_MAX, UI_SCALE_MIN, type UnitSystem } from '../../lib/usePreferences';
+
+const UNIT_SYSTEMS: { id: UnitSystem; label: string }[] = [
+  { id: 'logger', label: 'Logger' },
+  { id: 'metric', label: 'Metric' },
+  { id: 'imperial', label: 'Imperial' },
+];
 
 const labelCls = 'block text-xs text-muted-foreground mb-1';
 
@@ -37,6 +43,24 @@ export function DisplaySettings() {
               Reset
             </button>
           </div>
+        </div>
+        <div>
+          <span className={labelCls} id="unit-system-label">Units</span>
+          <div role="radiogroup" aria-labelledby="unit-system-label" className="inline-flex rounded-md border border-border p-0.5">
+            {UNIT_SYSTEMS.map(u => (
+              <button
+                key={u.id}
+                type="button"
+                role="radio"
+                aria-checked={prefs.unitSystem === u.id}
+                onClick={() => update({ unitSystem: u.id })}
+                className={`px-3 py-1 rounded text-xs transition-colors ${prefs.unitSystem === u.id ? 'bg-primary text-white' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                {u.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">Logger shows units as recorded. Per-channel overrides are on the active channel chips.</p>
         </div>
       </div>
     </section>

@@ -1,7 +1,9 @@
 import { useState, useMemo, useCallback } from 'react';
 import { X, Download, Search, CheckSquare, Square } from 'lucide-react';
 import type { XRKSession } from '../lib/xrk-parser';
-import { exportCSV } from '../lib/api';
+import { exportCSV, type ExportConversions } from '../lib/api';
+import { useDisplaySamples } from '../lib/useDisplaySamples';
+import { getConverter, linearCoefficients } from '../lib/units';
 
 interface ExportDialogProps {
   session: XRKSession;
@@ -33,6 +35,8 @@ export function ExportDialog({
     });
     return ids;
   });
+  const display = useDisplaySamples();
+  const [useDisplayUnits, setUseDisplayUnits] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -117,7 +121,15 @@ export function ExportDialog({
       }
 
       // Call backend export endpoint
-      const blob = await exportCSV(channelNames);
+      const convert: ExportConversions = {};
+      if (useDisplayUnits) {
+        for (const c of selectedChannels) {
+          const target = display.unitOf(c.name, c.units);
+          const conv = getConverter(c.units, target);
+          if (!conv.identity) convert[c.name] = { unit: conv.unit, ...linearCoefficients(conv) };
+        }
+      }
+      const blob = await exportCSV(channelNames, convert);
       const url = URL.createObjectURL(blob);
       const baseName = fileName ? fileName.replace(/\.(xrk|xrz)$/i, '') : 'export';
       const a = document.createElement('a');
@@ -135,7 +147,7 @@ export function ExportDialog({
     } finally {
       setIsExporting(false);
     }
-  }, [selectedIds, allChannels, fileName, onClose]);
+  }, [selectedIds, allChannels, fileName, onClose, useDisplayUnits, display]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onClick={onClose}>
@@ -207,7 +219,7 @@ export function ExportDialog({
                 <div className="flex-1 min-w-0">
                   <span className={`text-xs font-medium ${isSelected ? 'text-foreground' : 'text-muted-foreground'}`}>
                     {ch.name}
-                    {ch.units && <span className="ml-1 text-muted-foreground">{ch.units}</span>}
+                    {ch.units && <span className="ml-1 text-muted-foreground">{useDisplayUnits ? display.unitOf(ch.name, ch.units) : ch.units}</span>}
                   </span>
                 </div>
                 <span className="text-xs text-muted-foreground tabular flex-shrink-0">
@@ -233,6 +245,15 @@ export function ExportDialog({
             )}
           </div>
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground mr-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useDisplayUnits}
+                onChange={e => setUseDisplayUnits(e.target.checked)}
+                className="accent-primary"
+              />
+              Display units
+            </label>
             <button
               onClick={onClose}
               className="px-3 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors border border-border"

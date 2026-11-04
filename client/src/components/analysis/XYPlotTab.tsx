@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { resolveChannel, resolveSamples, ensurePlotly, getPlotlyColors } from './analysis-helpers';
+import { useDisplaySamples } from '../../lib/useDisplaySamples';
 
 export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onChannelChange, derivedChannels, derivedSamplesMap, theme }: {
   session: XRKSession;
@@ -13,19 +14,20 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
   derivedSamplesMap?: Map<number, ChannelSample[]>;
   theme?: 'dark' | 'light';
 }) {
+  const display = useDisplaySamples();
   const chartRef = useRef<HTMLDivElement>(null);
   const plottedEl = useRef<HTMLDivElement | null>(null);
 
   const activeChannelIdsWithData = activeChannels
-    .filter(ac => resolveSamples(ac.channelId, session, derivedSamplesMap).length > 0)
+    .filter(ac => resolveSamples(ac.channelId, session, derivedSamplesMap, display, derivedChannels).length > 0)
     .map(ac => ac.channelId);
   const hasValidX = xChannelId != null && activeChannelIdsWithData.includes(xChannelId);
   const effectiveXId = hasValidX ? xChannelId : activeChannelIdsWithData[0] ?? null;
   const hasValidY = yChannelId != null && activeChannelIdsWithData.includes(yChannelId);
   const fallbackY = activeChannelIdsWithData.find(id => id !== effectiveXId) ?? null;
   const effectiveYId = hasValidY ? yChannelId : fallbackY;
-  const xChan = effectiveXId != null ? resolveChannel(effectiveXId, session, derivedChannels) : null;
-  const yChan = effectiveYId != null ? resolveChannel(effectiveYId, session, derivedChannels) : null;
+  const xChan = effectiveXId != null ? resolveChannel(effectiveXId, session, derivedChannels, display) : null;
+  const yChan = effectiveYId != null ? resolveChannel(effectiveYId, session, derivedChannels, display) : null;
   const yAc = activeChannels.find(ac => ac.channelId === effectiveYId);
 
   useEffect(() => {
@@ -41,8 +43,8 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
 
       const pc = getPlotlyColors();
 
-      const xSamplesRaw = resolveSamples(xChan.index, session, derivedSamplesMap);
-      const ySamplesRaw = resolveSamples(yChan.index, session, derivedSamplesMap);
+      const xSamplesRaw = resolveSamples(xChan.index, session, derivedSamplesMap, display, derivedChannels);
+      const ySamplesRaw = resolveSamples(yChan.index, session, derivedSamplesMap, display, derivedChannels);
       if (xSamplesRaw.length === 0 || ySamplesRaw.length === 0) return;
 
       const xSamples = xSamplesRaw;
@@ -141,17 +143,18 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
         plottedEl.current = null;
       }
     };
-  }, [session, xChan, yChan, yAc, theme]);
+  // xChan/yChan are rebuilt each render when units convert; key on identity fields.
+  }, [session, xChan?.index, xChan?.units, yChan?.index, yChan?.units, yAc, theme, display]);
 
   const chanOptions = activeChannels.map(ac => {
-    const c = resolveChannel(ac.channelId, session, derivedChannels);
-    const count = resolveSamples(ac.channelId, session, derivedSamplesMap).length;
+    const c = resolveChannel(ac.channelId, session, derivedChannels, display);
+    const count = resolveSamples(ac.channelId, session, derivedSamplesMap, display, derivedChannels).length;
     if (!c) return null;
     return { id: ac.channelId, label: `${c.shortName}${c.units ? ` (${c.units})` : ''}${count === 0 ? ' \u2014 no data' : ''}`, disabled: count === 0 };
   }).filter(Boolean) as { id: number; label: string; disabled: boolean }[];
 
-  const xHasData = effectiveXId != null ? resolveSamples(effectiveXId, session, derivedSamplesMap).length > 0 : false;
-  const yHasData = effectiveYId != null ? resolveSamples(effectiveYId, session, derivedSamplesMap).length > 0 : false;
+  const xHasData = effectiveXId != null ? resolveSamples(effectiveXId, session, derivedSamplesMap, display, derivedChannels).length > 0 : false;
+  const yHasData = effectiveYId != null ? resolveSamples(effectiveYId, session, derivedSamplesMap, display, derivedChannels).length > 0 : false;
 
   return (
     <div className="p-2 flex flex-col gap-2 h-full">

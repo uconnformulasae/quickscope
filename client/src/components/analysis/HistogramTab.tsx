@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { resolveChannel, resolveSamples, ensurePlotly, getPlotlyColors } from './analysis-helpers';
+import { useDisplaySamples } from '../../lib/useDisplaySamples';
 
 export function HistogramTab({ session, activeChannels, channelId, onChannelChange, derivedChannels, derivedSamplesMap, theme }: {
   session: XRKSession;
@@ -12,18 +13,19 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
   derivedSamplesMap?: Map<number, ChannelSample[]>;
   theme?: 'dark' | 'light';
 }) {
+  const display = useDisplaySamples();
   const chartRef = useRef<HTMLDivElement>(null);
   const plottedEl = useRef<HTMLDivElement | null>(null);
 
   const activeChannelIdsWithData = activeChannels
-    .filter(ac => resolveSamples(ac.channelId, session, derivedSamplesMap).length > 0)
+    .filter(ac => resolveSamples(ac.channelId, session, derivedSamplesMap, display, derivedChannels).length > 0)
     .map(ac => ac.channelId);
   const hasValidSelectedChannel = channelId != null && activeChannelIdsWithData.includes(channelId);
   const effectiveChannelId = hasValidSelectedChannel ? channelId : activeChannelIdsWithData[0] ?? null;
-  const chan = effectiveChannelId != null ? resolveChannel(effectiveChannelId, session, derivedChannels) : null;
+  const chan = effectiveChannelId != null ? resolveChannel(effectiveChannelId, session, derivedChannels, display) : null;
   const activeChan = activeChannels.find(ac => ac.channelId === effectiveChannelId);
 
-  const sampleCount = chan ? resolveSamples(chan.index, session, derivedSamplesMap).length : 0;
+  const sampleCount = chan ? resolveSamples(chan.index, session, derivedSamplesMap, display, derivedChannels).length : 0;
   const hasData = sampleCount > 0;
 
   useEffect(() => {
@@ -39,7 +41,7 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
 
       const pc = getPlotlyColors();
 
-      const samples = resolveSamples(chan.index, session, derivedSamplesMap);
+      const samples = resolveSamples(chan.index, session, derivedSamplesMap, display, derivedChannels);
       const values = samples.map(s => s.value);
 
       const trace = {
@@ -90,7 +92,8 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
         plottedEl.current = null;
       }
     };
-  }, [session, chan, activeChan, theme]);
+  // chan is rebuilt each render when units convert; key on its identity fields.
+  }, [session, chan?.index, chan?.units, activeChan, theme, display]);
 
   return (
     <div className="p-2 flex flex-col gap-2 h-full">
@@ -101,8 +104,8 @@ export function HistogramTab({ session, activeChannels, channelId, onChannelChan
       >
         <option value="">Select channel...</option>
         {activeChannels.map(ac => {
-          const c = resolveChannel(ac.channelId, session, derivedChannels);
-          const count = resolveSamples(ac.channelId, session, derivedSamplesMap).length;
+          const c = resolveChannel(ac.channelId, session, derivedChannels, display);
+          const count = resolveSamples(ac.channelId, session, derivedSamplesMap, display, derivedChannels).length;
           if (!c) return null;
           return (
             <option key={ac.channelId} value={ac.channelId} disabled={count === 0}>

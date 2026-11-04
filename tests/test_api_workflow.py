@@ -287,6 +287,23 @@ def test_export_csv_shape_headers_and_download_name(client_with_synthetic_log):
     assert float(rows[-1][0]) == pytest.approx(90.0)
 
 
+def test_export_applies_display_unit_conversion(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    convert = json.dumps({"RPM": {"unit": "krpm", "scale": 0.001, "offset": 1}})
+    res = client_with_synthetic_log.get("/api/export", params={"channels": "RPM,Throttle_Pos", "convert": convert})
+    assert res.status_code == 200
+    rows = list(csv.reader(io.StringIO(res.text)))
+    assert rows[0] == ["Time (s)", "RPM (krpm)", "Throttle_Pos (%)"]
+    assert float(rows[1][1]) == pytest.approx(3000 * 0.001 + 1)
+    assert rows[1][2] == "0.00000"
+
+
+def test_export_rejects_malformed_convert(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    res = client_with_synthetic_log.get("/api/export", params={"channels": "RPM", "convert": "not json"})
+    assert res.status_code == 400
+
+
 def test_export_interpolates_slower_channel_onto_timebase(client_with_synthetic_log):
     upload(client_with_synthetic_log)
     _, rows = _export(client_with_synthetic_log, "RPM,Throttle_Pos")

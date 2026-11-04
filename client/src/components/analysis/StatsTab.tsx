@@ -4,6 +4,7 @@ import { computeStats, formatTime } from '../../lib/xrk-parser';
 import type { ActiveChannel, TimeRange, DerivedChannel } from '../../lib/useXRKStore';
 import { TrendingUp, Crosshair } from 'lucide-react';
 import { resolveChannel, resolveSamples, formatNum } from './analysis-helpers';
+import { useDisplaySamples } from '../../lib/useDisplaySamples';
 
 export function StatsTab({ session, activeChannels, viewRange, derivedChannels, derivedSamplesMap, onNavigateToTime }: {
   session: XRKSession;
@@ -13,11 +14,12 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
   derivedSamplesMap?: Map<number, ChannelSample[]>;
   onNavigateToTime?: (timestampMs: number) => void;
 }) {
+  const display = useDisplaySamples();
   const stats = useMemo(() => {
     return activeChannels.map(ac => {
-      const chan = resolveChannel(ac.channelId, session, derivedChannels);
+      const chan = resolveChannel(ac.channelId, session, derivedChannels, display);
       if (!chan) return null;
-      const allSamps = resolveSamples(ac.channelId, session, derivedSamplesMap);
+      const allSamps = resolveSamples(ac.channelId, session, derivedSamplesMap, display, derivedChannels);
       const globalStats = computeStats(allSamps);
       let viewSamps = allSamps;
       if (viewRange) {
@@ -27,7 +29,7 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
       const totalSamples = allSamps.length;
       return { chan, color: ac.color, globalStats, viewStats, totalSamples };
     }).filter(Boolean) as { chan: any; color: string; globalStats: any; viewStats: any; totalSamples: number }[];
-  }, [session, activeChannels, viewRange, derivedChannels, derivedSamplesMap]);
+  }, [session, activeChannels, viewRange, derivedChannels, derivedSamplesMap, display]);
 
   if (stats.length === 0) {
     return (
