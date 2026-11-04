@@ -236,6 +236,12 @@ def test_gps_returns_track_with_relative_time(client_with_synthetic_log):
     assert min(gps["speed"]) >= 15.0
 
 
+def test_gps_reports_speed_units(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    gps = client_with_synthetic_log.get("/api/gps").json()["gps"]
+    assert gps["speedUnits"] == "m/s"
+
+
 def test_gps_is_null_when_session_has_no_gps(monkeypatch, isolated_data_dir):
     from main import app
     from conftest import make_log

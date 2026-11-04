@@ -56,6 +56,8 @@ export interface GPSData {
   lat: number[];
   lon: number[];
   speed: number[] | null;
+  /** Units of the speed channel ('' when unknown / no speed channel). */
+  speedUnits?: string;
 }
 
 export interface LocalSession {

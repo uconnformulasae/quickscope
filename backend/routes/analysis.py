@@ -224,6 +224,12 @@ async def get_gps():
     if not filtered["lat"]:
         return {"gps": None}
 
+    # Units of the speed channel so the client can convert the trail colours;
+    # speed is null (not zeros) when the session has no GPS speed channel.
+    filtered["speedUnits"] = channel_meta(speed_name, ch[speed_name])["units"] if speed_name else ""
+    if not speed_name:
+        filtered["speed"] = None
+
     return {"gps": filtered}
 
 
