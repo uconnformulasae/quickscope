@@ -55,3 +55,9 @@ export function shiftToLap(samples: ChannelSample[], lap: LapWindow): ChannelSam
   }
   return out;
 }
+
+/** Whether session time tMs falls in any of the given laps (true when none given). */
+export function segmentInLaps(tMs: number, laps: LapWindow[]): boolean {
+  if (laps.length === 0) return true;
+  return laps.some(l => tMs >= l.startMs && tMs <= l.endMs);
+}

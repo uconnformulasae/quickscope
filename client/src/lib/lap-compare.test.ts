@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLapWindows, lapColor, LAP_COMPARE_PALETTE, lapRelativeRange, shiftToLap, toSessionMs } from './lap-compare';
+import { buildLapWindows, lapColor, LAP_COMPARE_PALETTE, lapRelativeRange, segmentInLaps, shiftToLap, toSessionMs } from './lap-compare';
 
 const markers = [
   { timestamp: 0, lapNumber: 1 },
@@ -52,5 +52,16 @@ describe('shiftToLap', () => {
       { timestamp: 30000, value: 3 },
       { timestamp: 65000, value: 4 },
     ]);
+  });
+});
+
+describe('segmentInLaps', () => {
+  const lap2 = buildLapWindows(markers)[1]; // 60000..125000
+  it('is true inside a selected lap and false outside', () => {
+    expect(segmentInLaps(70000, [lap2])).toBe(true);
+    expect(segmentInLaps(10, [lap2])).toBe(false);
+  });
+  it('treats no selection as everything highlighted', () => {
+    expect(segmentInLaps(10, [])).toBe(true);
   });
 });

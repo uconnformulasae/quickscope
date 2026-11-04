@@ -9,6 +9,8 @@ import 'leaflet/dist/leaflet.css';
 import { usePreferences } from '../lib/usePreferences';
 import { getConverter, resolveDisplayUnit } from '../lib/units';
 import { gradientStops, sampleGradient, speedToT } from '../lib/gradients';
+import type { LapMarker } from '../lib/xrk-parser';
+import { buildLapWindows, lapColor, segmentInLaps, selectedWindows, toSessionMs } from '../lib/lap-compare';
 
 /** Min/max without spreading — large GPS traces exceed the argument stack limit. */
 function rangeOf(values: number[]): [number, number] {
@@ -31,10 +33,27 @@ interface TrackData {
 }
 
 interface GPSMapViewProps {
-  cursorTime?: number | null; // seconds
+  cursorTime?: number | null; // seconds (lap-relative in lap compare mode)
+  lapMarkers?: LapMarker[];
+  selectedLaps?: number[];
 }
 
-export function GPSMapView({ cursorTime }: GPSMapViewProps) {
+/** Nearest track index to time tMs (times sorted). */
+function nearestIndex(times: number[], tMs: number): number {
+  let lo = 0, hi = times.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] < tMs) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo > 0 && Math.abs(times[lo - 1] - tMs) < Math.abs(times[lo] - tMs)) lo = lo - 1;
+  return lo;
+}
+
+const NO_LAPS: LapMarker[] = [];
+const NO_SELECTION: number[] = [];
+
+export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO_SELECTION }: GPSMapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.CircleMarker | null>(null);
@@ -43,6 +62,12 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
   const trackRef = useRef<TrackData | null>(null);
   const [track, setTrack] = useState<TrackData | null>(null);
   const { prefs } = usePreferences();
+  const lapMarkersRef = useRef<L.CircleMarker[]>([]);
+  const lapSel = useMemo(
+    () => selectedWindows(buildLapWindows(lapMarkers), selectedLaps),
+    [lapMarkers, selectedLaps],
+  );
+  const comparing = lapSel.length >= 2;
   const [gpsData, setGpsData] = useState<GPSData | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -181,34 +206,37 @@ export function GPSMapView({ cursorTime }: GPSMapViewProps) {
         }
         if (n > 0) color = sampleGradient(legend.stops, speedToT(sum / n, legend.lo, legend.hi));
       }
-      L.polyline(coords.slice(i, end), { color, weight: 3, opacity: 0.85 }).addTo(trail);
+      // Selected laps stay bright; the rest of the session fades back.
+      const midT = track.times[(i + end - 1) >> 1];
+      const opacity = segmentInLaps(midT, lapSel) ? 0.9 : 0.2;
+      L.polyline(coords.slice(i, end), { color, weight: 3, opacity }).addTo(trail);
     }
-  }, [track, legend]);
+  }, [track, legend, lapSel]);
 
-  // Update cursor position on map
+  // Update cursor position on map. In lap compare mode the cursor time is
+  // lap-relative: show one marker per compared lap (in its lap colour).
   useEffect(() => {
+    const map = mapRef.current;
     const track = trackRef.current;
-    if (!markerRef.current || !track || cursorTime == null) return;
-
+    for (const m of lapMarkersRef.current) m.remove();
+    lapMarkersRef.current = [];
+    if (!map || !markerRef.current || !track || track.coords.length === 0) return;
     const { coords, times } = track;
-    if (coords.length === 0) return;
 
-    const tMs = cursorTime * 1000;
-
-    // Binary search for nearest timestamp
-    let lo = 0, hi = times.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (times[mid] < tMs) lo = mid + 1;
-      else hi = mid;
-    }
-    if (lo > 0 && Math.abs(times[lo - 1] - tMs) < Math.abs(times[lo] - tMs)) {
-      lo = lo - 1;
+    if (comparing) {
+      markerRef.current.setStyle({ opacity: 0, fillOpacity: 0 });
+      if (cursorTime == null) return;
+      lapMarkersRef.current = lapSel.map((lap, i) => L.circleMarker(
+        coords[Math.min(nearestIndex(times, toSessionMs(cursorTime, lap)), coords.length - 1)],
+        { radius: 6, fillColor: lapColor(i), fillOpacity: 1, color: '#ffffff', weight: 2 },
+      ).addTo(map));
+      return;
     }
 
-    const idx = Math.min(lo, coords.length - 1);
-    markerRef.current.setLatLng(coords[idx]);
-  }, [cursorTime]);
+    markerRef.current.setStyle({ opacity: 1, fillOpacity: 1 });
+    if (cursorTime == null) return;
+    markerRef.current.setLatLng(coords[Math.min(nearestIndex(times, cursorTime * 1000), coords.length - 1)]);
+  }, [cursorTime, comparing, lapSel, track]);
 
   if (loading) {
     return (
