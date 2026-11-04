@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildLapWindows } from './lib/lap-compare';
+import { useSessionViewPersistence } from './lib/useSessionViewPersistence';
 import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
@@ -26,6 +27,8 @@ import { Upload } from 'lucide-react';
 type View = 'browser' | 'analysis' | 'live';
 
 export default function App() {
+  const app = useAppState();
+  const persistView = useSessionViewPersistence(app);
   const {
     state,
     derivedSamplesMap,
@@ -53,7 +56,7 @@ export default function App() {
     setViewMode,
     toggleLapSelected,
     setSelectedLaps,
-  } = useAppState();
+  } = app;
 
   const clearLapSelection = useCallback(() => setSelectedLaps([]), [setSelectedLaps]);
 
@@ -92,7 +95,7 @@ export default function App() {
   const [isDragOver, setIsDragOver] = useState(false);
 
   /** Build XRKSession from backend SessionInfo and switch to analysis view */
-  const buildAndSetSession = useCallback(async (info: SessionInfo, fileName: string) => {
+  const buildAndSetSession = useCallback(async (info: SessionInfo, fileName: string, viewKey: string) => {
     const nameMap = new Map<string, number>();
     for (const ch of info.channels) {
       nameMap.set(ch.name, ch.index);
@@ -175,9 +178,11 @@ export default function App() {
       logStartMs: resolveLogStartMs(info.recordedAt, info.metadata.date, info.metadata.time),
     };
 
+    // Reopening a session restores its channels/view (saved per session key).
+    persistView.beginSession(viewKey);
     setSession(session, fileName);
     setView('analysis');
-  }, [setSession, setProgress]);
+  }, [setSession, setProgress, persistView]);
 
   /** Called when session browser loads a session */
   const handleSessionLoaded = useCallback(async (
@@ -188,7 +193,7 @@ export default function App() {
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
-      await buildAndSetSession(info, fileName);
+      await buildAndSetSession(info, fileName, sessionId);
     } catch (err) {
       setError(`Failed to load session: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -218,7 +223,7 @@ export default function App() {
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
       setLoadedSessionId(info.sessionId ?? null);
       setLoadedSessionSource('manual_upload');
-      await buildAndSetSession(info, file.name);
+      await buildAndSetSession(info, file.name, info.sessionId ?? file.name);
     } catch (err) {
       setError(`Failed to upload XRK file: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -227,8 +232,9 @@ export default function App() {
   const handleBackToBrowser = useCallback(() => {
     setLoadedSessionId(null);
     clearSession();
+    persistView.endSession();
     setView('browser');
-  }, [clearSession]);
+  }, [clearSession, persistView]);
 
   // Lazy fetch channel data when a channel is activated
   const handleToggleChannel = useCallback(async (channelId: number, color: string) => {
@@ -315,8 +321,10 @@ export default function App() {
 
   const handleFileRenamed = useCallback((newFileName: string) => {
     if (!state.session) return;
+    // setSession resets the view; re-apply the saved one so a rename keeps it.
+    persistView.beginSession(loadedSessionId ?? state.fileName ?? newFileName);
     setSession(state.session, newFileName);
-  }, [state.session, setSession]);
+  }, [state.session, state.fileName, loadedSessionId, setSession, persistView]);
 
   // Drag-and-drop handlers for the chart area
   const handleDragOver = useCallback((e: React.DragEvent) => {

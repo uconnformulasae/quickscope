@@ -350,4 +350,21 @@ describe('derived channels (python mode)', () => {
     act(() => result.current.setCursorTime(5));
     expect(result.current.state.cursorTime).toBe(5);
   });
+
+  it('applySessionView restores channels, modes, tab, zoom and laps in one step', () => {
+    const { result } = setup();
+    act(() => result.current.setSession(makeSession(), 'a.xrk'));
+    act(() => result.current.applySessionView({
+      activeChannels: [{ channelId: 2, color: '#0f0' }, { channelId: 1, color: '#f00' }],
+      chartMode: 'overlay', viewMode: 'table', analysisTab: 'gps',
+      viewRange: { startMs: 100, endMs: 900 }, selectedLaps: [0, 1],
+    }));
+    const st = result.current.state;
+    expect(st.activeChannels).toEqual([{ channelId: 2, color: '#0f0' }, { channelId: 1, color: '#f00' }]);
+    expect(st.chartMode).toBe('overlay');
+    expect(st.viewMode).toBe('table');
+    expect(st.analysisTab).toBe('gps');
+    expect(st.viewRange).toEqual({ startMs: 100, endMs: 900 });
+    expect(st.selectedLaps).toEqual([0, 1]);
+  });
 });
