@@ -3,6 +3,7 @@ import type { XRKSession, LapSource } from '../../lib/xrk-parser';
 import { computeStats, formatLapTime } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { Timer } from 'lucide-react';
+import { lapColor } from '../../lib/lap-compare';
 import { formatNum, resolveChannel, resolveSamples } from './analysis-helpers';
 import { useDisplaySamples } from '../../lib/useDisplaySamples';
 
@@ -28,11 +29,18 @@ export function LapAnalysisTab({
   activeChannels,
   derivedChannels,
   derivedSamplesMap,
+  selectedLaps = [],
+  onToggleLap,
+  onSetSelectedLaps,
 }: {
   session: XRKSession;
   activeChannels: ActiveChannel[];
   derivedChannels?: DerivedChannel[];
   derivedSamplesMap?: Map<number, any>;
+  /** Lap indices (marker-pair order) selected for zoom/compare, in selection order. */
+  selectedLaps?: number[];
+  onToggleLap?: (index: number) => void;
+  onSetSelectedLaps?: (indices: number[]) => void;
 }) {
   const display = useDisplaySamples();
   const lapData = useMemo(() => {
@@ -70,7 +78,7 @@ export function LapAnalysisTab({
         channelStats[chan.shortName] = { ...computeStats(samps), color: ac.color };
       }
 
-      laps.push({ lapNum: markers[i].lapNumber ?? (i + 1), startMs, endMs, lapTimeS, channelStats, isBest: false });
+      laps.push({ index: i, lapNum: markers[i].lapNumber ?? (i + 1), startMs, endMs, lapTimeS, channelStats, isBest: false });
     }
 
     if (bestLap >= 0) laps[bestLap].isBest = true;
@@ -86,7 +94,9 @@ export function LapAnalysisTab({
     );
   }
 
-  const bestTime = lapData.find(l => l.isBest)?.lapTimeS;
+  const bestLap = lapData.find(l => l.isBest);
+  const bestTime = bestLap?.lapTimeS;
+  const selectable = !!onToggleLap;
   const sourceTag = LAP_SOURCE_LABEL[session.lapSource] ?? 'Unknown source';
   const sourceTone = LAP_SOURCE_TONE[session.lapSource] ?? LAP_SOURCE_TONE.none;
 
@@ -101,14 +111,56 @@ export function LapAnalysisTab({
           <p className="text-lg font-bold text-primary-text tabular mt-0.5">{formatLapTime(bestTime)}</p>
         </div>
       )}
+      {selectable && (
+        <div className="mb-2 flex items-center gap-1.5 text-xs">
+          <button
+            type="button"
+            onClick={() => bestLap && onSetSelectedLaps?.([bestLap.index])}
+            disabled={!bestLap}
+            className="px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-40"
+          >
+            Select best
+          </button>
+          <button
+            type="button"
+            onClick={() => onSetSelectedLaps?.([])}
+            disabled={selectedLaps.length === 0}
+            className="px-2 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 disabled:opacity-40"
+          >
+            Clear
+          </button>
+          <span className="ml-auto text-muted-foreground">
+            {selectedLaps.length >= 2
+              ? `${selectedLaps.length} selected — comparing`
+              : selectedLaps.length === 1 ? '1 selected' : 'Tick laps to zoom or compare'}
+          </span>
+        </div>
+      )}
       <div className="space-y-1.5">
-        {lapData.map(lap => (
+        {lapData.map(lap => {
+          const order = selectedLaps.indexOf(lap.index);
+          const isSelected = order >= 0;
+          return (
           <div
             key={lap.lapNum}
-            className={`rounded-lg border p-2.5 transition-colors ${lap.isBest ? 'border-primary/40 bg-primary/5' : 'border-border'}`}
+            onClick={selectable ? () => onToggleLap?.(lap.index) : undefined}
+            className={`rounded-lg border p-2.5 transition-colors ${selectable ? 'cursor-pointer hover:bg-muted/30' : ''} ${isSelected ? 'ring-1 ring-primary/50' : ''} ${lap.isBest ? 'border-primary/40 bg-primary/5' : 'border-border'}`}
           >
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2">
+                {selectable && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select lap ${lap.lapNum}`}
+                    checked={isSelected}
+                    onClick={e => e.stopPropagation()}
+                    onChange={() => onToggleLap?.(lap.index)}
+                    className="accent-primary"
+                  />
+                )}
+                {isSelected && selectedLaps.length >= 2 && (
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: lapColor(order) }} aria-hidden />
+                )}
                 <span className={`text-xs font-semibold tabular ${lap.isBest ? 'text-primary-text' : 'text-foreground'}`}>
                   Lap {lap.lapNum}
                 </span>
@@ -129,7 +181,8 @@ export function LapAnalysisTab({
               ))}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

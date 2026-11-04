@@ -25,6 +25,9 @@ interface AnalysisPanelProps {
   onNavigateToTime?: (timestampMs: number) => void;
   cursorTime?: number | null;
   theme?: 'dark' | 'light';
+  selectedLaps?: number[];
+  onToggleLap?: (index: number) => void;
+  onSetSelectedLaps?: (indices: number[]) => void;
 }
 
 const TABS: { id: AnalysisTab; label: string; icon: any }[] = [
@@ -51,6 +54,9 @@ export function AnalysisPanel({
   onNavigateToTime,
   cursorTime,
   theme,
+  selectedLaps,
+  onToggleLap,
+  onSetSelectedLaps,
 }: AnalysisPanelProps) {
   // Tabs are flex-1 but long labels widen theirs, so the indicator follows the
   // active button's measured box rather than assuming equal widths.
@@ -109,7 +115,15 @@ export function AnalysisPanel({
           <StatsTab session={session} activeChannels={activeChannels} viewRange={viewRange} derivedChannels={derivedChannels} derivedSamplesMap={derivedSamplesMap} onNavigateToTime={onNavigateToTime} />
         )}
         {analysisTab === 'lapanalysis' && (
-          <LapAnalysisTab session={session} activeChannels={activeChannels} derivedChannels={derivedChannels} derivedSamplesMap={derivedSamplesMap} />
+          <LapAnalysisTab
+            session={session}
+            activeChannels={activeChannels}
+            derivedChannels={derivedChannels}
+            derivedSamplesMap={derivedSamplesMap}
+            selectedLaps={selectedLaps}
+            onToggleLap={onToggleLap}
+            onSetSelectedLaps={onSetSelectedLaps}
+          />
         )}
         {analysisTab === 'histogram' && (
           <HistogramTab
