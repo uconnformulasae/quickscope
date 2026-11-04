@@ -275,14 +275,14 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         <button
           onClick={() => onOpenLive(aimStatus?.connected ? aimStatus.device : null)}
           className="flex items-center gap-2 h-8 px-3.5 rounded-lg text-[13px] font-semibold bg-primary/15 text-primary-text hover:bg-primary/25 transition-colors"
-          title={aimStatus?.connected ? 'Stream live data from the AiM device' : 'Open live view (offline preview: AiM device not reachable)'}
+          title={aimStatus?.connected ? 'Open Views: stream live data from the AiM device' : 'Open Views (offline preview: AiM device not reachable)'}
         >
           <span
             aria-hidden
             className={`w-2 h-2 rounded-full ${aimStatus?.connected ? 'bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_0_3px_rgb(16_185_129/0.2)]' : 'bg-muted-foreground/60'}`}
           />
           <Activity className="w-4 h-4" />
-          Live
+          Views
         </button>
 
         <button

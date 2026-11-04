@@ -351,6 +351,13 @@ export function useAppState() {
     return { ...prev, selectedLaps, cursorTime: crossed ? null : prev.cursorTime };
   };
 
+  /** Restore a saved per-session view (see sessionViewState). Derived channels
+   *  are re-added separately since they must be re-evaluated. */
+  const applySessionView = useCallback((v: Pick<AppState,
+    'activeChannels' | 'chartMode' | 'viewMode' | 'analysisTab' | 'viewRange' | 'selectedLaps'>) => {
+    setState(prev => ({ ...prev, ...v }));
+  }, []);
+
   const toggleLapSelected = useCallback((index: number) => {
     setState(prev => withLaps(prev, prev.selectedLaps.includes(index)
       ? prev.selectedLaps.filter(i => i !== index)
@@ -546,6 +553,7 @@ export function useAppState() {
     setChartMode,
     toggleLapSelected,
     setSelectedLaps,
+    applySessionView,
     setViewMode,
     toggleLeftSidebar,
     toggleRightSidebar,

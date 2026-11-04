@@ -190,7 +190,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
           <ArrowLeft className="w-4 h-4" />
         </button>
         <Activity className="w-4 h-4 text-primary-text" />
-        <h1 className="text-sm font-semibold">Live data</h1>
+        <h1 className="text-sm font-semibold">Views</h1>
 
         <div className="flex-1" />
 
