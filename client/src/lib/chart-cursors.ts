@@ -63,7 +63,9 @@ function getStripYRange(dc: DrawContext, strip: StripLayout, def: { units: strin
 function compareValueText(dc: DrawContext, channelId: number, tMs: number): string | null {
   const series = dc.compare?.series.get(channelId);
   if (!series) return null;
-  return series.map(s => {
+  return series.map((s, i) => {
+    const endMs = dc.compare!.laps[i]?.durationMs ?? (s.length > 0 ? s[s.length - 1].timestamp : -1);
+    if (tMs > endMs) return '–'; // this lap has already ended
     const snap = s.length > 0 ? nearestSample(s, tMs) : null;
     return snap ? formatValue(snap.value) : '–';
   }).join(' / ');

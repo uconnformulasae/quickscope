@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import '../test/dom-setup';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { PreferencesProvider } from './usePreferences';
+import { PreferencesProvider, usePreferences } from './usePreferences';
 import { useDisplaySamples } from './useDisplaySamples';
 
 const raw = [{ timestamp: 0, value: 100 }, { timestamp: 10, value: 50 }];
@@ -31,5 +31,12 @@ describe('useDisplaySamples', () => {
     const a = result.current(1, 'Speed', 'km/h', raw);
     expect(a.unit).toBe('km/h');
     expect(a.samples).toBe(raw);
+  });
+
+  it('keeps the same function (and cache) across a UI-scale-only update', () => {
+    const { result } = renderHook(() => ({ display: useDisplaySamples(), prefs: usePreferences() }), { wrapper: wrapperWith('imperial') });
+    const before = result.current.display;
+    act(() => result.current.prefs.update({ uiScale: 1.2 }));
+    expect(result.current.display).toBe(before);
   });
 });

@@ -284,6 +284,8 @@ export default function App() {
 
   const handleNavigateToTime = useCallback((timestampMs: number) => {
     if (!state.session) return;
+    // Targets are session times; compare mode's timeline is lap-relative.
+    if (state.selectedLaps.length >= 2) setSelectedLaps([]);
     const durationMs = state.session.durationMs;
     const tSec = timestampMs / 1000;
     const durationSec = durationMs / 1000;
@@ -298,7 +300,7 @@ export default function App() {
       let newEnd = Math.min(durationSec, tSec + windowHalf);
       setViewRange({ startMs: newStart * 1000, endMs: newEnd * 1000 });
     }
-  }, [state.session, state.viewRange, setCursorTime, setViewRange]);
+  }, [state.session, state.viewRange, setCursorTime, setViewRange, state.selectedLaps, setSelectedLaps]);
 
   const handlePreviewDerived = useCallback((def: Omit<DerivedChannel, 'id' | 'color'>) => {
     return previewDerivedChannel(def, editingDerived?.id);

@@ -179,15 +179,16 @@ export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO
   // Speed-coloured trail. Rebuilt when colours/units change without
   // re-creating the map (keeps the user's zoom and pan).
   const speedUnits = gpsData?.speedUnits ?? '';
+  const { unitSystem, unitOverrides, gpsGradient } = prefs;
   const legend = useMemo(() => {
     if (!track?.speeds) return null;
-    const target = resolveDisplayUnit('GPS Speed', speedUnits, prefs);
+    const target = resolveDisplayUnit('GPS Speed', speedUnits, { unitSystem, unitOverrides });
     const conv = getConverter(speedUnits, target);
     const speeds = conv.identity ? track.speeds : track.speeds.map(conv.fn);
-    const g = prefs.gpsGradient;
+    const g = gpsGradient;
     const [lo, hi] = g.rangeMode === 'fixed' ? [g.fixedMin, g.fixedMax] : rangeOf(speeds);
     return { speeds, lo, hi, unit: conv.unit, stops: gradientStops(g) };
-  }, [track, speedUnits, prefs]);
+  }, [track, speedUnits, unitSystem, unitOverrides, gpsGradient]);
 
   useEffect(() => {
     const trail = trailRef.current;
@@ -227,7 +228,7 @@ export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO
       markerRef.current.setStyle({ opacity: 0, fillOpacity: 0 });
       if (cursorTime == null) return;
       lapMarkersRef.current = lapSel.map((lap, i) => L.circleMarker(
-        coords[Math.min(nearestIndex(times, toSessionMs(cursorTime, lap)), coords.length - 1)],
+        coords[Math.min(nearestIndex(times, Math.min(toSessionMs(cursorTime, lap), lap.endMs)), coords.length - 1)],
         { radius: 6, fillColor: lapColor(i), fillOpacity: 1, color: '#ffffff', weight: 2 },
       ).addTo(map));
       return;

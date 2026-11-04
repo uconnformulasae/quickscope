@@ -173,4 +173,15 @@ describe('drawCursors in lap compare mode', () => {
     drawCursors(dc, { cursorA: 5, cursorB: null, hoverT: null, deltaMode: false }, 280);
     expect(texts(calls)).toContain('20.00 / 25.00');
   });
+
+  it('shows – for a lap that has already ended at the cursor time', () => {
+    const lapA = [{ timestamp: 0, value: 10 }, { timestamp: 8000, value: 30 }];
+    const lapB = [{ timestamp: 0, value: 11 }, { timestamp: 4000, value: 25 }];
+    const { dc, calls } = makeDc({
+      channelDataMap: new Map([[1, { def: { shortName: 'RPM', units: 'rpm', color: '#f00' }, allSamples: lapA }]]),
+      compare: { laps: [], series: new Map([[1, [lapA, lapB]]]) },
+    });
+    drawCursors(dc, { cursorA: 8, cursorB: null, hoverT: null, deltaMode: false }, 280);
+    expect(texts(calls)).toContain('30.00 / –');
+  });
 });

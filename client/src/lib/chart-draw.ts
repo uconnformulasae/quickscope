@@ -345,14 +345,15 @@ export function drawMinMaxMarkers(
   draw(mm.min, false);
 }
 
-/** "min X · max Y unit" at the top-right of a strip (separate mode). */
+/** "min X · max Y unit" at the bottom-right of a strip (separate mode). */
 function drawMinMaxReadout(dc: DrawContext, strip: StripLayout, mm: VisibleMinMax, units: string) {
   if (!mm) return;
   const { ctx, w, rm } = dc;
   ctx.font = scaledFont(10, dc.fontScale);
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'right';
-  ctx.fillText(minMaxText(mm, units), w - rm - 4, strip.top + 12);
+  // Bottom-right: the cursor value pill occupies the top-right.
+  ctx.fillText(minMaxText(mm, units), w - rm - 4, strip.top + strip.height - 6);
 }
 
 function drawYAxis(

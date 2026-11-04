@@ -334,4 +334,20 @@ describe('derived channels (python mode)', () => {
     act(() => result.current.setSession(makeSession(), 'b.xrk'));
     expect(result.current.state.selectedLaps).toEqual([]);
   });
+
+  it('clears the cursor when lap compare mode starts or ends', () => {
+    const { result } = setup();
+    act(() => result.current.setSession(makeSession(), 'a.xrk'));
+    act(() => result.current.setCursorTime(600));
+    act(() => result.current.toggleLapSelected(1));
+    expect(result.current.state.cursorTime).toBe(600); // one lap: still session time
+    act(() => result.current.toggleLapSelected(2));
+    expect(result.current.state.cursorTime).toBeNull(); // entered compare
+    act(() => result.current.setCursorTime(40));
+    act(() => result.current.setSelectedLaps([]));
+    expect(result.current.state.cursorTime).toBeNull(); // left compare
+    act(() => result.current.setSelectedLaps([]));
+    act(() => result.current.setCursorTime(5));
+    expect(result.current.state.cursorTime).toBe(5);
+  });
 });

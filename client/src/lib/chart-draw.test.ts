@@ -7,6 +7,7 @@ import type { ChannelSample, XRKSession } from './xrk-parser';
 /** Records strokeStyle and dash pattern at each stroke(). */
 function recordingContext() {
   const strokes: { style: unknown; dash: number[] }[] = [];
+  const texts: { text: string; y: number }[] = [];
   let dash: number[] = [];
   const stack: { strokeStyle: unknown; dash: number[] }[] = [];
   const ctx: Record<string, unknown> = {
@@ -16,11 +17,12 @@ function recordingContext() {
     save: () => stack.push({ strokeStyle: ctx.strokeStyle, dash }),
     restore: () => { const p = stack.pop(); if (p) { ctx.strokeStyle = p.strokeStyle; dash = p.dash; } },
     stroke: () => strokes.push({ style: ctx.strokeStyle, dash }),
+    fillText: (text: string, _x: number, y: number) => texts.push({ text, y }),
   };
-  for (const op of ['beginPath', 'moveTo', 'lineTo', 'fill', 'arc', 'roundRect', 'fillRect', 'fillText', 'translate', 'rotate', 'closePath']) {
+  for (const op of ['beginPath', 'moveTo', 'lineTo', 'fill', 'arc', 'roundRect', 'fillRect', 'translate', 'rotate', 'closePath']) {
     ctx[op] = () => {};
   }
-  return { ctx: ctx as unknown as CanvasRenderingContext2D, strokes };
+  return { ctx: ctx as unknown as CanvasRenderingContext2D, strokes, texts };
 }
 
 const colors = {
@@ -32,7 +34,7 @@ const lap = (offset: number): ChannelSample[] =>
   Array.from({ length: 50 }, (_, i) => ({ timestamp: i * 100, value: offset + i }));
 
 function makeDc(chartMode: 'separate' | 'overlay') {
-  const { ctx, strokes } = recordingContext();
+  const { ctx, strokes, texts } = recordingContext();
   const strip: StripLayout = { top: 0, height: 100, channelId: 1, color: '#ff0000', label: 'RPM', units: 'rpm' };
   const lapA = lap(0), lapB = lap(10);
   const dc = {
@@ -47,7 +49,7 @@ function makeDc(chartMode: 'separate' | 'overlay') {
     smoothedYRanges: new Map(), needsDrawRef: { current: false }, colors, fontScale: 1,
     compare: { laps: [], series: new Map([[1, [lapA, lapB]]]) },
   } as DrawContext;
-  return { dc, strokes };
+  return { dc, strokes, texts };
 }
 
 describe('drawStrips in lap compare mode', () => {
@@ -65,5 +67,15 @@ describe('drawStrips in lap compare mode', () => {
     const traces = strokes.filter(s => s.style === '#ff0000');
     expect(traces.some(s => s.dash.length === 0)).toBe(true);
     expect(traces.some(s => s.dash.join(',') === '6,3')).toBe(true);
+  });
+});
+
+describe('min/max readout', () => {
+  it('sits at the bottom of the strip, clear of the cursor pill at the top', () => {
+    const { dc, texts } = makeDc('separate');
+    drawStrips(dc);
+    const readout = texts.find(t => t.text.startsWith('min '));
+    expect(readout).toBeTruthy();
+    expect(readout!.y).toBeGreaterThan(50); // strip is 0..100; pill occupies the top ~24px
   });
 });

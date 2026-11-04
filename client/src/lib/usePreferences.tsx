@@ -53,7 +53,8 @@ function sanitize(raw: Partial<Preferences> | null | undefined): Preferences {
   const r = raw && typeof raw === 'object' ? raw : {};
   const unitSystem: UnitSystem = r.unitSystem === 'metric' || r.unitSystem === 'imperial' || r.unitSystem === 'logger'
     ? r.unitSystem : d.unitSystem;
-  const overrides = r.unitOverrides && typeof r.unitOverrides === 'object' ? { ...r.unitOverrides } : {};
+  // Keep the same object when valid so consumers keyed on it (unit caches) don't rebuild.
+  const overrides = r.unitOverrides && typeof r.unitOverrides === 'object' ? r.unitOverrides : {};
   return {
     uiScale: clampScale(r.uiScale),
     unitSystem,
