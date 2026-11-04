@@ -14,6 +14,8 @@ import type { ChartExportSpec } from '../lib/chart-export';
 import { ImageExportDialog } from './ImageExportDialog';
 import { Presence } from '../lib/motion';
 import { usePreferences } from '../lib/usePreferences';
+import { convertibleUnits, resolveDisplayUnit } from '../lib/units';
+import { ChartUnitMenu } from './ChartUnitMenu';
 import { useDisplaySamples } from '../lib/useDisplaySamples';
 import { buildLapWindows, selectedWindows, shiftToLap, lapColor } from '../lib/lap-compare';
 import { formatLapTime } from '../lib/xrk-parser';
@@ -38,14 +40,17 @@ export function TelemetryChart({
   onClearLapSelection,
 }: TelemetryChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { prefs } = usePreferences();
+  const { prefs, update: updatePrefs } = usePreferences();
   const fontScale = prefs.uiScale;
   const display = useDisplaySamples();
   const containerRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
   const [canScroll, setCanScroll] = useState(false); // separate mode with more strips than fit
   const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
   const [imageExportSpec, setImageExportSpec] = useState<ChartExportSpec | null>(null);
+  // Unit menu opened from a strip label / overlay axis: channels + position (canvas px).
+  const [unitMenu, setUnitMenu] = useState<{ channelIds: number[]; x: number; y: number } | null>(null);
 
   // ─── Refs for transient state (no React re-renders) ─────────────────────
   const cursorEmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -489,6 +494,30 @@ export function TelemetryChart({
     return hitTestCursor(mouseX, toPx(cursorXRef.current), toPx(cursor2XRef.current), CURSOR_HIT_PX * fontScale);
   }, [getEffectiveXRange, timeToX, leftMargin, rightMargin, fontScale]);
 
+  /** Channels whose label/unit axis is under (x, y): the left label column of
+   *  a strip in separate mode, or a unit axis (either side) in overlay mode. */
+  const labelChannelsAt = useCallback((mouseX: number, mouseY: number): number[] | null => {
+    const w = canvasSizeRef.current.w;
+    if (chartMode !== 'overlay') {
+      if (mouseX >= leftMargin) return null;
+      const strip = computeStripLayouts(canvasSizeRef.current.h)
+        .find(st => mouseY >= st.top && mouseY < st.top + st.height);
+      return strip ? [strip.channelId] : null;
+    }
+    const onLeft = mouseX < leftMargin;
+    if (!onLeft && mouseX <= w - rightMargin) return null;
+    const axisW = AXIS_WIDTH * fontScale;
+    const sideIndex = Math.max(0, Math.floor((onLeft ? leftMargin - mouseX : mouseX - (w - rightMargin)) / axisW));
+    let unit: string | null = null;
+    for (const [u, info] of overlayAxisLayout.unitAxes) {
+      if (info.side === (onLeft ? 'left' : 'right') && info.sideIndex === sideIndex) unit = u;
+    }
+    if (unit === null) return null;
+    const ids = visibleChannels.map(ac => ac.channelId)
+      .filter(id => (channelDataMap.get(id)?.def.units || '') === unit);
+    return ids.length > 0 ? ids : null;
+  }, [chartMode, leftMargin, rightMargin, fontScale, computeStripLayouts, overlayAxisLayout, visibleChannels, channelDataMap]);
+
   /** Move a dragged delta cursor to canvas x. */
   const moveDraggedCursor = useCallback((which: 'A' | 'B', mouseX: number) => {
     const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
@@ -574,6 +603,12 @@ export function TelemetryChart({
 
     const rect = canvasRef.current!.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const labelHit = labelChannelsAt(mouseX, mouseY);
+    if (labelHit) {
+      setUnitMenu({ channelIds: labelHit, x: mouseX, y: mouseY });
+      return;
+    }
     const hit = cursorAtX(mouseX);
     if (hit) {
       dragCursorRef.current = hit;
@@ -583,7 +618,7 @@ export function TelemetryChart({
     isDraggingRef.current = true;
     setCursorStyle('grabbing');
     dragStartRef.current = { mouseX, xRange: [...getEffectiveXRange()] as [number, number] };
-  }, [getEffectiveXRange, cursorAtX]);
+  }, [getEffectiveXRange, cursorAtX, labelChannelsAt]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -614,7 +649,8 @@ export function TelemetryChart({
       emitViewRange([newStart, newEnd]);
       requestDraw();
     } else {
-      if (deltaModeRef.current) setCursorStyle(cursorAtX(mouseX) ? 'ew-resize' : 'crosshair');
+      const overLabel = labelChannelsAt(mouseX, e.clientY - rect.top) !== null;
+      setCursorStyle(overLabel ? 'pointer' : deltaModeRef.current && cursorAtX(mouseX) ? 'ew-resize' : 'crosshair');
       // Update hover cursor (always, regardless of delta mode)
       const xRange = getEffectiveXRange();
       const t = xToTime(mouseX, xRange, plotW);
@@ -632,7 +668,7 @@ export function TelemetryChart({
       }
       requestDraw();
     }
-  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin, onCursorTimeChange, moveDraggedCursor, cursorAtX]);
+  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin, onCursorTimeChange, moveDraggedCursor, cursorAtX, labelChannelsAt]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (dragCursorRef.current) {
@@ -917,9 +953,9 @@ export function TelemetryChart({
   }
 
   return (
-    <div className="flex flex-col h-full" data-testid="chart-container">
+    <div className="flex flex-col h-full relative" data-testid="chart-container">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border flex-shrink-0">
+      <div ref={toolbarRef} className="flex items-center justify-between px-3 py-1.5 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2">
           {compareLaps ? (
             <span
@@ -1012,6 +1048,39 @@ export function TelemetryChart({
           data-testid="telemetry-canvas"
         />
       </div>
+
+      {unitMenu && (() => {
+        const chans = unitMenu.channelIds.flatMap(id => {
+          const sc = session.channels.get(id);
+          const dc = derivedChannels?.find(d => d.id === id);
+          const shortName = sc?.shortName ?? dc?.name;
+          return shortName === undefined ? [] : [{ shortName, rawUnit: sc?.units ?? dc?.units ?? '' }];
+        });
+        if (chans.length === 0) return null;
+        const first = chans[0];
+        const sysOnly = { unitSystem: prefs.unitSystem, unitOverrides: {} };
+        return (
+          <ChartUnitMenu
+            channels={chans}
+            options={convertibleUnits(first.rawUnit)}
+            current={resolveDisplayUnit(first.shortName, first.rawUnit, prefs)}
+            defaultUnit={resolveDisplayUnit(first.shortName, first.rawUnit, sysOnly)}
+            overridden={chans.some(c => prefs.unitOverrides[c.shortName] !== undefined)}
+            x={Math.min(unitMenu.x + 4, Math.max(0, canvasSizeRef.current.w - 180))}
+            y={unitMenu.y + 4 + (toolbarRef.current?.offsetHeight ?? 0) - (containerRef.current?.scrollTop ?? 0)}
+            onPick={unit => {
+              const next = { ...prefs.unitOverrides };
+              for (const c of chans) {
+                if (unit === null || !convertibleUnits(c.rawUnit).includes(unit)) delete next[c.shortName];
+                else next[c.shortName] = unit;
+              }
+              updatePrefs({ unitOverrides: next });
+              setUnitMenu(null);
+            }}
+            onClose={() => setUnitMenu(null)}
+          />
+        );
+      })()}
 
       <Presence show={!!imageExportSpec}>
         {imageExportSpec && (

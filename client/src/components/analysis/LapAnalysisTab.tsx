@@ -9,6 +9,8 @@ import { useDisplaySamples } from '../../lib/useDisplaySamples';
 
 /** Laps shorter than this fraction of the median lap can't be the best lap. */
 const MIN_BEST_LAP_FRACTION = 0.5;
+/** Laps longer than this multiple of the median are flagged "slow" (out/in laps, stops). */
+const SLOW_LAP_FACTOR = 1.3;
 
 const LAP_SOURCE_LABEL: Record<LapSource, string> = {
   device: 'Device markers',
@@ -78,10 +80,16 @@ export function LapAnalysisTab({
         channelStats[chan.shortName] = { ...computeStats(samps), color: ac.color };
       }
 
-      laps.push({ index: i, lapNum: markers[i].lapNumber ?? (i + 1), startMs, endMs, lapTimeS, channelStats, isBest: false });
+      laps.push({
+        index: i, lapNum: markers[i].lapNumber ?? (i + 1), startMs, endMs, lapTimeS, channelStats,
+        isBest: false, isSlow: lapTimeS > medianLapS * SLOW_LAP_FACTOR, gapS: 0,
+      });
     }
 
-    if (bestLap >= 0) laps[bestLap].isBest = true;
+    if (bestLap >= 0) {
+      laps[bestLap].isBest = true;
+      for (const l of laps) l.gapS = l.lapTimeS - bestTime;
+    }
     return laps;
   }, [session, activeChannels, derivedChannels, derivedSamplesMap, display]);
 
@@ -144,7 +152,7 @@ export function LapAnalysisTab({
           <div
             key={lap.lapNum}
             onClick={selectable ? () => onToggleLap?.(lap.index) : undefined}
-            className={`rounded-lg border p-2.5 transition-colors ${selectable ? 'cursor-pointer hover:bg-muted/30' : ''} ${isSelected ? 'ring-1 ring-primary/50' : ''} ${lap.isBest ? 'border-primary/40 bg-primary/5' : 'border-border'}`}
+            className={`rounded-lg border p-2.5 transition-colors ${selectable ? 'cursor-pointer hover:bg-muted/30' : ''} ${isSelected ? 'ring-1 ring-primary/50' : ''} ${lap.isBest ? 'border-primary/40 bg-primary/5' : 'border-border'} ${lap.isSlow && !isSelected ? 'opacity-60' : ''}`}
           >
             <div className="flex items-center justify-between mb-1">
               <div className="flex items-center gap-2">
@@ -167,16 +175,31 @@ export function LapAnalysisTab({
                 {lap.isBest && (
                   <span className="text-xs bg-primary/20 text-primary-text px-1.5 py-0.5 rounded-full">Best</span>
                 )}
+                {lap.isSlow && (
+                  <span className="text-xs bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">slow</span>
+                )}
               </div>
-              <span className={`text-sm font-bold tabular ${lap.isBest ? 'text-primary-text' : 'text-foreground'}`}>
-                {formatLapTime(lap.lapTimeS)}
-              </span>
+              <div className="flex items-baseline gap-2">
+                {!lap.isBest && bestTime !== undefined && (
+                  <span className={`text-xs tabular ${lap.gapS < 1 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}>
+                    +{lap.gapS.toFixed(3)}
+                  </span>
+                )}
+                <span className={`text-sm font-bold tabular ${lap.isBest ? 'text-primary-text' : 'text-foreground'}`}>
+                  {formatLapTime(lap.lapTimeS)}
+                </span>
+              </div>
             </div>
-            <div className="grid grid-cols-3 gap-1">
+            {/* Columns share the width evenly and never overflow into each
+                other: long channel names truncate (full name on hover). */}
+            <div
+              className="grid gap-x-2 gap-y-1"
+              style={{ gridTemplateColumns: `repeat(${Math.max(1, Object.keys(lap.channelStats).length)}, minmax(0, 1fr))` }}
+            >
               {Object.entries(lap.channelStats).map(([name, s]: [string, any]) => (
-                <div key={name} className="text-center">
-                  <p className="text-xs tabular font-medium" style={{ color: s.color }}>{formatNum(s.mean)}</p>
-                  <p className="text-xs text-muted-foreground">{name}</p>
+                <div key={name} className="min-w-0 text-center">
+                  <p className="text-xs tabular font-medium truncate" style={{ color: s.color }}>{formatNum(s.mean)}</p>
+                  <p className="text-xs text-muted-foreground truncate" title={name}>{name}</p>
                 </div>
               ))}
             </div>
