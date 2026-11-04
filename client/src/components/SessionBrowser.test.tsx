@@ -222,7 +222,7 @@ describe('SessionBrowser', () => {
     routes['/api/aim/sessions'] = () => ({ ok: true, sessions: [] });
     renderBrowser();
     await screen.findByText('old.xrk');
-    fireEvent.click(screen.getByText('Pull from AiM'));
+    fireEvent.click(screen.getByText('Pull'));
     expect(screen.getByText('AiM Device Sessions')).toBeTruthy();
   });
 

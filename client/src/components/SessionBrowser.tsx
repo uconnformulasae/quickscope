@@ -288,18 +288,19 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
               ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
               : 'text-foreground/85 hover:bg-muted'
           }`}
-          title={aimStatus?.connected ? 'Download sessions from AiM device' : 'Pull from AiM (device not currently reachable via WiFi)'}
+          title={aimStatus?.connected ? 'Download sessions from AiM device' : 'Pull sessions from AiM (device not currently reachable via WiFi)'}
         >
           <Download className="w-4 h-4" />
-          Pull from AiM
+          Pull
         </button>
 
         <button
           onClick={() => fileInputRef.current?.click()}
           className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-medium text-foreground/85 hover:bg-muted transition-colors"
+          title="Upload an .xrk / .xrz file"
         >
           <Upload className="w-4 h-4" />
-          Upload File
+          Upload
         </button>
         <input
           ref={fileInputRef}

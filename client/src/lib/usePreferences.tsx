@@ -13,6 +13,7 @@ export interface GpsGradientPrefs {
   customLow: string;
   customHigh: string;
   rangeMode: 'auto' | 'fixed';
+  /** Fixed colour range, always stored in km/h (shown in mph under Imperial). */
   fixedMin: number;
   fixedMax: number;
 }

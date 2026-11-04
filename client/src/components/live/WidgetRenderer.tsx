@@ -91,10 +91,12 @@ const MIN_TILE_PX: Record<StatStyle, number> = { big: 140, tile: 110, compact: 7
 
 // `columns` is a maximum: tiles still wrap once they'd shrink below `minPx`,
 // so a fixed 8-across strip doesn't crush itself on a narrow window.
-function gridStyle(columns: number | undefined, minPx: number): React.CSSProperties {
+export function gridStyle(columns: number | undefined, minPx: number): React.CSSProperties {
+  // min(100%, …): a lone tile in a panel narrower than minPx shrinks to the
+  // panel instead of overflowing (and being cut off on the right).
   const track = columns
-    ? `max(${minPx}px, calc((100% - ${(columns - 1) * 0.5}rem) / ${columns}))`
-    : `${minPx}px`;
+    ? `min(100%, max(${minPx}px, calc((100% - ${(columns - 1) * 0.5}rem) / ${columns})))`
+    : `min(100%, ${minPx}px)`;
   return {
     display: 'grid',
     gap: '0.5rem',
@@ -260,7 +262,7 @@ export function WidgetRenderer({
   }
 
   return (
-    <Panel title={widget.title} tone={widget.emphasis ? 'primary' : undefined} rightSlot={rightSlot} className="h-full">
+    <Panel title={widget.title} tone={widget.emphasis ? 'primary' : undefined} rightSlot={rightSlot} className="h-full" fill={widget.type === 'gForce'}>
       {body}
       {note}
     </Panel>

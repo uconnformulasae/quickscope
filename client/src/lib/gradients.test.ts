@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gradientStops, GRADIENT_PRESETS, sampleGradient, speedToT } from './gradients';
+import { fixedRangeIn, gradientStops, GRADIENT_PRESETS, sampleGradient, speedToT } from './gradients';
 import { DEFAULT_PREFERENCES } from './usePreferences';
 
 describe('sampleGradient', () => {
@@ -27,5 +27,22 @@ describe('gradientStops', () => {
     const g = DEFAULT_PREFERENCES.gpsGradient;
     expect(gradientStops({ ...g, preset: 'custom', customLow: '#111111', customHigh: '#eeeeee' })).toEqual(['#111111', '#eeeeee']);
     expect(gradientStops({ ...g, preset: 'classic' })).toEqual(GRADIENT_PRESETS.classic);
+  });
+});
+
+describe('fixedRangeIn', () => {
+  it('converts the stored km/h range to the session\'s speed unit', () => {
+    const [lo, hi] = fixedRangeIn(0, 180, 'm/s');
+    expect(lo).toBeCloseTo(0, 6);
+    expect(hi).toBeCloseTo(50, 6);
+    expect(fixedRangeIn(0, 160.9344, 'mph')[1]).toBeCloseTo(100, 4);
+  });
+
+  it('assumes km/h when the session unit is unknown', () => {
+    expect(fixedRangeIn(10, 150, '')).toEqual([10, 150]);
+  });
+
+  it('orders a reversed range', () => {
+    expect(fixedRangeIn(150, 10, 'km/h')).toEqual([10, 150]);
   });
 });

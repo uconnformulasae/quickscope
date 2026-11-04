@@ -8,6 +8,7 @@ import { type Snapshot } from './live-channels';
 import { GRID_COLS, usedChannels, type GridItem, type LiveLayout, type WidgetConfig } from './layout-schema';
 import { WidgetRenderer } from './WidgetRenderer';
 import { type UnitOverrides } from './useUnitOverrides';
+import { fittedGrid, useNeededRows } from './auto-fit';
 
 const ResponsiveGrid = WidthProvider(Responsive);
 
@@ -55,8 +56,13 @@ export function LiveDashboard({
   onCycleUnit: (key: string, units: string[]) => void;
 }) {
   const used = useMemo(() => usedChannels(layout, extractChannelNames), [layout]);
-  const layouts: Layouts = useMemo(() => ({ lg: layout.grid }), [layout.grid]);
   const wide = useIsWide();
+  // View mode: widgets grow to fit content that re-wraps on smaller displays.
+  const { containerRef, needed } = useNeededRows(ROW_HEIGHT, MARGIN[1], [layout.widgets, wide, editing, latest === null]);
+  const layouts: Layouts = useMemo(
+    () => ({ lg: fittedGrid(layout.grid, needed, editing) }),
+    [layout.grid, needed, editing],
+  );
   const unitSwitch = useMemo(
     () => (editing ? undefined : { layoutId: layout.id, overrides: unitOverrides, cycle: onCycleUnit }),
     [editing, layout.id, unitOverrides, onCycleUnit],
@@ -123,7 +129,7 @@ export function LiveDashboard({
   }
 
   return (
-    <div className={`max-w-[1600px] mx-auto transition-opacity ${dim}`}>
+    <div ref={containerRef} className={`max-w-[1600px] mx-auto transition-opacity ${dim}`}>
       <ResponsiveGrid
         className={editing ? 'live-grid-editing' : undefined}
         layouts={layouts}
@@ -138,7 +144,7 @@ export function LiveDashboard({
         onLayoutChange={handleLayoutChange}
       >
         {layout.widgets.map((w) => (
-          <div key={w.id} className={`relative ${editing ? 'cursor-move' : ''}`}>
+          <div key={w.id} data-widget-id={w.id} className={`relative ${editing ? 'cursor-move' : ''}`}>
             {renderWidget(w)}
           </div>
         ))}

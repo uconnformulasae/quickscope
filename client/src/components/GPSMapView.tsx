@@ -8,7 +8,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { usePreferences } from '../lib/usePreferences';
 import { getConverter, resolveDisplayUnit } from '../lib/units';
-import { gradientStops, sampleGradient, speedToT } from '../lib/gradients';
+import { fixedRangeIn, gradientStops, sampleGradient, speedToT } from '../lib/gradients';
 import type { LapMarker } from '../lib/xrk-parser';
 import { buildLapWindows, lapColor, segmentInLaps, selectedWindows, toSessionMs } from '../lib/lap-compare';
 
@@ -186,7 +186,7 @@ export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO
     const conv = getConverter(speedUnits, target);
     const speeds = conv.identity ? track.speeds : track.speeds.map(conv.fn);
     const g = gpsGradient;
-    const [lo, hi] = g.rangeMode === 'fixed' ? [g.fixedMin, g.fixedMax] : rangeOf(speeds);
+    const [lo, hi] = g.rangeMode === 'fixed' ? fixedRangeIn(g.fixedMin, g.fixedMax, conv.unit) : rangeOf(speeds);
     return { speeds, lo, hi, unit: conv.unit, stops: gradientStops(g) };
   }, [track, speedUnits, unitSystem, unitOverrides, gpsGradient]);
 
