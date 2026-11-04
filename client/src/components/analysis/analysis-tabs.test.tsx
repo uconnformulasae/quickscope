@@ -167,4 +167,24 @@ describe('LapAnalysisTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(onSelect).toHaveBeenCalledWith([]);
   });
+
+  it('truncates long channel names with the full name on hover', () => {
+    const long = 'LF_BRKTempCH1_VeryLongName';
+    const sess = lapSession();
+    sess.channels.set(1, { ...sess.channels.get(1)!, shortName: long });
+    render(<LapAnalysisTab session={sess} activeChannels={[{ channelId: 1, color: '#f00', visible: true }]} />);
+    const names = screen.getAllByTitle(long);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names[0].className).toContain('truncate');
+  });
+
+  it('shows each lap\'s gap to the best lap and flags much slower laps', () => {
+    const sess = lapSession();
+    // Add a 3-minute lap 4 (173 s → 353 s): far slower than the ~58 s median.
+    sess.lapMarkers = [...sess.lapMarkers, { timestamp: 353_000, lapNumber: 5 }];
+    render(<LapAnalysisTab session={sess} activeChannels={[]} />);
+    expect(screen.getByText('+5.000')).toBeTruthy(); // lap 1: 60 s vs best 55 s
+    expect(screen.getByText('+3.000')).toBeTruthy(); // lap 3: 58 s
+    expect(screen.getAllByText('slow')).toHaveLength(1);
+  });
 });

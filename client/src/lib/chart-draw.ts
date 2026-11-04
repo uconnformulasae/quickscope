@@ -11,6 +11,7 @@ import {
   visibleMinMax, placeLabelBox, contrastText,
 } from './chart-utils';
 import { formatChartAxisTime } from './time-format';
+import { convertibleUnits } from './units';
 import { lapColor } from './lap-compare';
 import { formatLapTime } from './xrk-parser';
 
@@ -259,8 +260,12 @@ export function drawStrips(dc: DrawContext): void {
       ctx.translate(12, strip.top + strip.height / 2);
       ctx.rotate(-Math.PI / 2);
       const maxChars = Math.floor(strip.height / 6);
+      // ▾ marks a clickable unit (opens the unit menu).
+      const suffix = convertibleUnits(strip.units).length > 0 ? ' ▾' : '';
       let nameText = strip.label;
-      if (nameText.length > maxChars) nameText = nameText.slice(0, maxChars - 1) + '…';
+      const room = maxChars - suffix.length;
+      if (nameText.length > room) nameText = nameText.slice(0, Math.max(1, room - 1)) + '…';
+      nameText += suffix;
       ctx.fillText(nameText, 0, 0);
       ctx.restore();
     }
@@ -399,7 +404,7 @@ function drawYAxis(
       ctx.font = scaledFont(8, dc.fontScale);
       ctx.fillStyle = dc.colors.text;
       ctx.textAlign = isLeft ? 'right' : 'left';
-      ctx.fillText(units, axX, strip.top + strip.height - 4);
+      ctx.fillText(convertibleUnits(units).length > 0 ? `${units} ▾` : units, axX, strip.top + strip.height - 4);
     }
   } else {
     ctx.font = scaledFont(10, dc.fontScale);

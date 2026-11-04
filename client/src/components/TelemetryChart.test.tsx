@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { fakeLayout, makeSession, ramp } from '../test/dom-setup';
 import { describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { TelemetryChart } from './TelemetryChart';
+import { PreferencesProvider } from '../lib/usePreferences';
 
 const session = makeSession({
   1: { name: 'A', samples: ramp(1001) },
@@ -173,5 +174,48 @@ describe('TelemetryChart lap compare', () => {
         onViewRangeChange={() => {}} selectedLaps={[1]} />,
     );
     expect(screen.queryByTestId('lap-compare-chip')).toBeNull();
+  });
+});
+
+describe('TelemetryChart unit menu', () => {
+  function speedSession() {
+    const s = makeSession({ 1: { name: 'Speed', samples: ramp(1001) }, 2: { name: 'RPM', samples: ramp(1001) } });
+    s.channels.set(1, { ...s.channels.get(1)!, units: 'km/h' });
+    s.channels.set(2, { ...s.channels.get(2)!, units: 'rpm' });
+    return s;
+  }
+  const renderWithPrefs = (s = speedSession()) => render(
+    <PreferencesProvider>
+      <TelemetryChart session={s} activeChannels={[{ channelId: 1, color: '#f00' }, { channelId: 2, color: '#0f0' }]}
+        viewRange={null} onViewRangeChange={() => {}} />
+    </PreferencesProvider>,
+  );
+
+  it('opens unit options when the strip label/axis area is clicked, and applies the choice', () => {
+    localStorage.clear();
+    fakeLayout({ width: 1000, height: 400 });
+    renderWithPrefs();
+    const canvas = screen.getByTestId('telemetry-canvas');
+    // Two strips of ~182 px each; click the first strip's label area (x < left margin).
+    fireEvent.mouseDown(canvas, { clientX: 20, clientY: 60, button: 0 });
+    const menu = screen.getByRole('menu', { name: /Speed units/ });
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'mph' }));
+    expect(JSON.parse(localStorage.getItem('quickscope-preferences')!).unitOverrides).toEqual({ Speed: 'mph' });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('says so when the channel has no other units', () => {
+    fakeLayout({ width: 1000, height: 400 });
+    renderWithPrefs();
+    fireEvent.mouseDown(screen.getByTestId('telemetry-canvas'), { clientX: 20, clientY: 300, button: 0 });
+    const menu = screen.getByRole('menu', { name: /RPM units/ });
+    expect(within(menu).getByText('No other units')).toBeTruthy();
+  });
+
+  it('does not open from the plot area', () => {
+    fakeLayout({ width: 1000, height: 400 });
+    renderWithPrefs();
+    fireEvent.mouseDown(screen.getByTestId('telemetry-canvas'), { clientX: 500, clientY: 60, button: 0 });
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 });
