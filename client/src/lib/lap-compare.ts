@@ -1,5 +1,5 @@
 /** Lap windows and lap-relative time for lap selection / compare. */
-import type { LapMarker } from './xrk-parser';
+import type { ChannelSample, LapMarker } from './xrk-parser';
 
 export interface LapWindow {
   index: number;
@@ -35,4 +35,23 @@ export const LAP_COMPARE_PALETTE = ['#4361ee', '#f77f00', '#10b981', '#e11d48', 
 
 export function lapColor(order: number): string {
   return LAP_COMPARE_PALETTE[order % LAP_COMPARE_PALETTE.length];
+}
+
+/** Lap-relative seconds → session ms for a given lap. */
+export function toSessionMs(lapRelSec: number, lap: LapWindow): number {
+  return lap.startMs + lapRelSec * 1000;
+}
+
+/** The lap's samples (startMs..endMs inclusive), re-timed so the lap starts at 0. */
+export function shiftToLap(samples: ChannelSample[], lap: LapWindow): ChannelSample[] {
+  let lo = 0, hi = samples.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].timestamp < lap.startMs) lo = mid + 1; else hi = mid;
+  }
+  const out: ChannelSample[] = [];
+  for (let i = lo; i < samples.length && samples[i].timestamp <= lap.endMs; i++) {
+    out.push({ timestamp: samples[i].timestamp - lap.startMs, value: samples[i].value });
+  }
+  return out;
 }

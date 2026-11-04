@@ -55,6 +55,8 @@ export default function App() {
     setSelectedLaps,
   } = useAppState();
 
+  const clearLapSelection = useCallback(() => setSelectedLaps([]), [setSelectedLaps]);
+
   // Selecting exactly one lap zooms the chart to it (keyed on the selection,
   // so the user can still pan/zoom afterwards).
   const lapSession = state.session;
@@ -469,6 +471,8 @@ export default function App() {
                 onCursorTimeChange={setCursorTime}
                 chartMode={state.chartMode}
                 fileName={state.fileName}
+                selectedLaps={state.selectedLaps}
+                onClearLapSelection={clearLapSelection}
               />
             )
           ) : (

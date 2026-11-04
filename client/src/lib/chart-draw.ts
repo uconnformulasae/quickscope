@@ -11,8 +11,34 @@ import {
   visibleMinMax, placeLabelBox, contrastText,
 } from './chart-utils';
 import { formatChartAxisTime } from './time-format';
+import { lapColor } from './lap-compare';
+import { formatLapTime } from './xrk-parser';
 
 const LERP_RATE = 0.18;
+
+/** Visible samples feeding a y-range: every compared lap in compare mode. */
+function visibleForRange(dc: DrawContext, channelId: number, allSamples: ChannelSample[]): ChannelSample[] {
+  const series = dc.compare?.series.get(channelId);
+  if (!series) {
+    return allSamples.length > 0 ? dc.getVisibleSamples(channelId, allSamples, dc.xRange, dc.plotW) : [];
+  }
+  return series.flatMap(s => (s.length > 0 ? dc.getVisibleSamples(channelId, s, dc.xRange, dc.plotW) : []));
+}
+
+/** Stroke one trace (already min-max reduced). */
+function strokeTrace(dc: DrawContext, ds: ChannelSample[], valToY: (v: number) => number) {
+  if (ds.length < 2) return;
+  const { ctx, xRange, plotW } = dc;
+  ctx.beginPath();
+  let started = false;
+  for (const s of ds) {
+    const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
+    const y = valToY(s.value);
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
 
 /** Compute smoothed Y-range for overlay mode shared axes */
 export function computeOverlayYRanges(dc: DrawContext): void {
@@ -22,9 +48,7 @@ export function computeOverlayYRanges(dc: DrawContext): void {
     const data = dc.channelDataMap.get(strip.channelId);
     if (!data) continue;
     const units = data.def.units || '';
-    const visible = data.allSamples.length > 0
-      ? dc.getVisibleSamples(strip.channelId, data.allSamples, dc.xRange, dc.plotW)
-      : [];
+    const visible = visibleForRange(dc, strip.channelId, data.allSamples);
     let mn = Infinity, mx = -Infinity;
     for (const s of visible) {
       if (s.value < mn) mn = s.value;
@@ -110,7 +134,9 @@ export function drawStrips(dc: DrawContext): void {
       ? dc.getVisibleSamples(strip.channelId, allSamples, xRange, plotW)
       : [];
 
-    const [yMin, yMax] = computeStripYRange(dc, strip, visible, def.units || '');
+    const [yMin, yMax] = computeStripYRange(
+      dc, strip, dc.compare ? visibleForRange(dc, strip.channelId, allSamples) : visible, def.units || '',
+    );
     // Min-max per-pixel optimization for rendering (pixel-identical output)
     const ds = minMaxTrace(visible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
     const ySpan = yMax - yMin || 1;
@@ -173,20 +199,32 @@ export function drawStrips(dc: DrawContext): void {
       if (chartMode === 'overlay') gridDrawnForOverlay = true;
     }
 
-    // Line trace
-    if (ds.length > 1) {
+    // Line trace(s)
+    ctx.lineJoin = 'round';
+    const lapSeries = dc.compare?.series.get(strip.channelId);
+    if (lapSeries) {
+      // Compare: one trace per lap. Separate strips colour by lap; overlay
+      // keeps the channel colour and tells laps apart by dash + fade.
+      for (let i = lapSeries.length - 1; i >= 0; i--) {
+        const lapVisible = lapSeries[i].length > 0
+          ? dc.getVisibleSamples(strip.channelId, lapSeries[i], xRange, plotW) : [];
+        const lapDs = minMaxTrace(lapVisible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
+        ctx.save();
+        if (chartMode === 'overlay') {
+          ctx.strokeStyle = strip.color;
+          ctx.globalAlpha = Math.max(0.4, 1 - 0.2 * i);
+          ctx.setLineDash(i === 0 ? [] : [6, 3]);
+        } else {
+          ctx.strokeStyle = lapColor(i);
+        }
+        ctx.lineWidth = i === 0 ? 2.0 : 1.5;
+        strokeTrace(dc, lapDs, valToY);
+        ctx.restore();
+      }
+    } else if (ds.length > 1) {
       ctx.strokeStyle = strip.color;
       ctx.lineWidth = 2.0;
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      let started = false;
-      for (const s of ds) {
-        const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
-        const y = valToY(s.value);
-        if (!started) { ctx.moveTo(x, y); started = true; }
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
+      strokeTrace(dc, ds, valToY);
     }
 
     // Data point markers — visible when zoomed in tight (>8px between points)
@@ -373,6 +411,32 @@ function drawYAxis(
       }
     }
   }
+}
+
+/** Lap legend for compare mode: "■ Lap 3 1:12.400" per compared lap. */
+export function drawCompareLegend(dc: DrawContext): void {
+  if (!dc.compare || dc.strips.length === 0) return;
+  const { ctx, lm } = dc;
+  ctx.font = scaledFont(9, dc.fontScale, 'bold');
+  let x = lm + 6;
+  const y = dc.chartMode === 'overlay' ? Math.round(28 * dc.fontScale) : Math.round(12 * dc.fontScale);
+  dc.compare.laps.forEach((lap, i) => {
+    const color = dc.chartMode === 'overlay' ? dc.colors.text : lapColor(i);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(dc.chartMode === 'overlay' && i > 0 ? [6, 3] : []);
+    ctx.beginPath();
+    ctx.moveTo(x, y - 3);
+    ctx.lineTo(x + 14, y - 3);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    x += 18;
+    const label = `Lap ${lap.lapNumber} ${formatLapTime(lap.durationMs / 1000)}`;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.fillText(label, x, y);
+    x += ctx.measureText(label).width + 14;
+  });
 }
 
 /** Draw overlay legend bar */

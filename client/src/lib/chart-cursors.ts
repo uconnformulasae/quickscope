@@ -59,6 +59,16 @@ function getStripYRange(dc: DrawContext, strip: StripLayout, def: { units: strin
   return [0, 1];
 }
 
+/** Compare mode: each lap's nearest value at lap-relative tMs, "a / b / c". */
+function compareValueText(dc: DrawContext, channelId: number, tMs: number): string | null {
+  const series = dc.compare?.series.get(channelId);
+  if (!series) return null;
+  return series.map(s => {
+    const snap = s.length > 0 ? nearestSample(s, tMs) : null;
+    return snap ? formatValue(snap.value) : '–';
+  }).join(' / ');
+}
+
 function stripValToY(strip: StripLayout, yRange: [number, number], v: number): number {
   const ySpan = yRange[1] - yRange[0] || 1;
   return strip.top + strip.height - 4 - ((v - yRange[0]) / ySpan) * (strip.height - 8);
@@ -88,8 +98,8 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
     ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
     ctx.fill();
 
-    // Value pill — shows nearest real measured value
-    const valText = formatValue(snap.value);
+    // Value pill — nearest real measured value (every lap's, in compare mode)
+    const valText = compareValueText(dc, strip.channelId, cursorT * 1000) ?? formatValue(snap.value);
     const nameText = data.def.shortName;
     ctx.font = scaledFont(10, dc.fontScale, 'bold');
     const nameW = ctx.measureText(nameText).width;
@@ -153,7 +163,7 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
       ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
       ctx.stroke();
 
-      const pillText = formatValue(snap.value);
+      const pillText = compareValueText(dc, strip.channelId, hoverT * 1000) ?? formatValue(snap.value);
       ctx.font = scaledFont(8, dc.fontScale);
       const tw = ctx.measureText(pillText).width;
       const pillW = tw + 6;

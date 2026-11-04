@@ -64,6 +64,8 @@ function makeDc(overrides: Partial<DrawContext> = {}) {
     smoothedYRanges: new Map([['ch:1', [0, 4000] as [number, number]]]),
     needsDrawRef: { current: false },
     colors,
+    fontScale: 1,
+    compare: null,
     ...overrides,
   } as DrawContext;
   return { dc, calls };
@@ -157,5 +159,18 @@ describe('hitTestCursor', () => {
 
   it('hits B alone when A is unset', () => {
     expect(hitTestCursor(100, null, 95, 6)).toBe('B');
+  });
+});
+
+describe('drawCursors in lap compare mode', () => {
+  it('shows every compared lap\'s value in the cursor pill', () => {
+    const lapA = [{ timestamp: 0, value: 10 }, { timestamp: 5000, value: 20 }];
+    const lapB = [{ timestamp: 0, value: 11 }, { timestamp: 5000, value: 25 }];
+    const { dc, calls } = makeDc({
+      channelDataMap: new Map([[1, { def: { shortName: 'RPM', units: 'rpm', color: '#f00' }, allSamples: lapA }]]),
+      compare: { laps: [], series: new Map([[1, [lapA, lapB]]]) },
+    });
+    drawCursors(dc, { cursorA: 5, cursorB: null, hoverT: null, deltaMode: false }, 280);
+    expect(texts(calls)).toContain('20.00 / 25.00');
   });
 });
