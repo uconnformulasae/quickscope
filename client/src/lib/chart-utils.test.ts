@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   brightenColor,
   clamp,
+  contrastText,
   formatTimeSec,
   formatValue,
   interpolateValue,
   minMaxTrace,
   nearestSample,
   niceAxisTicks,
+  placeLabelBox,
+  visibleMinMax,
 } from './chart-utils';
 
 const s = (timestamp: number, value: number) => ({ timestamp, value });
@@ -122,5 +125,50 @@ describe('minMaxTrace', () => {
     expect(Math.min(...out.map(p => p.value))).toBe(Math.min(...dense.map(p => p.value)));
     const times = out.map(p => p.timestamp);
     expect(times).toEqual([...times].sort((a, b) => a - b));
+  });
+});
+
+describe('visibleMinMax', () => {
+  // 0..10 s, one sample every 10 ms, value rising with time
+  const ramp = Array.from({ length: 1001 }, (_, i) => ({ timestamp: i * 10, value: i }));
+
+  it('finds min and max inside the window only', () => {
+    const mm = visibleMinMax(ramp, 2000, 3000)!;
+    expect(mm.min.timestamp).toBe(2000);
+    expect(mm.max.timestamp).toBe(3000);
+  });
+
+  it('returns null when no sample is in the window', () => {
+    expect(visibleMinMax(ramp, 20000, 30000)).toBeNull();
+    expect(visibleMinMax([], 0, 1000)).toBeNull();
+  });
+
+  it('skips non-finite values', () => {
+    const s = [{ timestamp: 0, value: NaN }, { timestamp: 10, value: 5 }, { timestamp: 20, value: 2 }];
+    const mm = visibleMinMax(s, 0, 20)!;
+    expect(mm.min.value).toBe(2);
+    expect(mm.max.value).toBe(5);
+  });
+});
+
+describe('placeLabelBox', () => {
+  const bounds = { left: 0, right: 1000, top: 0, bottom: 100 };
+
+  it('flips to the left of the point near the right edge', () => {
+    expect(placeLabelBox(990, 50, 60, 16, bounds).x).toBe(990 - 6 - 60);
+  });
+
+  it('sits right of the point and keeps y inside the bounds', () => {
+    const p = placeLabelBox(10, 5, 60, 16, bounds);
+    expect(p.x).toBe(16);
+    expect(p.y).toBeGreaterThanOrEqual(0);
+    expect(placeLabelBox(10, 99, 60, 16, bounds).y).toBe(100 - 16);
+  });
+});
+
+describe('contrastText', () => {
+  it('uses black on light fills and white on dark fills', () => {
+    expect(contrastText('#facc15')).toBe('#000');
+    expect(contrastText('#4361ee')).toBe('#fff');
   });
 });
