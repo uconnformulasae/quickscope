@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLapWindows, lapColor, LAP_COMPARE_PALETTE, lapRelativeRange } from './lap-compare';
+import { buildLapWindows, lapColor, LAP_COMPARE_PALETTE, lapRelativeRange, shiftToLap, toSessionMs } from './lap-compare';
 
 const markers = [
   { timestamp: 0, lapNumber: 1 },
@@ -35,5 +35,22 @@ describe('lapColor', () => {
   it('cycles through the palette', () => {
     expect(lapColor(0)).toBe(LAP_COMPARE_PALETTE[0]);
     expect(lapColor(LAP_COMPARE_PALETTE.length + 1)).toBe(LAP_COMPARE_PALETTE[1]);
+  });
+});
+
+describe('toSessionMs', () => {
+  it('maps lap-relative seconds back to session ms', () => {
+    expect(toSessionMs(5, buildLapWindows(markers)[1])).toBe(65000);
+  });
+});
+
+describe('shiftToLap', () => {
+  it('keeps only the lap\'s samples, re-timed from 0', () => {
+    const samples = [0, 30000, 60000, 90000, 125000, 130000].map((t, i) => ({ timestamp: t, value: i }));
+    expect(shiftToLap(samples, buildLapWindows(markers)[1])).toEqual([
+      { timestamp: 0, value: 2 },
+      { timestamp: 30000, value: 3 },
+      { timestamp: 65000, value: 4 },
+    ]);
   });
 });

@@ -123,3 +123,55 @@ describe('TelemetryChart delta cursor drag', () => {
     vi.useRealTimers();
   });
 });
+
+describe('TelemetryChart lap compare', () => {
+  const lapSess = {
+    ...makeSession({ 1: { name: 'A', samples: ramp(1001) } }), // 10 s
+    lapMarkers: [
+      { timestamp: 0, lapNumber: 1 },
+      { timestamp: 4000, lapNumber: 2 },
+      { timestamp: 7000, lapNumber: 3 },
+    ],
+  };
+
+  it('shows a compare chip for 2+ selected laps and exits via its button', () => {
+    fakeLayout({ width: 1000, height: 300 });
+    const onClear = vi.fn();
+    render(
+      <TelemetryChart session={lapSess} activeChannels={[{ channelId: 1, color: '#f00' }]} viewRange={null}
+        onViewRangeChange={() => {}} selectedLaps={[0, 1]} onClearLapSelection={onClear} />,
+    );
+    const chip = screen.getByTestId('lap-compare-chip');
+    expect(chip.textContent).toContain('Lap 1');
+    expect(chip.textContent).toContain('Lap 2');
+    fireEvent.click(screen.getByRole('button', { name: 'Exit lap compare' }));
+    expect(onClear).toHaveBeenCalled();
+  });
+
+  it('keeps compare zoom/pan inside the chart (no session view-range emits)', () => {
+    vi.useFakeTimers();
+    fakeLayout({ width: 1000, height: 300 });
+    const onViewRangeChange = vi.fn();
+    render(
+      <TelemetryChart session={lapSess} activeChannels={[{ channelId: 1, color: '#f00' }]} viewRange={null}
+        onViewRangeChange={onViewRangeChange} selectedLaps={[0, 1]} />,
+    );
+    const canvas = screen.getByTestId('telemetry-canvas');
+    wheel(canvas, { ctrlKey: true });
+    fireEvent.mouseDown(canvas, { clientX: 500, clientY: 50, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 400, clientY: 50 });
+    fireEvent.mouseUp(canvas, { clientX: 400, clientY: 50 });
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(onViewRangeChange).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('shows no chip for a single selected lap', () => {
+    fakeLayout({ width: 1000, height: 300 });
+    render(
+      <TelemetryChart session={lapSess} activeChannels={[{ channelId: 1, color: '#f00' }]} viewRange={null}
+        onViewRangeChange={() => {}} selectedLaps={[1]} />,
+    );
+    expect(screen.queryByTestId('lap-compare-chip')).toBeNull();
+  });
+});

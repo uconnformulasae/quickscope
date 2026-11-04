@@ -4,6 +4,7 @@
 import type { ChannelSample } from './xrk-parser';
 import type { ActiveChannel, TimeRange, DerivedChannel, ChartMode } from './useXRKStore';
 import type { XRKSession } from './xrk-parser';
+import type { LapWindow } from './lap-compare';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -19,6 +20,17 @@ export interface TelemetryChartProps {
   chartMode?: ChartMode;
   /** Loaded session file name, used by Save image */
   fileName?: string | null;
+  /** Laps selected for compare (lap window indices, selection order). 2+ → compare mode. */
+  selectedLaps?: number[];
+  onClearLapSelection?: () => void;
+}
+
+/** Lap compare mode: x is lap-relative time. `series` holds, per channel, one
+ *  lap-relative sample array per lap in `laps` order (series[0] is also the
+ *  channel's allSamples in channelDataMap). */
+export interface CompareContext {
+  laps: LapWindow[];
+  series: Map<number, ChannelSample[][]>;
 }
 
 export interface StripLayout {
@@ -53,6 +65,8 @@ export interface DrawContext {
   colors: ChartColors;
   /** UI scale preference: multiplies font sizes, pills and axis margins. */
   fontScale: number;
+  /** Non-null in lap compare mode. */
+  compare: CompareContext | null;
 }
 
 // ─── Light-mode color overrides ─────────────────────────────────────────────

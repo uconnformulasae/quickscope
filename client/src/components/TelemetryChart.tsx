@@ -1,20 +1,22 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { formatChartElapsed } from '../lib/time-format';
 import type { ChannelSample } from '../lib/xrk-parser';
-import { RotateCcw, ImageDown } from 'lucide-react';
+import { RotateCcw, ImageDown, X } from 'lucide-react';
 import {
   type TelemetryChartProps, type StripLayout, type DrawContext,
   LEFT_MARGIN, RIGHT_MARGIN, BOTTOM_AXIS_HEIGHT, MIN_STRIP_HEIGHT, AXIS_WIDTH,
   DEBOUNCE_MS,
   clamp, niceAxisTicks, getChartColors, toDarkChartColor,
 } from '../lib/chart-utils';
-import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawXAxis } from '../lib/chart-draw';
+import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawCompareLegend, drawXAxis } from '../lib/chart-draw';
 import { drawCursors, hitTestCursor } from '../lib/chart-cursors';
 import type { ChartExportSpec } from '../lib/chart-export';
 import { ImageExportDialog } from './ImageExportDialog';
 import { Presence } from '../lib/motion';
 import { usePreferences } from '../lib/usePreferences';
 import { useDisplaySamples } from '../lib/useDisplaySamples';
+import { buildLapWindows, selectedWindows, shiftToLap, lapColor } from '../lib/lap-compare';
+import { formatLapTime } from '../lib/xrk-parser';
 
 /** Grab distance (px) for dragging a delta cursor. */
 const CURSOR_HIT_PX = 6;
@@ -32,6 +34,8 @@ export function TelemetryChart({
   onCursorTimeChange,
   chartMode = 'separate',
   fileName = null,
+  selectedLaps,
+  onClearLapSelection,
 }: TelemetryChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { prefs } = usePreferences();
@@ -87,10 +91,22 @@ export function TelemetryChart({
   // ─── Derived data ───────────────────────────────────────────────────────
   const visibleChannels = activeChannels;
 
-  const sessionDuration = session.durationMs / 1000; // seconds
+  // Lap compare mode: 2+ selected laps, x = lap-relative time.
+  const lapWindows = useMemo(() => buildLapWindows(session.lapMarkers), [session.lapMarkers]);
+  const compareLaps = useMemo(() => {
+    const sel = selectedWindows(lapWindows, selectedLaps ?? []);
+    return sel.length >= 2 ? sel : null;
+  }, [lapWindows, selectedLaps]);
+  const compareRef = useRef(false);
+  compareRef.current = compareLaps !== null;
+
+  // Timeline length in seconds: the session, or the longest compared lap.
+  const sessionDuration = compareLaps
+    ? Math.max(...compareLaps.map(l => l.durationMs)) / 1000
+    : session.durationMs / 1000;
 
   // Resolve channels: get definition + all samples for each visible channel
-  const channelDataMap = useMemo(() => {
+  const baseChannelDataMap = useMemo(() => {
     const map = new Map<number, { def: { shortName: string; units: string; color: string }; allSamples: ChannelSample[] }>();
     for (const ac of visibleChannels) {
       const sessionChan = session.channels.get(ac.channelId);
@@ -114,6 +130,26 @@ export function TelemetryChart({
     }
     return map;
   }, [visibleChannels, session, derivedChannels, derivedSamplesMap, display]);
+
+  // In compare mode each channel's samples become lap-relative series; the
+  // first lap stands in as allSamples so cursors/min-max/delta work unchanged.
+  const compareSeries = useMemo(() => {
+    if (!compareLaps) return null;
+    const series = new Map<number, ChannelSample[][]>();
+    for (const [id, data] of baseChannelDataMap) {
+      series.set(id, compareLaps.map(lap => shiftToLap(data.allSamples, lap)));
+    }
+    return series;
+  }, [compareLaps, baseChannelDataMap]);
+
+  const channelDataMap = useMemo(() => {
+    if (!compareSeries) return baseChannelDataMap;
+    const map = new Map(baseChannelDataMap);
+    for (const [id, data] of baseChannelDataMap) {
+      map.set(id, { ...data, allSamples: compareSeries.get(id)?.[0] ?? [] });
+    }
+    return map;
+  }, [baseChannelDataMap, compareSeries]);
 
   // ─── Dynamic margins for overlay Y-axes ────────────────────────────────
   // Build unique unit groups for overlay axis layout
@@ -178,14 +214,31 @@ export function TelemetryChart({
   }, [cursorTime]);
 
   // ─── Sync external viewRange → internal xRange ─────────────────────────
+  // (Compare mode keeps its own lap-relative zoom; on entering/leaving it the
+  // cursors reset and the x-range goes to the full lap / the session viewRange.)
+  const inCompare = compareLaps !== null;
   useEffect(() => {
-    if (!viewRange) {
+    if (inCompare) {
+      xRangeRef.current = null;
+    } else if (!viewRange) {
       xRangeRef.current = null;
     } else {
       xRangeRef.current = [viewRange.startMs / 1000, viewRange.endMs / 1000];
     }
     requestDraw();
-  }, [viewRange]);
+  }, [viewRange, inCompare]);
+
+  useEffect(() => {
+    cursorXRef.current = null;
+    cursor2XRef.current = null;
+    clickedXRef.current = null;
+    hoverXRef.current = null;
+    if (canvasRef.current) {
+      delete canvasRef.current.dataset.cursorA;
+      delete canvasRef.current.dataset.cursorB;
+    }
+    requestDraw();
+  }, [inCompare]);
 
   // ─── Keep deltaMode ref in sync ────────────────────────────────────────
   useEffect(() => {
@@ -201,6 +254,8 @@ export function TelemetryChart({
 
   // ─── Debounced onViewRangeChange ───────────────────────────────────────
   const emitViewRange = useCallback((range: [number, number] | null) => {
+    // Compare zoom is lap-relative: it must not leak into the session viewRange.
+    if (compareRef.current) return;
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     debounceTimerRef.current = setTimeout(() => {
       if (!range) {
@@ -325,7 +380,9 @@ export function TelemetryChart({
       needsDrawRef,
       colors,
       fontScale,
+      compare: compareLaps && compareSeries ? { laps: compareLaps, series: compareSeries } : null,
     };
+    if (compareLaps) dc.session = { ...session, logStartMs: null, lapMarkers: [] };
 
     ctx.save();
     ctx.clearRect(0, 0, w, h);
@@ -333,6 +390,7 @@ export function TelemetryChart({
     computeOverlayYRanges(dc);
     drawStrips(dc);
     drawOverlayLegend(dc);
+    drawCompareLegend(dc);
     const axisY = drawXAxis(dc);
     drawCursors(dc, {
       cursorA: cursorXRef.current,
@@ -342,7 +400,7 @@ export function TelemetryChart({
     }, axisY);
 
     ctx.restore();
-  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout, fontScale]);
+  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout, fontScale, compareLaps, compareSeries]);
 
 
   // ─── On-demand drawing ─────────────────────────────────────────────────
@@ -838,11 +896,11 @@ export function TelemetryChart({
       xRange: getEffectiveXRange(),
       sessionDurationSec: sessionDuration,
       chartMode,
-      lapMarkers: session.lapMarkers,
+      lapMarkers: compareLaps ? [] : session.lapMarkers,
       exportedAt: new Date(),
     };
     setImageExportSpec(spec);
-  }, [fileName, session, visibleChannels, channelDataMap, getEffectiveXRange, sessionDuration, chartMode]);
+  }, [fileName, session, visibleChannels, channelDataMap, getEffectiveXRange, sessionDuration, chartMode, compareLaps]);
 
   const closeImageExport = useCallback(() => setImageExportSpec(null), []);
 
@@ -863,6 +921,28 @@ export function TelemetryChart({
       {/* Toolbar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2">
+          {compareLaps ? (
+            <span
+              data-testid="lap-compare-chip"
+              className="inline-flex items-center gap-1.5 pl-2 pr-1 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-xs text-foreground"
+            >
+              <span className="text-muted-foreground">Compare:</span>
+              {compareLaps.map((lap, i) => (
+                <span key={lap.index} className="inline-flex items-center gap-1 tabular">
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: lapColor(i) }} aria-hidden />
+                  Lap {lap.lapNumber} <span className="text-muted-foreground">{formatLapTime(lap.durationMs / 1000)}</span>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={onClearLapSelection}
+                aria-label="Exit lap compare"
+                className="p-0.5 rounded-full hover:bg-muted/50 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ) : (
           <span className="text-xs text-muted-foreground">
             {viewRange
               ? `${formatChartElapsed(viewRange.startMs, session.logStartMs)} — ${formatChartElapsed(viewRange.endMs, session.logStartMs)}`
@@ -871,6 +951,7 @@ export function TelemetryChart({
                 : `Full session: ${formatChartElapsed(session.durationMs, session.logStartMs)}`
             }
           </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           <button
