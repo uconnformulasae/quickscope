@@ -5,7 +5,7 @@
 import type { ChannelSample } from './xrk-parser';
 import type { DrawContext, StripLayout } from './chart-utils';
 import {
-  MONO_FONT, AXIS_WIDTH,
+  MONO_FONT, AXIS_WIDTH, scaledFont,
   BOTTOM_AXIS_HEIGHT,
   niceAxisTicks, formatValue, clamp, minMaxTrace,
   visibleMinMax, placeLabelBox, contrastText,
@@ -159,7 +159,7 @@ export function drawStrips(dc: DrawContext): void {
       ctx.setLineDash([]);
 
       if (strip === strips[0]) {
-        ctx.font = `9px ${MONO_FONT}`;
+        ctx.font = scaledFont(9, dc.fontScale);
         ctx.fillStyle = dc.colors.lapText;
         ctx.textAlign = 'center';
         session.lapMarkers.forEach((lap, i) => {
@@ -215,7 +215,7 @@ export function drawStrips(dc: DrawContext): void {
     // Channel name (separate mode)
     if (chartMode !== 'overlay') {
       ctx.save();
-      ctx.font = `bold 10px ${MONO_FONT}`;
+      ctx.font = scaledFont(10, dc.fontScale, 'bold');
       ctx.fillStyle = strip.color;
       ctx.textAlign = 'center';
       ctx.translate(12, strip.top + strip.height / 2);
@@ -259,7 +259,7 @@ export function drawMinMaxMarkers(
   const right = w - rm;
   const bounds = { left: lm, right, top: strip.top + 2, bottom: strip.top + strip.height - 2 };
   const textColor = contrastText(strip.color);
-  const fontPx = 11;
+  const fontPx = Math.round(11 * dc.fontScale);
   const boxH = fontPx + 6;
 
   // Reference lines
@@ -311,7 +311,7 @@ export function drawMinMaxMarkers(
 function drawMinMaxReadout(dc: DrawContext, strip: StripLayout, mm: VisibleMinMax, units: string) {
   if (!mm) return;
   const { ctx, w, rm } = dc;
-  ctx.font = `10px ${MONO_FONT}`;
+  ctx.font = scaledFont(10, dc.fontScale);
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'right';
   ctx.fillText(minMaxText(mm, units), w - rm - 4, strip.top + 12);
@@ -335,10 +335,10 @@ function drawYAxis(
     overlayAxesDrawn.add(units);
 
     const axX = isLeft
-      ? lm - 5 - sideIndex * AXIS_WIDTH
-      : w - rm + 5 + sideIndex * AXIS_WIDTH;
+      ? lm - 5 - sideIndex * AXIS_WIDTH * dc.fontScale
+      : w - rm + 5 + sideIndex * AXIS_WIDTH * dc.fontScale;
 
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     ctx.fillStyle = dc.colors.text;
     ctx.textAlign = isLeft ? 'right' : 'left';
     for (const yt of yTicks) {
@@ -357,13 +357,13 @@ function drawYAxis(
     ctx.stroke();
 
     if (units) {
-      ctx.font = `8px ${MONO_FONT}`;
+      ctx.font = scaledFont(8, dc.fontScale);
       ctx.fillStyle = dc.colors.text;
       ctx.textAlign = isLeft ? 'right' : 'left';
       ctx.fillText(units, axX, strip.top + strip.height - 4);
     }
   } else {
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     ctx.fillStyle = strip.color;
     ctx.textAlign = 'right';
     for (const yt of yTicks) {
@@ -379,7 +379,7 @@ function drawYAxis(
 export function drawOverlayLegend(dc: DrawContext): void {
   if (dc.chartMode !== 'overlay' || dc.strips.length === 0) return;
   const { ctx, lm } = dc;
-  ctx.font = `bold 9px ${MONO_FONT}`;
+  ctx.font = scaledFont(9, dc.fontScale, 'bold');
   let legendX = lm + 6;
   const legendY = 14;
   for (const strip of dc.strips) {
@@ -407,7 +407,7 @@ export function drawXAxis(dc: DrawContext): number {
 
   const axisY = strips.length > 0
     ? strips[strips.length - 1].top + strips[strips.length - 1].height
-    : h - BOTTOM_AXIS_HEIGHT;
+    : h - BOTTOM_AXIS_HEIGHT * dc.fontScale;
 
   ctx.strokeStyle = dc.colors.separator;
   ctx.lineWidth = 1;
@@ -416,7 +416,7 @@ export function drawXAxis(dc: DrawContext): number {
   ctx.lineTo(w - rm, Math.round(axisY) + 0.5);
   ctx.stroke();
 
-  ctx.font = `10px ${MONO_FONT}`;
+  ctx.font = scaledFont(10, dc.fontScale);
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'center';
   const tickStep = xTicks.length >= 2 ? xTicks[1] - xTicks[0] : undefined;
@@ -431,7 +431,7 @@ export function drawXAxis(dc: DrawContext): number {
     }
   }
 
-  ctx.font = `9px ${MONO_FONT}`;
+  ctx.font = scaledFont(9, dc.fontScale);
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'right';
   ctx.fillText(dc.session.logStartMs !== null ? 'Time' : 'Time (s)', w - rm, axisY + 30);

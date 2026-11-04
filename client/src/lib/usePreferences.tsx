@@ -93,6 +93,10 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
     }
   }, [prefs]);
 
+  useEffect(() => {
+    document.documentElement.style.setProperty('--ui-scale', String(prefs.uiScale));
+  }, [prefs.uiScale]);
+
   const update = useCallback((patch: Partial<Preferences>) => {
     setPrefs(prev => sanitize({ ...prev, ...patch }));
   }, []);

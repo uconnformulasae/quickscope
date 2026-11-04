@@ -51,6 +51,8 @@ export interface DrawContext {
   smoothedYRanges: Map<string, [number, number]>;
   needsDrawRef: { current: boolean };
   colors: ChartColors;
+  /** UI scale preference: multiplies font sizes, pills and axis margins. */
+  fontScale: number;
 }
 
 // ─── Light-mode color overrides ─────────────────────────────────────────────
@@ -95,6 +97,11 @@ export const BOTTOM_AXIS_HEIGHT = 36;
 export const MIN_STRIP_HEIGHT = 140;
 export const AXIS_WIDTH = 50;
 export const MONO_FONT = 'JetBrains Mono, monospace';
+
+/** Canvas font string for a base pixel size times the UI scale. */
+export function scaledFont(px: number, scale: number, weight?: 'bold'): string {
+  return `${weight ? `${weight} ` : ''}${Math.round(px * scale)}px ${MONO_FONT}`;
+}
 
 export interface ChartColors {
   grid: string;
