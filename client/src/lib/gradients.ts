@@ -1,5 +1,6 @@
 /** Color gradients for the GPS speed trail. */
 import type { GpsGradientPrefs, GradientPreset } from './usePreferences';
+import { getConverter } from './units';
 
 export const GRADIENT_PRESETS: Record<Exclude<GradientPreset, 'custom'>, string[]> = {
   turbo: ['#30123b', '#4662d7', '#36aaf9', '#1ae4b6', '#72fe5e', '#c7ef34', '#fbb938', '#f56918', '#c92903', '#7a0403'],
@@ -38,4 +39,12 @@ export function sampleGradient(stops: string[], t: number): string {
 export function speedToT(v: number, min: number, max: number): number {
   if (!(max > min)) return 0;
   return Math.min(1, Math.max(0, (v - min) / (max - min)));
+}
+
+/** The fixed colour range is stored in km/h; express it in the session's
+ *  speed unit (km/h assumed when that unit is unknown). Returns [lo, hi]. */
+export function fixedRangeIn(minKmh: number, maxKmh: number, unit: string): [number, number] {
+  const conv = getConverter('km/h', unit);
+  const a = conv.fn(minKmh), b = conv.fn(maxKmh);
+  return a <= b ? [a, b] : [b, a];
 }

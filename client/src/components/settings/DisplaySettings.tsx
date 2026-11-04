@@ -1,6 +1,6 @@
 import { usePreferences, UI_SCALE_MAX, UI_SCALE_MIN, type UnitSystem, type GradientPreset, type GpsGradientPrefs } from '../../lib/usePreferences';
 import { GRADIENT_PRESETS } from '../../lib/gradients';
-import { resolveDisplayUnit } from '../../lib/units';
+import { getConverter } from '../../lib/units';
 
 const PRESETS: { id: GradientPreset; label: string }[] = [
   { id: 'turbo', label: 'Turbo' },
@@ -25,9 +25,12 @@ export function DisplaySettings() {
   const g = prefs.gpsGradient;
   const setGradient = (patch: Partial<GpsGradientPrefs>) => update({ gpsGradient: { ...g, ...patch } });
   const presetStops = (id: GradientPreset) => (id === 'custom' ? [g.customLow, g.customHigh] : GRADIENT_PRESETS[id]);
-  // Fixed range is in the display speed unit: known for Metric/Imperial; in
-  // Logger mode it's whatever the session's GPS speed channel records.
-  const speedUnit = prefs.unitSystem === 'logger' ? 'logger units' : resolveDisplayUnit('GPS Speed', 'km/h', prefs);
+  // The fixed range is stored in km/h (so it means the same speed for every
+  // session, whatever unit it logged) and edited in mph under Imperial.
+  const speedUnit = prefs.unitSystem === 'imperial' ? 'mph' : 'km/h';
+  const toShown = getConverter('km/h', speedUnit).fn;
+  const toKmh = getConverter(speedUnit, 'km/h').fn;
+  const shown = (kmh: number) => String(Math.round(toShown(kmh) * 10) / 10);
 
   return (
     <section data-testid="display-settings">
@@ -104,7 +107,7 @@ export function DisplaySettings() {
               </label>
             </div>
           )}
-          <div className="mt-2 flex items-center gap-2 text-xs">
+          <div className="mt-2 flex flex-col items-start gap-2 text-xs">
             <div role="radiogroup" aria-label="GPS colour range" className="inline-flex rounded-md border border-border p-0.5">
               {(['auto', 'fixed'] as const).map(m => (
                 <button
@@ -113,19 +116,21 @@ export function DisplaySettings() {
                   role="radio"
                   aria-checked={g.rangeMode === m}
                   onClick={() => setGradient({ rangeMode: m })}
-                  className={`px-2 py-0.5 rounded ${g.rangeMode === m ? 'bg-primary text-white' : 'text-muted-foreground hover:text-foreground'}`}
+                  className={`px-2.5 py-0.5 rounded whitespace-nowrap ${g.rangeMode === m ? 'bg-primary text-white' : 'text-muted-foreground hover:text-foreground'}`}
+                  title={m === 'auto' ? 'Colours span the slowest to fastest speed in each session' : 'Colours span a speed range you set, the same for every session'}
                 >
                   {m === 'auto' ? 'Auto range' : 'Fixed range'}
                 </button>
               ))}
             </div>
             {g.rangeMode === 'fixed' && (
-              <div className="flex items-center gap-1 text-muted-foreground">
-                <input type="number" aria-label="Fixed range minimum" className={`${inputCls} w-16`} value={g.fixedMin}
-                  onChange={e => setGradient({ fixedMin: Number(e.target.value) || 0 })} />
-                –
-                <input type="number" aria-label="Fixed range maximum" className={`${inputCls} w-16`} value={g.fixedMax}
-                  onChange={e => setGradient({ fixedMax: Number(e.target.value) || 0 })} />
+              <div className="flex items-center gap-1.5 whitespace-nowrap text-muted-foreground">
+                <span>Slow</span>
+                <input type="number" min={0} aria-label="Fixed range minimum" className={`${inputCls} w-20`} value={shown(g.fixedMin)}
+                  onChange={e => setGradient({ fixedMin: toKmh(Number(e.target.value) || 0) })} />
+                <span>to fast</span>
+                <input type="number" min={0} aria-label="Fixed range maximum" className={`${inputCls} w-20`} value={shown(g.fixedMax)}
+                  onChange={e => setGradient({ fixedMax: toKmh(Number(e.target.value) || 0) })} />
                 <span>{speedUnit}</span>
               </div>
             )}
