@@ -344,17 +344,21 @@ export function useAppState() {
     setState(prev => ({ ...prev, showOnlyWithData: show }));
   }, []);
 
+  // cursorTime is session time normally but lap-relative in compare mode
+  // (2+ laps), so it is cleared whenever the selection crosses that line.
+  const withLaps = (prev: AppState, selectedLaps: number[]): AppState => {
+    const crossed = (prev.selectedLaps.length >= 2) !== (selectedLaps.length >= 2);
+    return { ...prev, selectedLaps, cursorTime: crossed ? null : prev.cursorTime };
+  };
+
   const toggleLapSelected = useCallback((index: number) => {
-    setState(prev => ({
-      ...prev,
-      selectedLaps: prev.selectedLaps.includes(index)
-        ? prev.selectedLaps.filter(i => i !== index)
-        : [...prev.selectedLaps, index],
-    }));
+    setState(prev => withLaps(prev, prev.selectedLaps.includes(index)
+      ? prev.selectedLaps.filter(i => i !== index)
+      : [...prev.selectedLaps, index]));
   }, []);
 
   const setSelectedLaps = useCallback((indices: number[]) => {
-    setState(prev => ({ ...prev, selectedLaps: indices }));
+    setState(prev => withLaps(prev, indices));
   }, []);
 
   const setChartMode = useCallback((mode: ChartMode) => {
