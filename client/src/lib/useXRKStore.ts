@@ -61,6 +61,9 @@ export interface AppState {
   // Chart display mode
   chartMode: ChartMode;
 
+  // Laps selected in the Laps tab (indices into lap windows), in selection order
+  selectedLaps: number[];
+
   // View mode (chart vs table)
   viewMode: ViewMode;
 
@@ -88,6 +91,7 @@ const SESSION_SCOPED_RESET = {
   histogramChannelId: null,
   xyXChannelId: null,
   xyYChannelId: null,
+  selectedLaps: [],
 } satisfies Partial<AppState>;
 
 /** Build channel data map for formula/python evaluation.
@@ -262,6 +266,7 @@ export function useAppState() {
     xyYChannelId: null,
     cursorTime: null,
     chartMode: 'separate',
+    selectedLaps: [],
     viewMode: 'chart' as ViewMode,
     leftSidebarOpen: true,
     rightSidebarOpen: true,
@@ -337,6 +342,19 @@ export function useAppState() {
 
   const setShowOnlyWithData = useCallback((show: boolean) => {
     setState(prev => ({ ...prev, showOnlyWithData: show }));
+  }, []);
+
+  const toggleLapSelected = useCallback((index: number) => {
+    setState(prev => ({
+      ...prev,
+      selectedLaps: prev.selectedLaps.includes(index)
+        ? prev.selectedLaps.filter(i => i !== index)
+        : [...prev.selectedLaps, index],
+    }));
+  }, []);
+
+  const setSelectedLaps = useCallback((indices: number[]) => {
+    setState(prev => ({ ...prev, selectedLaps: indices }));
   }, []);
 
   const setChartMode = useCallback((mode: ChartMode) => {
@@ -522,6 +540,8 @@ export function useAppState() {
     setChannelSearch,
     setShowOnlyWithData,
     setChartMode,
+    toggleLapSelected,
+    setSelectedLaps,
     setViewMode,
     toggleLeftSidebar,
     toggleRightSidebar,

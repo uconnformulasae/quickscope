@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { buildLapWindows } from './lib/lap-compare';
 import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
@@ -50,7 +51,19 @@ export default function App() {
     previewDerivedChannel,
     setChartMode,
     setViewMode,
+    toggleLapSelected,
+    setSelectedLaps,
   } = useAppState();
+
+  // Selecting exactly one lap zooms the chart to it (keyed on the selection,
+  // so the user can still pan/zoom afterwards).
+  const lapSession = state.session;
+  useEffect(() => {
+    if (!lapSession || state.selectedLaps.length !== 1) return;
+    const lap = buildLapWindows(lapSession.lapMarkers)[state.selectedLaps[0]];
+    if (lap) setViewRange({ startMs: lap.startMs, endMs: lap.endMs });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.selectedLaps]);
 
   const { theme, toggleTheme } = useTheme();
   const { widths, setLeftWidth, setRightWidth } = useSidebarWidths();
@@ -538,6 +551,9 @@ export default function App() {
               onNavigateToTime={handleNavigateToTime}
               cursorTime={state.cursorTime}
               theme={theme}
+              selectedLaps={state.selectedLaps}
+              onToggleLap={toggleLapSelected}
+              onSetSelectedLaps={setSelectedLaps}
             />
           </div>
         )}

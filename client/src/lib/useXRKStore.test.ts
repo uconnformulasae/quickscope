@@ -320,4 +320,18 @@ describe('derived channels (python mode)', () => {
 
     expect(out).toBe('Failed to fetch');
   });
+
+  it('toggles lap selection in selection order and resets it on session switch', () => {
+    const { result } = setup();
+    act(() => result.current.setSession(makeSession(), 'a.xrk'));
+    act(() => result.current.toggleLapSelected(1));
+    act(() => result.current.toggleLapSelected(0));
+    expect(result.current.state.selectedLaps).toEqual([1, 0]);
+    act(() => result.current.toggleLapSelected(1));
+    expect(result.current.state.selectedLaps).toEqual([0]);
+    act(() => result.current.setSelectedLaps([2, 3]));
+    expect(result.current.state.selectedLaps).toEqual([2, 3]);
+    act(() => result.current.setSession(makeSession(), 'b.xrk'));
+    expect(result.current.state.selectedLaps).toEqual([]);
+  });
 });

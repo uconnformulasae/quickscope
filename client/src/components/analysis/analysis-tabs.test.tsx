@@ -144,4 +144,27 @@ describe('LapAnalysisTab', () => {
     expect(screen.getByText('80.00')).toBeTruthy();
     expect(screen.getAllByText('Speed').length).toBeGreaterThan(0);
   });
+
+  it('selects laps with checkboxes, best and clear', () => {
+    const onSelect = vi.fn();
+    const onToggle = vi.fn();
+    const { rerender } = render(
+      <LapAnalysisTab session={lapSession()} activeChannels={[]} selectedLaps={[]}
+        onToggleLap={onToggle} onSetSelectedLaps={onSelect} />,
+    );
+    const boxes = screen.getAllByRole('checkbox');
+    expect(boxes).toHaveLength(3);
+    fireEvent.click(boxes[2]);
+    expect(onToggle).toHaveBeenCalledWith(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Select best' }));
+    expect(onSelect).toHaveBeenCalledWith([1]); // lap 2 (55 s) is best
+    rerender(
+      <LapAnalysisTab session={lapSession()} activeChannels={[]} selectedLaps={[0, 2]}
+        onToggleLap={onToggle} onSetSelectedLaps={onSelect} />,
+    );
+    expect(screen.getByText('2 selected — comparing')).toBeTruthy();
+    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(onSelect).toHaveBeenCalledWith([]);
+  });
 });
