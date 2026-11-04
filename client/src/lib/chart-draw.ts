@@ -7,7 +7,8 @@ import type { DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT, AXIS_WIDTH,
   BOTTOM_AXIS_HEIGHT,
-  niceAxisTicks, formatValue, clamp, brightenColor, minMaxTrace,
+  niceAxisTicks, formatValue, clamp, minMaxTrace,
+  visibleMinMax, placeLabelBox, contrastText,
 } from './chart-utils';
 import { formatChartAxisTime } from './time-format';
 
@@ -96,10 +97,7 @@ function computeStripYRange(
 }
 
 /** Draw all strip content: grid, traces, min/max markers, y-axes, labels */
-export function drawStrips(
-  dc: DrawContext,
-  globalMinMaxCache: Map<number, { minSample: ChannelSample; maxSample: ChannelSample }>,
-): void {
+export function drawStrips(dc: DrawContext): void {
   const { ctx, w, lm, rm, plotW, xRange, xTicks, strips, channelDataMap, chartMode, session } = dc;
   let gridDrawnForOverlay = false;
   const overlayAxesDrawn = new Set<string>();
@@ -206,8 +204,10 @@ export function drawStrips(
       ctx.fill();
     }
 
-    // Min/Max markers
-    drawMinMaxMarkers(dc, strip, globalMinMaxCache, valToY);
+    // Min/Max markers (visible window)
+    const mm = visibleMinMax(allSamples, xRange[0] * 1000, xRange[1] * 1000);
+    drawMinMaxMarkers(dc, strip, mm, valToY, def.units || '');
+    if (chartMode !== 'overlay') drawMinMaxReadout(dc, strip, mm, def.units || '');
 
     // Y-axis
     drawYAxis(dc, strip, yTicks, valToY, def, overlayAxesDrawn);
@@ -240,57 +240,81 @@ export function drawStrips(
   }
 }
 
-function drawMinMaxMarkers(
-  dc: DrawContext, strip: StripLayout,
-  cache: Map<number, { minSample: ChannelSample; maxSample: ChannelSample }>,
-  valToY: (v: number) => number,
+export type VisibleMinMax = ReturnType<typeof visibleMinMax>;
+
+function minMaxText(mm: NonNullable<VisibleMinMax>, units: string): string {
+  return `min ${formatValue(mm.min.value)} · max ${formatValue(mm.max.value)}${units ? ` ${units}` : ''}`;
+}
+
+/**
+ * RaceStudio-style min/max for the visible window: dashed reference lines
+ * across the strip, a dot at each extreme, and a boxed value label.
+ */
+export function drawMinMaxMarkers(
+  dc: DrawContext, strip: StripLayout, mm: VisibleMinMax,
+  valToY: (v: number) => number, units: string,
 ) {
+  if (!mm) return;
   const { ctx, w, lm, rm, xRange, plotW } = dc;
-  const globalMM = cache.get(strip.channelId);
-  if (!globalMM) return;
+  const right = w - rm;
+  const bounds = { left: lm, right, top: strip.top + 2, bottom: strip.top + strip.height - 2 };
+  const textColor = contrastText(strip.color);
+  const fontPx = 11;
+  const boxH = fontPx + 6;
 
-  const bright = brightenColor(strip.color, 0.3);
-  const chartLeft = lm;
-  const chartRight = w - rm;
+  // Reference lines
+  ctx.save();
+  ctx.strokeStyle = strip.color;
+  ctx.globalAlpha = 0.4;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  for (const s of [mm.max, mm.min]) {
+    const y = Math.round(valToY(s.value)) + 0.5;
+    ctx.moveTo(lm, y);
+    ctx.lineTo(right, y);
+  }
+  ctx.stroke();
+  ctx.restore();
 
-  const drawMarker = (sample: ChannelSample, isMax: boolean) => {
-    const tSec = sample.timestamp / 1000;
-    const rawX = dc.timeToX(tSec, xRange, plotW);
-    const inView = rawX >= chartLeft && rawX <= chartRight;
-    const markerY = valToY(sample.value);
-    ctx.fillStyle = bright;
-    ctx.font = `8px ${MONO_FONT}`;
+  ctx.font = `bold ${fontPx}px ${MONO_FONT}`;
+  let maxBox: { x: number; y: number; w: number } | null = null;
+  const draw = (s: typeof mm.max, isMax: boolean) => {
+    const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
+    const y = valToY(s.value);
+    ctx.fillStyle = strip.color;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
 
-    if (inView) {
-      ctx.beginPath();
-      if (isMax) {
-        ctx.moveTo(rawX, markerY - 5); ctx.lineTo(rawX - 3, markerY); ctx.lineTo(rawX + 3, markerY);
-      } else {
-        ctx.moveTo(rawX, markerY + 5); ctx.lineTo(rawX - 3, markerY); ctx.lineTo(rawX + 3, markerY);
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.textAlign = 'left';
-      ctx.fillText(`${isMax ? '▲' : '▼'} ${formatValue(sample.value)}`, rawX + 5, markerY + 3);
-    } else {
-      const edgeX = rawX < chartLeft ? chartLeft + 4 : chartRight - 4;
-      const edgeY = clamp(markerY, strip.top + 8, strip.top + strip.height - 8);
-      const arrowDir = rawX < chartLeft ? 1 : -1;
-      ctx.globalAlpha = 0.7;
-      ctx.beginPath();
-      ctx.moveTo(edgeX + arrowDir * 6, edgeY);
-      ctx.lineTo(edgeX + arrowDir * 2, edgeY - 4);
-      ctx.lineTo(edgeX + arrowDir * 2, edgeY + 4);
-      ctx.closePath();
-      ctx.fill();
-      ctx.textAlign = arrowDir > 0 ? 'left' : 'right';
-      ctx.fillText(`${isMax ? '▲' : '▼'} ${formatValue(sample.value)}`, edgeX + arrowDir * 9, edgeY + 3);
-      ctx.globalAlpha = 1;
+    const label = `${isMax ? '▲' : '▼'} ${formatValue(s.value)}${units ? ` ${units}` : ''}`;
+    const boxW = ctx.measureText(label).width + 8;
+    let pos = placeLabelBox(x, y, boxW, boxH, bounds);
+    if (!isMax && maxBox && pos.x < maxBox.x + maxBox.w && pos.x + boxW > maxBox.x
+        && Math.abs(pos.y - maxBox.y) < boxH + 2) {
+      pos = { x: pos.x, y: Math.min(maxBox.y + boxH + 2, bounds.bottom - boxH) };
     }
+    if (isMax) maxBox = { x: pos.x, y: pos.y, w: boxW };
+    ctx.fillStyle = strip.color;
+    ctx.beginPath();
+    ctx.roundRect(pos.x, pos.y, boxW, boxH, 3);
+    ctx.fill();
+    ctx.fillStyle = textColor;
+    ctx.textAlign = 'left';
+    ctx.fillText(label, pos.x + 4, pos.y + boxH - 5);
   };
+  draw(mm.max, true);
+  draw(mm.min, false);
+}
 
-  drawMarker(globalMM.maxSample, true);
-  drawMarker(globalMM.minSample, false);
+/** "min X · max Y unit" at the top-right of a strip (separate mode). */
+function drawMinMaxReadout(dc: DrawContext, strip: StripLayout, mm: VisibleMinMax, units: string) {
+  if (!mm) return;
+  const { ctx, w, rm } = dc;
+  ctx.font = `10px ${MONO_FONT}`;
+  ctx.fillStyle = dc.colors.text;
+  ctx.textAlign = 'right';
+  ctx.fillText(minMaxText(mm, units), w - rm - 4, strip.top + 12);
 }
 
 function drawYAxis(
@@ -361,7 +385,8 @@ export function drawOverlayLegend(dc: DrawContext): void {
   for (const strip of dc.strips) {
     const data = dc.channelDataMap.get(strip.channelId);
     if (!data) continue;
-    const name = data.def.shortName;
+    const mm = visibleMinMax(data.allSamples, dc.xRange[0] * 1000, dc.xRange[1] * 1000);
+    const name = mm ? `${data.def.shortName} (${minMaxText(mm, data.def.units || '')})` : data.def.shortName;
     ctx.strokeStyle = strip.color;
     ctx.lineWidth = 2;
     ctx.beginPath();

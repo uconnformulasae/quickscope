@@ -323,7 +323,7 @@ export function TelemetryChart({
     ctx.clearRect(0, 0, w, h);
 
     computeOverlayYRanges(dc);
-    drawStrips(dc, globalMinMaxCache.current);
+    drawStrips(dc);
     drawOverlayLegend(dc);
     const axisY = drawXAxis(dc);
     drawCursors(dc, {

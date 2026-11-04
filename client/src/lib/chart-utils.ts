@@ -303,3 +303,51 @@ export function minMaxTrace(
 
   return trace;
 }
+
+// ─── Min/max markers ────────────────────────────────────────────────────────
+
+/** Min and max sample with startMs <= timestamp <= endMs (finite values only),
+ *  or null when the window holds none. Samples must be sorted by time. */
+export function visibleMinMax(
+  samples: ChannelSample[], startMs: number, endMs: number,
+): { min: ChannelSample; max: ChannelSample } | null {
+  let lo = 0, hi = samples.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].timestamp < startMs) lo = mid + 1; else hi = mid;
+  }
+  let min: ChannelSample | null = null;
+  let max: ChannelSample | null = null;
+  for (let i = lo; i < samples.length && samples[i].timestamp <= endMs; i++) {
+    const s = samples[i];
+    if (!Number.isFinite(s.value)) continue;
+    if (!min || s.value < min.value) min = s;
+    if (!max || s.value > max.value) max = s;
+  }
+  return min && max ? { min, max } : null;
+}
+
+/** Top-left corner for a label box next to a point: 6px to the right, flipped
+ *  to the left when it would overflow, y centred on the point and clamped. */
+export function placeLabelBox(
+  pointX: number, pointY: number, boxW: number, boxH: number,
+  bounds: { left: number; right: number; top: number; bottom: number },
+): { x: number; y: number } {
+  const GAP = 6;
+  let x = pointX + GAP;
+  if (x + boxW > bounds.right) x = pointX - GAP - boxW;
+  x = Math.max(bounds.left, x);
+  const y = clamp(pointY - boxH / 2, bounds.top, bounds.bottom - boxH);
+  return { x, y };
+}
+
+/** Black or white text, whichever reads on the given fill. */
+export function contrastText(hex: string): '#000' | '#fff' {
+  if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(hex)) return '#fff';
+  const h = hex.replace('#', '');
+  const n = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(n.slice(i, i + 2), 16) / 255)
+    .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum > 0.5 ? '#000' : '#fff';
+}
