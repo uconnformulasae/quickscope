@@ -10,6 +10,7 @@ import {
   nearestSample,
   niceAxisTicks,
   placeLabelBox,
+  scaledFont,
   visibleMinMax,
 } from './chart-utils';
 
@@ -170,5 +171,12 @@ describe('contrastText', () => {
   it('uses black on light fills and white on dark fills', () => {
     expect(contrastText('#facc15')).toBe('#000');
     expect(contrastText('#4361ee')).toBe('#fff');
+  });
+});
+
+describe('scaledFont', () => {
+  it('scales and rounds the pixel size', () => {
+    expect(scaledFont(10, 1.5)).toBe('15px JetBrains Mono, monospace');
+    expect(scaledFont(9, 1.2, 'bold')).toBe('bold 11px JetBrains Mono, monospace');
   });
 });

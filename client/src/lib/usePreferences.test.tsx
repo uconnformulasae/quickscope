@@ -41,4 +41,12 @@ describe('PreferencesProvider', () => {
     expect(JSON.parse(localStorage.getItem(KEY)!).uiScale).toBe(1.2);
     expect(api!.prefs.uiScale).toBe(1.2);
   });
+
+  it('applies uiScale as the --ui-scale CSS variable', () => {
+    let api: ReturnType<typeof usePreferences> | null = null;
+    function Consumer() { api = usePreferences(); return null; }
+    render(<PreferencesProvider><Consumer /></PreferencesProvider>);
+    act(() => api!.update({ uiScale: 1.25 }));
+    expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('1.25');
+  });
 });

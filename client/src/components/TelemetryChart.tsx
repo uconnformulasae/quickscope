@@ -13,6 +13,7 @@ import { drawCursors, hitTestCursor } from '../lib/chart-cursors';
 import type { ChartExportSpec } from '../lib/chart-export';
 import { ImageExportDialog } from './ImageExportDialog';
 import { Presence } from '../lib/motion';
+import { usePreferences } from '../lib/usePreferences';
 
 /** Grab distance (px) for dragging a delta cursor. */
 const CURSOR_HIT_PX = 6;
@@ -32,6 +33,8 @@ export function TelemetryChart({
   fileName = null,
 }: TelemetryChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const { prefs } = usePreferences();
+  const fontScale = prefs.uiScale;
   const containerRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
   const [canScroll, setCanScroll] = useState(false); // separate mode with more strips than fit
@@ -128,16 +131,16 @@ export function TelemetryChart({
 
   const { leftMargin, rightMargin } = useMemo(() => {
     if (chartMode !== 'overlay' || overlayAxisLayout.axisCount <= 1) {
-      return { leftMargin: LEFT_MARGIN, rightMargin: RIGHT_MARGIN };
+      return { leftMargin: Math.round(LEFT_MARGIN * fontScale), rightMargin: RIGHT_MARGIN };
     }
     const n = overlayAxisLayout.axisCount;
     const leftCount = Math.ceil(n / 2);
     const rightCount = Math.floor(n / 2);
     return {
-      leftMargin: Math.max(LEFT_MARGIN, leftCount * AXIS_WIDTH),
-      rightMargin: Math.max(RIGHT_MARGIN, rightCount * AXIS_WIDTH),
+      leftMargin: Math.round(Math.max(LEFT_MARGIN, leftCount * AXIS_WIDTH) * fontScale),
+      rightMargin: Math.round(Math.max(RIGHT_MARGIN, rightCount * AXIS_WIDTH) * fontScale),
     };
-  }, [chartMode, overlayAxisLayout]);
+  }, [chartMode, overlayAxisLayout, fontScale]);
 
   // ─── Rebuild global min/max cache when channel data changes ─────────────
   useEffect(() => {
@@ -244,7 +247,7 @@ export function TelemetryChart({
 
   // ─── Compute strip layout ─────────────────────────────────────────────
   const computeStripLayouts = useCallback((canvasH: number): StripLayout[] => {
-    const plotH = canvasH - BOTTOM_AXIS_HEIGHT;
+    const plotH = canvasH - BOTTOM_AXIS_HEIGHT * fontScale;
     const numCh = visibleChannels.length;
     if (numCh === 0) return [];
 
@@ -279,7 +282,7 @@ export function TelemetryChart({
         units,
       };
     });
-  }, [visibleChannels, channelDataMap, chartMode]);
+  }, [visibleChannels, channelDataMap, chartMode, fontScale]);
 
   // ─── Time ↔ Pixel conversions ─────────────────────────────────────────
   const timeToX = useCallback((t: number, xRange: [number, number], plotW: number): number => {
@@ -317,6 +320,7 @@ export function TelemetryChart({
       smoothedYRanges: smoothedYRanges.current,
       needsDrawRef,
       colors,
+      fontScale,
     };
 
     ctx.save();
@@ -334,7 +338,7 @@ export function TelemetryChart({
     }, axisY);
 
     ctx.restore();
-  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout]);
+  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout, fontScale]);
 
 
   // ─── On-demand drawing ─────────────────────────────────────────────────
@@ -352,8 +356,8 @@ export function TelemetryChart({
   const numVisible = visibleChannels.length;
   const requiredCanvasHeight = useMemo(() => {
     if (chartMode === 'overlay' || numVisible === 0) return 0; // 0 = use container height
-    return numVisible * MIN_STRIP_HEIGHT + BOTTOM_AXIS_HEIGHT;
-  }, [chartMode, numVisible]);
+    return numVisible * MIN_STRIP_HEIGHT + BOTTOM_AXIS_HEIGHT * fontScale;
+  }, [chartMode, numVisible, fontScale]);
 
   // ─── Canvas sizing via ResizeObserver ──────────────────────────────────
   useEffect(() => {
@@ -420,8 +424,8 @@ export function TelemetryChart({
     if (plotW <= 0) return null;
     const xRange = getEffectiveXRange();
     const toPx = (t: number | null) => (t === null ? null : timeToX(t, xRange, plotW));
-    return hitTestCursor(mouseX, toPx(cursorXRef.current), toPx(cursor2XRef.current), CURSOR_HIT_PX);
-  }, [getEffectiveXRange, timeToX, leftMargin, rightMargin]);
+    return hitTestCursor(mouseX, toPx(cursorXRef.current), toPx(cursor2XRef.current), CURSOR_HIT_PX * fontScale);
+  }, [getEffectiveXRange, timeToX, leftMargin, rightMargin, fontScale]);
 
   /** Move a dragged delta cursor to canvas x. */
   const moveDraggedCursor = useCallback((which: 'A' | 'B', mouseX: number) => {

@@ -4,7 +4,7 @@
  */
 import type { DrawContext, StripLayout } from './chart-utils';
 import {
-  MONO_FONT,
+  MONO_FONT, scaledFont,
   clamp, interpolateValue, nearestSample, formatValue,
 } from './chart-utils';
 import { formatChartCursorTime } from './time-format';
@@ -31,10 +31,10 @@ function drawCursorLine(
 
   if (showTimestamp) {
     const label = formatChartCursorTime(t, dc.session.logStartMs);
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     const tw = ctx.measureText(label).width;
     const pillW = tw + 8;
-    const pillH = 16;
+    const pillH = Math.round(16 * dc.fontScale);
     const pillX = Math.round(clamp(x - pillW / 2, lm, w - rm - pillW));
     const pillY = axisY + 2;
     ctx.fillStyle = dc.colors.cursorPill;
@@ -91,14 +91,14 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
     // Value pill — shows nearest real measured value
     const valText = formatValue(snap.value);
     const nameText = data.def.shortName;
-    ctx.font = `bold 10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale, 'bold');
     const nameW = ctx.measureText(nameText).width;
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     const valW = ctx.measureText(valText).width;
     const pillGap = 6;
     const pillPadX = 8;
     const pillW = nameW + pillGap + valW + pillPadX * 2;
-    const pillH = 20;
+    const pillH = Math.round(20 * dc.fontScale);
     const pillX = w - rm - pillW - 4;
     const pillY = chartMode === 'overlay'
       ? strip.top + 4 + pillIndex * (pillH + 3)
@@ -109,12 +109,12 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
     ctx.roundRect(pillX, pillY, pillW, pillH, 4);
     ctx.fill();
 
-    ctx.font = `bold 10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale, 'bold');
     ctx.fillStyle = strip.color;
     ctx.textAlign = 'left';
     ctx.fillText(nameText, pillX + pillPadX, pillY + 14);
 
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     ctx.fillStyle = dc.colors.cursorPillText;
     ctx.fillText(valText, pillX + pillPadX + nameW + pillGap, pillY + 14);
     pillIndex++;
@@ -154,10 +154,10 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
       ctx.stroke();
 
       const pillText = formatValue(snap.value);
-      ctx.font = `8px ${MONO_FONT}`;
+      ctx.font = scaledFont(8, dc.fontScale);
       const tw = ctx.measureText(pillText).width;
       const pillW = tw + 6;
-      const pillH = 14;
+      const pillH = Math.round(14 * dc.fontScale);
       const pillX = dotX + 8;
       const pillY = chartMode === 'overlay'
         ? strip.top + 4 + hoverPillIndex * (pillH + 2)
@@ -200,7 +200,7 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
   }
 
   // Measure widths for dynamic layout
-  ctx.font = `bold 10px ${MONO_FONT}`;
+  ctx.font = scaledFont(10, dc.fontScale, 'bold');
   let maxNameW = ctx.measureText('Channel').width;
   for (const row of panelLines) {
     const tw = ctx.measureText(row.label).width;
@@ -229,7 +229,7 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
   ctx.roundRect(panelX, panelY, panelW, panelH, 6);
   ctx.stroke();
 
-  ctx.font = `bold 11px ${MONO_FONT}`;
+  ctx.font = scaledFont(11, dc.fontScale, 'bold');
   ctx.fillStyle = dc.colors.deltaAccent;
   ctx.textAlign = 'left';
   ctx.fillText(`Δt = ${deltaT.toFixed(3)}s`, panelX + panelPad, panelY + panelPad + 12);
@@ -240,7 +240,7 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
   const col4 = col3 + valColW;
 
   const colY = panelY + panelPad + headerH + 10;
-  ctx.font = `9px ${MONO_FONT}`;
+  ctx.font = scaledFont(9, dc.fontScale);
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'left';
   ctx.fillText('Channel', col1, colY);
@@ -261,18 +261,18 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
     const row = panelLines[i];
     const ry = rowStartY + i * lineH + 12;
 
-    ctx.font = `bold 10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale, 'bold');
     ctx.fillStyle = row.color;
     ctx.textAlign = 'left';
     ctx.fillText(row.label, col1, ry);
 
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     ctx.fillStyle = dc.colors.text;
     ctx.textAlign = 'right';
     ctx.fillText(row.valA, col2, ry);
     ctx.fillText(row.valB, col3, ry);
 
-    ctx.font = `bold 10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale, 'bold');
     ctx.fillStyle = dc.colors.deltaAccent;
     ctx.fillText(row.delta, col4, ry);
   }

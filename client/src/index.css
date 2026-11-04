@@ -191,6 +191,12 @@
     line-height: 1.5;
   }
 
+  /* UI scale preference (Settings → Display). Tailwind sizes are rem, so
+     scaling the root font scales the whole UI. */
+  html {
+    font-size: calc(100% * var(--ui-scale, 1));
+  }
+
   #root {
     height: 100%;
   }
