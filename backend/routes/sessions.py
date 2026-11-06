@@ -68,6 +68,9 @@ async def load_session(session_id: str):
     return info
 
 
+_MAX_RENAME_INPUT_LEN = 1024
+
+
 class RenameRequest(BaseModel):
     filename: str
 
@@ -78,6 +81,8 @@ async def rename_session(session_id: str, body: RenameRequest):
     if not entry:
         raise HTTPException(404, "Session not found")
 
+    if len(body.filename) > _MAX_RENAME_INPUT_LEN:
+        raise HTTPException(400, "Filename is too long")
     try:
         new_filename = sanitize_filename(body.filename)
     except ValueError:

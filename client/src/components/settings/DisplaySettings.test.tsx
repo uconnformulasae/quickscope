@@ -31,3 +31,11 @@ describe('DisplaySettings GPS fixed range', () => {
     expect(stored).toBeCloseTo(80.4672, 3);
   });
 });
+
+describe('DisplaySettings UI scale', () => {
+  it('is labelled UI Scaler', () => {
+    renderWith({});
+    expect(screen.getByText('UI Scaler')).toBeTruthy();
+    expect(screen.queryByText('Text size')).toBeNull();
+  });
+});

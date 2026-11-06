@@ -11,6 +11,9 @@ import {
   niceAxisTicks,
   placeLabelBox,
   scaledFont,
+  layoutLegendRows,
+  thinLabels,
+  chooseLabelBox,
   visibleMinMax,
 } from './chart-utils';
 
@@ -178,5 +181,59 @@ describe('scaledFont', () => {
   it('scales and rounds the pixel size', () => {
     expect(scaledFont(10, 1.5)).toBe('15px JetBrains Mono, monospace');
     expect(scaledFont(9, 1.2, 'bold')).toBe('bold 11px JetBrains Mono, monospace');
+  });
+});
+
+describe('layoutLegendRows', () => {
+  it('wraps entries onto new rows instead of running past the width', () => {
+    expect(layoutLegendRows([100, 100, 100], 250, 10)).toEqual([
+      { row: 0, x: 0 }, { row: 0, x: 110 }, { row: 1, x: 0 },
+    ]);
+  });
+
+  it('keeps an entry wider than the row on a row of its own', () => {
+    expect(layoutLegendRows([50, 400, 50], 250, 10)).toEqual([
+      { row: 0, x: 0 }, { row: 1, x: 0 }, { row: 2, x: 0 },
+    ]);
+  });
+});
+
+describe('thinLabels', () => {
+  it('skips labels that would overlap the previous one shown', () => {
+    // centred labels 20 px wide at x = 0, 15, 40, 45, 100
+    expect(thinLabels([0, 15, 40, 45, 100], [20, 20, 20, 20, 20], 4)).toEqual([true, false, true, false, true]);
+  });
+});
+
+describe('chooseLabelBox', () => {
+  const bounds = { left: 0, right: 1000, top: 0, bottom: 200 };
+
+  it('prefers above-right of a max point when nothing is in the way', () => {
+    const p = chooseLabelBox(500, 100, 60, 16, bounds, 'above', [], []);
+    expect(p.x).toBeGreaterThan(500);
+    expect(p.y + 16).toBeLessThanOrEqual(100);
+  });
+
+  it('moves to a spot that no trace runs through', () => {
+    // A horizontal trace just above the point, across the whole width.
+    const xs = Array.from({ length: 1001 }, (_, i) => i);
+    const trace = { xs, ys: xs.map(() => 90) };
+    const p = chooseLabelBox(500, 100, 60, 16, bounds, 'above', [trace], []);
+    const hits = xs.filter(x => x >= p.x && x <= p.x + 60 && 90 >= p.y && 90 <= p.y + 16);
+    expect(hits).toHaveLength(0);
+  });
+
+  it('avoids boxes already placed', () => {
+    const first = chooseLabelBox(500, 100, 60, 16, bounds, 'above', [], []);
+    const second = chooseLabelBox(500, 100, 60, 16, bounds, 'above', [], [{ x: first.x, y: first.y, w: 60, h: 16 }]);
+    const overlap = second.x < first.x + 60 && second.x + 60 > first.x && second.y < first.y + 16 && second.y + 16 > first.y;
+    expect(overlap).toBe(false);
+  });
+
+  it('stays inside the bounds near a corner', () => {
+    const p = chooseLabelBox(995, 198, 60, 16, bounds, 'below', [], []);
+    expect(p.x).toBeGreaterThanOrEqual(0);
+    expect(p.x + 60).toBeLessThanOrEqual(1000);
+    expect(p.y + 16).toBeLessThanOrEqual(200);
   });
 });

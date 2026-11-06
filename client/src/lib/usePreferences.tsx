@@ -24,6 +24,8 @@ export interface Preferences {
   /** Channel shortName → display unit label. */
   unitOverrides: Record<string, string>;
   gpsGradient: GpsGradientPrefs;
+  /** Custom channel colours per theme: theme → channel name → hex. */
+  channelColors: { dark: Record<string, string>; light: Record<string, string> };
 }
 
 export const UI_SCALE_MIN = 0.8;
@@ -42,11 +44,21 @@ export const DEFAULT_PREFERENCES: Preferences = {
     fixedMin: 0,
     fixedMax: 150,
   },
+  channelColors: { dark: {}, light: {} },
 };
 
 function clampScale(v: unknown): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? v : DEFAULT_PREFERENCES.uiScale;
   return Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, n));
+}
+
+function sanitizeChannelColors(v: unknown): Preferences['channelColors'] {
+  const o = v && typeof v === 'object' ? v as Record<string, unknown> : {};
+  const pick = (t: unknown) => (t && typeof t === 'object' ? t as Record<string, string> : {});
+  // Keep the same objects when valid so memoised consumers don't churn.
+  return o.dark !== undefined && o.light !== undefined && typeof o.dark === 'object' && typeof o.light === 'object'
+    ? v as Preferences['channelColors']
+    : { dark: pick(o.dark), light: pick(o.light) };
 }
 
 function sanitize(raw: Partial<Preferences> | null | undefined): Preferences {
@@ -61,6 +73,7 @@ function sanitize(raw: Partial<Preferences> | null | undefined): Preferences {
     unitSystem,
     unitOverrides: overrides,
     gpsGradient: { ...d.gpsGradient, ...(r.gpsGradient && typeof r.gpsGradient === 'object' ? r.gpsGradient : {}) },
+    channelColors: sanitizeChannelColors(r.channelColors),
   };
 }
 

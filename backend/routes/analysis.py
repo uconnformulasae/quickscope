@@ -14,6 +14,10 @@ from fastapi import APIRouter, UploadFile, File, Query, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from sanitize import (
+    InvalidInput, MAX_UNIT_LEN, clean_text, csv_safe_cell, is_finite_number,
+    validate_channel_payload,
+)
 from services import session_store, lap_detection, upload_log, gps_preview, derived_eval
 from services.session_cache import session_cache
 from state import (
@@ -29,6 +33,32 @@ class _NotAnXrkFile(Exception):
     pass
 
 
+# Largest XRK/XRZ accepted. Real endurance logs are tens of MB; the cap only
+# stops a runaway or hostile upload from filling the disk.
+MAX_UPLOAD_BYTES = int(os.environ.get("QUICKSCOPE_MAX_UPLOAD_MB", "1024")) * 1024 * 1024
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+class _UploadTooLarge(Exception):
+    pass
+
+
+async def _save_upload(file: UploadFile, tmp_dest) -> int:
+    """Stream the upload to ``tmp_dest``; raise _UploadTooLarge past the cap."""
+    size = 0
+    try:
+        with open(tmp_dest, "wb") as out:
+            while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise _UploadTooLarge()
+                out.write(chunk)
+    except BaseException:
+        tmp_dest.unlink(missing_ok=True)
+        raise
+    return size
+
+
 # ─── Upload ──────────────────────────────────────────────────────────────────
 
 @router.post("/upload")
@@ -39,7 +69,8 @@ async def upload_file(
     started = time.monotonic()
     client_ip = request.client.host if request.client else "?"
     user_agent = request.headers.get("user-agent", "")[:200]
-    raw_filename = file.filename or ""
+    # Logged and echoed as-is otherwise: strip control characters and bound it.
+    raw_filename = clean_text(file.filename or "", max_len=255, truncate=True)
 
     if not raw_filename or not raw_filename.lower().endswith((".xrk", ".xrz")):
         upload_log.record(
@@ -49,14 +80,28 @@ async def upload_file(
         )
         raise HTTPException(400, "Only .xrk/.xrz files are supported")
 
-    filename = sanitize_filename(raw_filename)
-    content = await file.read()
-    size = len(content)
+    try:
+        filename = sanitize_filename(raw_filename)
+    except ValueError:
+        upload_log.record(
+            filename=raw_filename, size=0, duration_s=time.monotonic() - started,
+            client_ip=client_ip, user_agent=user_agent,
+            status="upload_failed", error="invalid filename",
+        )
+        raise HTTPException(400, "Invalid filename")
 
     dest = session_store.session_file_path(filename)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_dest = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
-    tmp_dest.write_bytes(content)
+    try:
+        size = await _save_upload(file, tmp_dest)
+    except _UploadTooLarge:
+        upload_log.record(
+            filename=filename, size=MAX_UPLOAD_BYTES, duration_s=time.monotonic() - started,
+            client_ip=client_ip, user_agent=user_agent,
+            status="upload_failed", error="file too large",
+        )
+        raise HTTPException(413, f"File is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     os.replace(tmp_dest, dest)
 
     try:
@@ -249,8 +294,12 @@ async def export_csv(channels: str = Query(...), convert: str | None = Query(Non
             if not isinstance(parsed, dict):
                 raise ValueError
             for cname, spec in parsed.items():
-                conversions[cname] = (str(spec["unit"]), float(spec["scale"]), float(spec.get("offset", 0.0)))
-        except (ValueError, TypeError, KeyError):
+                unit = clean_text(str(spec["unit"]), max_len=MAX_UNIT_LEN, truncate=True)
+                scale, offset = float(spec["scale"]), float(spec.get("offset", 0.0))
+                if not (math.isfinite(scale) and math.isfinite(offset)):
+                    raise ValueError("non-finite conversion")
+                conversions[cname] = (unit, scale, offset)
+        except (ValueError, TypeError, KeyError, AttributeError):
             raise HTTPException(400, "Malformed convert parameter")
 
     names = [n.strip() for n in channels.split(",") if n.strip()]
@@ -297,7 +346,9 @@ async def export_csv(channels: str = Query(...), convert: str | None = Query(Non
         for name in ch_data:
             u = units_map.get(name, "")
             headers.append(f"{name} ({u})" if u else name)
-        writer.writerow(headers)
+        # Channel names and units come from the XRK file or the request; a
+        # leading "=" would run as a formula when the CSV is opened in Excel.
+        writer.writerow([csv_safe_cell(h) for h in headers])
 
         for start in range(0, len(timebase), _EXPORT_CHUNK_ROWS):
             stop = start + _EXPORT_CHUNK_ROWS
@@ -388,6 +439,10 @@ def evaluate_derived_channel(body: DerivedChannelRequest):
 
     if len(body.expression) > _MAX_EXPRESSION_LEN:
         raise HTTPException(400, f"Expression too long (max {_MAX_EXPRESSION_LEN} characters)")
+    try:
+        validate_channel_payload(body.channels)
+    except InvalidInput as e:
+        raise HTTPException(400, str(e))
 
     try:
         local_vars = derived_eval.run(
@@ -418,6 +473,8 @@ def evaluate_derived_channel(body: DerivedChannelRequest):
     if hasattr(vals_out, "tolist"):
         vals_out = vals_out.tolist()
 
+    if not isinstance(ts_out, (list, tuple)) or not isinstance(vals_out, (list, tuple)):
+        raise HTTPException(400, "result 'timestamps' and 'values' must be lists or arrays")
     if len(ts_out) != len(vals_out):
         raise HTTPException(400, "timestamps and values must have the same length")
 
@@ -425,7 +482,7 @@ def evaluate_derived_channel(body: DerivedChannelRequest):
     clean_ts = []
     clean_vals = []
     for t, v in zip(ts_out, vals_out):
-        if isinstance(v, (int, float)) and math.isfinite(v):
+        if is_finite_number(t) and is_finite_number(v):
             clean_ts.append(float(t))
             clean_vals.append(float(v))
 

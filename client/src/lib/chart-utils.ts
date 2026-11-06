@@ -67,6 +67,8 @@ export interface DrawContext {
   fontScale: number;
   /** Non-null in lap compare mode. */
   compare: CompareContext | null;
+  /** Height of the band above the strips (overlay legend); 0 when none. */
+  topInset?: number;
 }
 
 // ─── Light-mode color overrides ─────────────────────────────────────────────
@@ -371,4 +373,84 @@ export function contrastText(hex: string): '#000' | '#fff' {
     .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   return lum > 0.5 ? '#000' : '#fff';
+}
+
+// ─── Label layout ───────────────────────────────────────────────────────────
+
+/** Place legend entries left-to-right, wrapping to a new row when the next
+ *  one would pass maxWidth. Returns each entry's row and x offset. */
+export function layoutLegendRows(widths: number[], maxWidth: number, gap: number): { row: number; x: number }[] {
+  const out: { row: number; x: number }[] = [];
+  let row = 0, x = 0;
+  for (const w of widths) {
+    if (x > 0 && x + w > maxWidth) { row++; x = 0; }
+    out.push({ row, x });
+    x += w + gap;
+    if (w > maxWidth) { row++; x = 0; }
+  }
+  return out;
+}
+
+/** Which centred labels to draw so none overlaps the previous one shown. */
+export function thinLabels(xs: number[], widths: number[], minGap: number): boolean[] {
+  let lastRight = -Infinity;
+  return xs.map((x, i) => {
+    const left = x - widths[i] / 2;
+    if (left < lastRight + minGap) return false;
+    lastRight = x + widths[i] / 2;
+    return true;
+  });
+}
+
+export interface LabelRect { x: number; y: number; w: number; h: number }
+/** Trace pixels, xs ascending (as produced by minMaxTrace). */
+export interface TracePoints { xs: number[]; ys: number[] }
+
+function lowerBoundNum(arr: number[], v: number): number {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < v) lo = m + 1; else hi = m; }
+  return lo;
+}
+
+/** Trace points falling inside a rect (cheap: binary search on x). */
+function pointsInside(r: LabelRect, traces: TracePoints[]): number {
+  let n = 0;
+  for (const t of traces) {
+    for (let i = lowerBoundNum(t.xs, r.x); i < t.xs.length && t.xs[i] <= r.x + r.w; i++) {
+      if (t.ys[i] >= r.y && t.ys[i] <= r.y + r.h) n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * Where to put a min/max value box next to its point: tries above/below and
+ * right/left (preferred side first), kept inside `bounds`, and picks the spot
+ * that overlaps no already-placed box and that the fewest trace points cross.
+ */
+export function chooseLabelBox(
+  px: number, py: number, w: number, h: number,
+  bounds: { left: number; right: number; top: number; bottom: number },
+  prefer: 'above' | 'below',
+  traces: TracePoints[],
+  placed: LabelRect[],
+): { x: number; y: number } {
+  const GAP = 6;
+  const above = py - h - 4, below = py + 4, mid = py - h / 2;
+  const ys = prefer === 'above' ? [above, below, mid] : [below, above, mid];
+  let best = { x: 0, y: 0 }, bestScore = Infinity;
+  for (const cy of ys) {
+    for (const cx of [px + GAP, px - GAP - w]) {
+      const x = clamp(cx, bounds.left, Math.max(bounds.left, bounds.right - w));
+      const y = clamp(cy, bounds.top, Math.max(bounds.top, bounds.bottom - h));
+      const r = { x, y, w, h };
+      let score = 0;
+      for (const p of placed) {
+        if (r.x < p.x + p.w && r.x + r.w > p.x && r.y < p.y + p.h && r.y + r.h > p.y) score += 1e6;
+      }
+      score += pointsInside(r, traces);
+      if (score < bestScore) { bestScore = score; best = { x, y }; }
+    }
+  }
+  return best;
 }

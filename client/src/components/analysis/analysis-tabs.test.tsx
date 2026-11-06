@@ -128,6 +128,12 @@ describe('LapAnalysisTab', () => {
     expect(screen.getByText('Best')).toBeTruthy();
   });
 
+  it('leaves the gap blank on the first lap (out lap) but shows it on later laps', () => {
+    render(<LapAnalysisTab session={lapSession()} activeChannels={[]} />);
+    expect(screen.queryByText('+5.000')).toBeNull(); // lap 1: 60 s vs best 55 s
+    expect(screen.getByText('+3.000')).toBeTruthy(); // lap 3: 58 s vs best 55 s
+  });
+
   it('labels auto-detected laps', () => {
     const { rerender } = render(<LapAnalysisTab session={lapSession('gps_auto')} activeChannels={[]} />);
     expect(screen.getByText('Auto-detected (GPS)')).toBeTruthy();
@@ -183,8 +189,9 @@ describe('LapAnalysisTab', () => {
     // Add a 3-minute lap 4 (173 s → 353 s): far slower than the ~58 s median.
     sess.lapMarkers = [...sess.lapMarkers, { timestamp: 353_000, lapNumber: 5 }];
     render(<LapAnalysisTab session={sess} activeChannels={[]} />);
-    expect(screen.getByText('+5.000')).toBeTruthy(); // lap 1: 60 s vs best 55 s
+    expect(screen.queryByText('+5.000')).toBeNull(); // lap 1: out lap, gap left blank
     expect(screen.getByText('+3.000')).toBeTruthy(); // lap 3: 58 s
+    expect(screen.getByText('+125.000')).toBeTruthy(); // lap 4: 180 s
     expect(screen.getAllByText('slow')).toHaveLength(1);
   });
 });

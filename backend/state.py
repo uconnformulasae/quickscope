@@ -6,12 +6,13 @@ Used across route modules — import from here instead of duplicating.
 
 import logging
 import math
-import re
 from datetime import datetime as _dt
 from pathlib import Path
 from typing import Optional
 
 from libxrk import ChannelMetadata
+
+from sanitize import sanitize_filename  # noqa: F401  (re-exported for routes)
 
 logger = logging.getLogger("quickscope")
 
@@ -290,15 +291,6 @@ def apply_stored_recorded_at(info: dict, recorded_at: Optional[str]) -> dict:
     info["metadata"]["time"] = time_str
     info["recordedAt"] = recorded_at
     return info
-
-
-def sanitize_filename(filename: str) -> str:
-    """Strip directory components and dangerous characters from a filename."""
-    safe = Path(filename).name
-    safe = re.sub(r'[^\w\-.]', '_', safe)
-    if not safe or safe in {".", ".."} or safe.startswith("."):
-        raise ValueError("Invalid filename")
-    return safe
 
 
 def interpolate(timestamps, values, t):

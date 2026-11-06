@@ -8,7 +8,7 @@ import {
   DEBOUNCE_MS,
   clamp, niceAxisTicks, getChartColors, toDarkChartColor,
 } from '../lib/chart-utils';
-import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawCompareLegend, drawXAxis } from '../lib/chart-draw';
+import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawCompareLegend, drawXAxis, overlayLegendHeight } from '../lib/chart-draw';
 import { drawCursors, hitTestCursor } from '../lib/chart-cursors';
 import type { ChartExportSpec } from '../lib/chart-export';
 import { ImageExportDialog } from './ImageExportDialog';
@@ -46,7 +46,6 @@ export function TelemetryChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
-  const [canScroll, setCanScroll] = useState(false); // separate mode with more strips than fit
   const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
   const [imageExportSpec, setImageExportSpec] = useState<ChartExportSpec | null>(null);
   // Unit menu opened from a strip label / overlay axis: channels + position (canvas px).
@@ -388,6 +387,13 @@ export function TelemetryChart({
       compare: compareLaps && compareSeries ? { laps: compareLaps, series: compareSeries } : null,
     };
     if (compareLaps) dc.session = { ...session, logStartMs: null, lapMarkers: [] };
+    // Overlay: the legend gets its own band above the plot so it never sits
+    // on traces, lap labels or the delta panel.
+    const legendBand = overlayLegendHeight(dc);
+    if (legendBand > 0) {
+      dc.topInset = legendBand;
+      dc.strips = strips.map(st => ({ ...st, top: st.top + legendBand, height: Math.max(20, st.height - legendBand) }));
+    }
 
     ctx.save();
     ctx.clearRect(0, 0, w, h);
@@ -446,7 +452,6 @@ export function TelemetryChart({
       const ctx = canvas.getContext('2d');
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       canvasSizeRef.current = { w, h };
-      setCanScroll(h > containerH);
       requestDraw();
     };
 
@@ -494,29 +499,15 @@ export function TelemetryChart({
     return hitTestCursor(mouseX, toPx(cursorXRef.current), toPx(cursor2XRef.current), CURSOR_HIT_PX * fontScale);
   }, [getEffectiveXRange, timeToX, leftMargin, rightMargin, fontScale]);
 
-  /** Channels whose label/unit axis is under (x, y): the left label column of
-   *  a strip in separate mode, or a unit axis (either side) in overlay mode. */
+  /** Channel whose label column is under (x, y), if its units can be changed.
+   *  Separate mode only: in overlay mode channels share axes, so no menu. */
   const labelChannelsAt = useCallback((mouseX: number, mouseY: number): number[] | null => {
-    const w = canvasSizeRef.current.w;
-    if (chartMode !== 'overlay') {
-      if (mouseX >= leftMargin) return null;
-      const strip = computeStripLayouts(canvasSizeRef.current.h)
-        .find(st => mouseY >= st.top && mouseY < st.top + st.height);
-      return strip ? [strip.channelId] : null;
-    }
-    const onLeft = mouseX < leftMargin;
-    if (!onLeft && mouseX <= w - rightMargin) return null;
-    const axisW = AXIS_WIDTH * fontScale;
-    const sideIndex = Math.max(0, Math.floor((onLeft ? leftMargin - mouseX : mouseX - (w - rightMargin)) / axisW));
-    let unit: string | null = null;
-    for (const [u, info] of overlayAxisLayout.unitAxes) {
-      if (info.side === (onLeft ? 'left' : 'right') && info.sideIndex === sideIndex) unit = u;
-    }
-    if (unit === null) return null;
-    const ids = visibleChannels.map(ac => ac.channelId)
-      .filter(id => (channelDataMap.get(id)?.def.units || '') === unit);
-    return ids.length > 0 ? ids : null;
-  }, [chartMode, leftMargin, rightMargin, fontScale, computeStripLayouts, overlayAxisLayout, visibleChannels, channelDataMap]);
+    if (chartMode === 'overlay' || mouseX >= leftMargin) return null;
+    const strip = computeStripLayouts(canvasSizeRef.current.h)
+      .find(st => mouseY >= st.top && mouseY < st.top + st.height);
+    if (!strip || convertibleUnits(channelDataMap.get(strip.channelId)?.def.units ?? '').length === 0) return null;
+    return [strip.channelId];
+  }, [chartMode, leftMargin, computeStripLayouts, channelDataMap]);
 
   /** Move a dragged delta cursor to canvas x. */
   const moveDraggedCursor = useCallback((which: 'A' | 'B', mouseX: number) => {
@@ -552,12 +543,6 @@ export function TelemetryChart({
     if (!canvas) return;
 
     const onWheel = (e: WheelEvent) => {
-      // With more strips than fit, the container scrolls vertically: a plain
-      // wheel scrolls through channels and Ctrl/Cmd+wheel (or a trackpad
-      // pinch, which arrives as ctrlKey) zooms time instead.
-      const container = containerRef.current;
-      const scrollable = !!container && container.scrollHeight > container.clientHeight;
-      if (scrollable && !e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const { sessionDuration: dur, getEffectiveXRange: getXR, xToTime: x2t, emitViewRange: emit, leftMargin: lm, rightMargin: rm } = wheelDepsRef.current;
       const plotW = canvasSizeRef.current.w - lm - rm;
@@ -1022,9 +1007,7 @@ export function TelemetryChart({
               Reset
             </button>
           )}
-          <span className="text-xs text-muted-foreground ml-1">
-            {canScroll ? 'scroll for channels · ⌘/Ctrl+scroll to zoom · drag to pan' : 'scroll to zoom · drag to pan'}
-          </span>
+          <span className="text-xs text-muted-foreground ml-1">scroll to zoom · drag to pan</span>
         </div>
       </div>
 

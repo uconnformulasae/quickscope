@@ -39,7 +39,7 @@ export function DisplaySettings() {
       </h3>
       <div className="space-y-3">
         <div>
-          <label className={labelCls} htmlFor="ui-scale">Text size</label>
+          <label className={labelCls} htmlFor="ui-scale">UI Scaler</label>
           <div className="flex items-center gap-2">
             <input
               id="ui-scale"

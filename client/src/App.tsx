@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildLapWindows } from './lib/lap-compare';
 import { useSessionViewPersistence } from './lib/useSessionViewPersistence';
+import { applyChannelColors } from './lib/channelColors';
+import { usePreferences } from './lib/usePreferences';
 import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
@@ -28,6 +30,7 @@ type View = 'browser' | 'analysis' | 'live';
 
 export default function App() {
   const app = useAppState();
+  const { prefs } = usePreferences();
   const persistView = useSessionViewPersistence(app);
   const {
     state,
@@ -37,6 +40,7 @@ export default function App() {
     setError,
     setProgress,
     toggleChannel,
+    clearActiveChannels,
     setViewRange,
     setCursorTime,
     setAnalysisTab,
@@ -353,9 +357,12 @@ export default function App() {
   const { session, activeChannels: rawActiveChannels, leftSidebarOpen, rightSidebarOpen } = state;
 
   // Resolve channel colors for current theme (dark colors need darker variants on light bg)
+  // (and custom colours the user picked for this theme, by channel name).
   const activeChannels = useMemo(
-    () => rawActiveChannels.map(ac => ({ ...ac, color: resolveChartColor(ac.color, theme) })),
-    [rawActiveChannels, theme],
+    () => session
+      ? applyChannelColors(rawActiveChannels, session, state.derivedChannels, theme, prefs.channelColors)
+      : rawActiveChannels.map(ac => ({ ...ac, color: resolveChartColor(ac.color, theme) })),
+    [rawActiveChannels, session, state.derivedChannels, theme, prefs.channelColors],
   );
 
   // ─── Session Browser View ──────────────────────────────────────────────────
@@ -424,6 +431,7 @@ export default function App() {
                 derivedChannels={state.derivedChannels}
                 derivedSamplesMap={derivedSamplesMap}
                 onToggleChannel={handleToggleChannel}
+                onClearChannels={clearActiveChannels}
                 onRemoveDerived={removeDerivedChannel}
                 onEditDerived={handleEditDerived}
                 onCreateDerived={handleOpenCreateDerived}
@@ -433,6 +441,7 @@ export default function App() {
                 onShowOnlyWithDataChange={setShowOnlyWithData}
                 chartMode={state.chartMode}
                 onChartModeChange={setChartMode}
+                theme={theme}
               />
             ) : (
               <div className="flex items-center justify-center h-full bg-card border-r border-border">

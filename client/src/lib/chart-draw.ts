@@ -8,7 +8,8 @@ import {
   MONO_FONT, AXIS_WIDTH, scaledFont,
   BOTTOM_AXIS_HEIGHT,
   niceAxisTicks, formatValue, clamp, minMaxTrace,
-  visibleMinMax, placeLabelBox, contrastText,
+  visibleMinMax, contrastText, layoutLegendRows, thinLabels, chooseLabelBox,
+  type LabelRect, type TracePoints,
 } from './chart-utils';
 import { formatChartAxisTime } from './time-format';
 import { convertibleUnits } from './units';
@@ -124,6 +125,7 @@ function computeStripYRange(
 /** Draw all strip content: grid, traces, min/max markers, y-axes, labels */
 export function drawStrips(dc: DrawContext): void {
   const { ctx, w, lm, rm, plotW, xRange, xTicks, strips, channelDataMap, chartMode, session } = dc;
+  const pendingMarkers: { strip: StripLayout; mm: VisibleMinMax; valToY: (v: number) => number; units: string; trace: TracePoints }[] = [];
   let gridDrawnForOverlay = false;
   const overlayAxesDrawn = new Set<string>();
 
@@ -189,19 +191,26 @@ export function drawStrips(dc: DrawContext): void {
         ctx.font = scaledFont(9, dc.fontScale);
         ctx.fillStyle = dc.colors.lapText;
         ctx.textAlign = 'center';
-        session.lapMarkers.forEach((lap, i) => {
-          const lt = lap.timestamp / 1000;
-          if (lt >= xRange[0] && lt <= xRange[1]) {
-            ctx.fillText(`L${i + 1}`, dc.timeToX(lt, xRange, plotW), strip.top + 10);
-          }
-        });
+        // Dense laps: skip labels that would overlap the previous one.
+        const shown = session.lapMarkers
+          .map((lap, i) => ({ t: lap.timestamp / 1000, label: `L${i + 1}` }))
+          .filter(l => l.t >= xRange[0] && l.t <= xRange[1]);
+        const xs = shown.map(l => dc.timeToX(l.t, xRange, plotW));
+        const keep = thinLabels(xs, shown.map(l => ctx.measureText(l.label).width), 4);
+        shown.forEach((l, i) => { if (keep[i]) ctx.fillText(l.label, xs[i], strip.top + 10 * dc.fontScale); });
       }
 
       if (chartMode === 'overlay') gridDrawnForOverlay = true;
     }
 
-    // Line trace(s)
+    // Line trace(s), clipped to the plot: getVisibleSamples pads past the
+    // window edges so lines run to the border, but must not draw past it.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(lm, strip.top, plotW, strip.height);
+    ctx.clip();
     ctx.lineJoin = 'round';
+    let labelTrace = ds; // trace min/max boxes should avoid (first lap in compare)
     const lapSeries = dc.compare?.series.get(strip.channelId);
     if (lapSeries) {
       // Compare: one trace per lap. Separate strips colour by lap; overlay
@@ -210,6 +219,7 @@ export function drawStrips(dc: DrawContext): void {
         const lapVisible = lapSeries[i].length > 0
           ? dc.getVisibleSamples(strip.channelId, lapSeries[i], xRange, plotW) : [];
         const lapDs = minMaxTrace(lapVisible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
+        if (i === 0) labelTrace = lapDs;
         ctx.save();
         if (chartMode === 'overlay') {
           ctx.strokeStyle = strip.color;
@@ -242,10 +252,18 @@ export function drawStrips(dc: DrawContext): void {
       }
       ctx.fill();
     }
+    ctx.restore(); // end trace clip
 
-    // Min/Max markers (visible window)
+    // Min/Max markers (visible window) are drawn after every trace (below),
+    // so no later channel's line paints over a box.
     const mm = visibleMinMax(allSamples, xRange[0] * 1000, xRange[1] * 1000);
-    drawMinMaxMarkers(dc, strip, mm, valToY, def.units || '');
+    pendingMarkers.push({
+      strip, mm, valToY, units: def.units || '',
+      trace: {
+        xs: labelTrace.map(p => dc.timeToX(p.timestamp / 1000, xRange, plotW)),
+        ys: labelTrace.map(p => valToY(p.value)),
+      },
+    });
     if (chartMode !== 'overlay') drawMinMaxReadout(dc, strip, mm, def.units || '');
 
     // Y-axis
@@ -281,6 +299,15 @@ export function drawStrips(dc: DrawContext): void {
       ctx.stroke();
     }
   }
+  // Second pass: all reference lines, then all boxes (on top of every trace).
+  // Overlay strips share one plot, so boxes there avoid every channel's line
+  // and each other; separate strips only their own.
+  for (const m of pendingMarkers) drawMinMaxLines(dc, m.strip, m.mm, m.valToY);
+  const placed: LabelRect[] = [];
+  const allTraces = pendingMarkers.map(m => m.trace);
+  for (const m of pendingMarkers) {
+    drawMinMaxBoxes(dc, m.strip, m.mm, m.valToY, m.units, chartMode === 'overlay' ? allTraces : [m.trace], placed);
+  }
 }
 
 export type VisibleMinMax = ReturnType<typeof visibleMinMax>;
@@ -289,23 +316,10 @@ function minMaxText(mm: NonNullable<VisibleMinMax>, units: string): string {
   return `min ${formatValue(mm.min.value)} · max ${formatValue(mm.max.value)}${units ? ` ${units}` : ''}`;
 }
 
-/**
- * RaceStudio-style min/max for the visible window: dashed reference lines
- * across the strip, a dot at each extreme, and a boxed value label.
- */
-export function drawMinMaxMarkers(
-  dc: DrawContext, strip: StripLayout, mm: VisibleMinMax,
-  valToY: (v: number) => number, units: string,
-) {
+/** RaceStudio-style dashed reference lines across the plot at the window's min and max. */
+function drawMinMaxLines(dc: DrawContext, strip: StripLayout, mm: VisibleMinMax, valToY: (v: number) => number) {
   if (!mm) return;
-  const { ctx, w, lm, rm, xRange, plotW } = dc;
-  const right = w - rm;
-  const bounds = { left: lm, right, top: strip.top + 2, bottom: strip.top + strip.height - 2 };
-  const textColor = contrastText(strip.color);
-  const fontPx = Math.round(11 * dc.fontScale);
-  const boxH = fontPx + 6;
-
-  // Reference lines
+  const { ctx, w, lm, rm } = dc;
   ctx.save();
   ctx.strokeStyle = strip.color;
   ctx.globalAlpha = 0.4;
@@ -315,13 +329,25 @@ export function drawMinMaxMarkers(
   for (const s of [mm.max, mm.min]) {
     const y = Math.round(valToY(s.value)) + 0.5;
     ctx.moveTo(lm, y);
-    ctx.lineTo(right, y);
+    ctx.lineTo(w - rm, y);
   }
   ctx.stroke();
   ctx.restore();
+}
 
+/** Dot + boxed value at the window's min and max, each placed where traces
+ *  don't run through it and it doesn't cover another box. */
+function drawMinMaxBoxes(
+  dc: DrawContext, strip: StripLayout, mm: VisibleMinMax,
+  valToY: (v: number) => number, units: string, traces: TracePoints[], placed: LabelRect[],
+) {
+  if (!mm) return;
+  const { ctx, w, lm, rm, xRange, plotW } = dc;
+  const bounds = { left: lm, right: w - rm, top: strip.top + 2, bottom: strip.top + strip.height - 2 };
+  const textColor = contrastText(strip.color);
+  const fontPx = Math.round(11 * dc.fontScale);
+  const boxH = fontPx + 6;
   ctx.font = `bold ${fontPx}px ${MONO_FONT}`;
-  let maxBox: { x: number; y: number; w: number } | null = null;
   const draw = (s: typeof mm.max, isMax: boolean) => {
     const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
     const y = valToY(s.value);
@@ -332,12 +358,8 @@ export function drawMinMaxMarkers(
 
     const label = `${isMax ? '▲' : '▼'} ${formatValue(s.value)}${units ? ` ${units}` : ''}`;
     const boxW = ctx.measureText(label).width + 8;
-    let pos = placeLabelBox(x, y, boxW, boxH, bounds);
-    if (!isMax && maxBox && pos.x < maxBox.x + maxBox.w && pos.x + boxW > maxBox.x
-        && Math.abs(pos.y - maxBox.y) < boxH + 2) {
-      pos = { x: pos.x, y: Math.min(maxBox.y + boxH + 2, bounds.bottom - boxH) };
-    }
-    if (isMax) maxBox = { x: pos.x, y: pos.y, w: boxW };
+    const pos = chooseLabelBox(x, y, boxW, boxH, bounds, isMax ? 'above' : 'below', traces, placed);
+    placed.push({ x: pos.x, y: pos.y, w: boxW, h: boxH });
     ctx.fillStyle = strip.color;
     ctx.beginPath();
     ctx.roundRect(pos.x, pos.y, boxW, boxH, 3);
@@ -359,6 +381,7 @@ function drawMinMaxReadout(dc: DrawContext, strip: StripLayout, mm: VisibleMinMa
   ctx.textAlign = 'right';
   // Bottom-right: the cursor value pill occupies the top-right.
   ctx.fillText(minMaxText(mm, units), w - rm - 4, strip.top + strip.height - 6);
+
 }
 
 function drawYAxis(
@@ -404,7 +427,7 @@ function drawYAxis(
       ctx.font = scaledFont(8, dc.fontScale);
       ctx.fillStyle = dc.colors.text;
       ctx.textAlign = isLeft ? 'right' : 'left';
-      ctx.fillText(convertibleUnits(units).length > 0 ? `${units} ▾` : units, axX, strip.top + strip.height - 4);
+      ctx.fillText(units, axX, strip.top + strip.height - 4);
     }
   } else {
     ctx.font = scaledFont(10, dc.fontScale);
@@ -421,21 +444,20 @@ function drawYAxis(
 
 /** Lap legend for compare mode: "■ Lap 3 1:12.400" per compared lap. */
 export function drawCompareLegend(dc: DrawContext): void {
-  if (!dc.compare || dc.strips.length === 0) return;
+  // Overlay mode lists the laps in the legend band instead (drawOverlayLegend).
+  if (!dc.compare || dc.strips.length === 0 || dc.chartMode === 'overlay') return;
   const { ctx, lm } = dc;
   ctx.font = scaledFont(9, dc.fontScale, 'bold');
   let x = lm + 6;
-  const y = dc.chartMode === 'overlay' ? Math.round(28 * dc.fontScale) : Math.round(12 * dc.fontScale);
+  const y = Math.round(12 * dc.fontScale);
   dc.compare.laps.forEach((lap, i) => {
-    const color = dc.chartMode === 'overlay' ? dc.colors.text : lapColor(i);
+    const color = lapColor(i);
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
-    ctx.setLineDash(dc.chartMode === 'overlay' && i > 0 ? [6, 3] : []);
     ctx.beginPath();
     ctx.moveTo(x, y - 3);
     ctx.lineTo(x + 14, y - 3);
     ctx.stroke();
-    ctx.setLineDash([]);
     x += 18;
     const label = `Lap ${lap.lapNumber} ${formatLapTime(lap.durationMs / 1000)}`;
     ctx.fillStyle = color;
@@ -445,30 +467,73 @@ export function drawCompareLegend(dc: DrawContext): void {
   });
 }
 
-/** Draw overlay legend bar */
-export function drawOverlayLegend(dc: DrawContext): void {
-  if (dc.chartMode !== 'overlay' || dc.strips.length === 0) return;
-  const { ctx, lm } = dc;
-  ctx.font = scaledFont(9, dc.fontScale, 'bold');
-  let legendX = lm + 6;
-  const legendY = 14;
+interface LegendEntry { label: string; color: string; dash: number[] }
+
+/** Overlay legend entries: each channel (with its window min/max), then the
+ *  compared laps when lap compare is on. */
+function overlayLegendEntries(dc: DrawContext): LegendEntry[] {
+  const entries: LegendEntry[] = [];
   for (const strip of dc.strips) {
     const data = dc.channelDataMap.get(strip.channelId);
     if (!data) continue;
     const mm = visibleMinMax(data.allSamples, dc.xRange[0] * 1000, dc.xRange[1] * 1000);
-    const name = mm ? `${data.def.shortName} (${minMaxText(mm, data.def.units || '')})` : data.def.shortName;
-    ctx.strokeStyle = strip.color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(legendX, legendY - 3);
-    ctx.lineTo(legendX + 12, legendY - 3);
-    ctx.stroke();
-    legendX += 15;
-    ctx.fillStyle = strip.color;
-    ctx.textAlign = 'left';
-    ctx.fillText(name, legendX, legendY);
-    legendX += ctx.measureText(name).width + 12;
+    const label = mm ? `${data.def.shortName} (${minMaxText(mm, data.def.units || '')})` : data.def.shortName;
+    entries.push({ label, color: strip.color, dash: [] });
   }
+  dc.compare?.laps.forEach((lap, i) => entries.push({
+    label: `Lap ${lap.lapNumber} ${formatLapTime(lap.durationMs / 1000)}`,
+    color: dc.colors.text,
+    dash: i > 0 ? [6, 3] : [],
+  }));
+  return entries;
+}
+
+const LEGEND_SWATCH = 15; // line sample + gap before the text
+const LEGEND_PAD = 4;
+
+function overlayLegendLayout(dc: DrawContext) {
+  const { ctx } = dc;
+  ctx.font = scaledFont(9, dc.fontScale, 'bold');
+  const entries = overlayLegendEntries(dc);
+  const widths = entries.map(e => LEGEND_SWATCH + ctx.measureText(e.label).width + LEGEND_PAD * 2);
+  const places = layoutLegendRows(widths, Math.max(1, dc.plotW - 12), 6);
+  const rowH = Math.round(18 * dc.fontScale);
+  const rows = places.length ? places[places.length - 1].row + 1 : 0;
+  return { entries, widths, places, rowH, height: rows ? rows * rowH + 6 : 0 };
+}
+
+/** Height of the legend band above the plot (overlay mode only). */
+export function overlayLegendHeight(dc: DrawContext): number {
+  if (dc.chartMode !== 'overlay' || dc.strips.length === 0) return 0;
+  return overlayLegendLayout(dc).height;
+}
+
+/** Overlay legend: wrapped rows in a band above the plot, each entry on a
+ *  backdrop so it stays legible over the grid. */
+export function drawOverlayLegend(dc: DrawContext): void {
+  if (dc.chartMode !== 'overlay' || dc.strips.length === 0) return;
+  const { ctx, lm } = dc;
+  const { entries, widths, places, rowH } = overlayLegendLayout(dc);
+  entries.forEach((e, i) => {
+    const x = lm + 6 + places[i].x;
+    const top = 3 + places[i].row * rowH;
+    const midY = top + rowH / 2;
+    ctx.fillStyle = dc.colors.cursorPill;
+    ctx.beginPath();
+    ctx.roundRect(x, top + 1, widths[i], rowH - 2, 3);
+    ctx.fill();
+    ctx.strokeStyle = e.color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(e.dash);
+    ctx.beginPath();
+    ctx.moveTo(x + LEGEND_PAD, midY);
+    ctx.lineTo(x + LEGEND_PAD + 11, midY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = e.color;
+    ctx.textAlign = 'left';
+    ctx.fillText(e.label, x + LEGEND_PAD + LEGEND_SWATCH, midY + 3 * dc.fontScale);
+  });
 }
 
 /** Draw the bottom X-axis with ticks and labels */

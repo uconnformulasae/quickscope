@@ -64,7 +64,7 @@ def test_interpolate_matches_numpy_on_random_grid():
         ("run1.xrk", "run1.xrk"),
         ("My Run (final).xrk", "My_Run__final_.xrk"),
         ("../../etc/passwd", "passwd"),
-        ("C:\\Users\\x\\run.xrk", "C__Users_x_run.xrk"),
+        ("C:\\Users\\x\\run.xrk", "run.xrk"),  # backslash is a separator on every OS
         ("dir/sub/run.xrz", "run.xrz"),
         ("name with spaces.xrk", "name_with_spaces.xrk"),
     ],

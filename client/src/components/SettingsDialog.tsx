@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { X, Save } from 'lucide-react';
 import { getSettings, updateSettings, type Settings } from '../lib/api';
 import { DisplaySettings } from './settings/DisplaySettings';
+import { normalizeSettings, validateSettings } from '../lib/sanitize';
 
 interface SettingsDialogProps {
   onClose: () => void;
@@ -33,14 +34,19 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
   }, [onClose]);
 
   const handleSave = async () => {
-    setSaving(true);
     setError(null);
     setSaved(false);
+    const payload = normalizeSettings({
+      ...settings,
+      aim_device_port: settings.aim_device_port || 2000,
+    });
+    const invalid = validateSettings(payload);
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    setSaving(true);
     try {
-      const payload = {
-        ...settings,
-        aim_device_port: settings.aim_device_port || 2000,
-      };
       await updateSettings(payload);
       setSettings(payload);
       setSaved(true);

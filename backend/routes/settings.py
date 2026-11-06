@@ -1,6 +1,6 @@
 """Settings routes."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from services import settings_store
 
@@ -14,4 +14,7 @@ async def get_settings():
 
 @router.put("/settings")
 async def update_settings(body: dict):
-    return settings_store.update(body)
+    try:
+        return settings_store.update(body)
+    except settings_store.SettingsError as exc:
+        raise HTTPException(400, str(exc))

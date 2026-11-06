@@ -26,15 +26,10 @@ function wheel(canvas: HTMLElement, init: WheelEventInit) {
 }
 
 describe('TelemetryChart wheel', () => {
-  it('lets a plain wheel scroll the strips when they overflow, and zooms on Ctrl/Cmd+wheel', () => {
+  it('zooms on a plain wheel even when the strips overflow', () => {
     fakeLayout({ width: 1000, height: 300, scrollHeight: 800 }); // 4 strips don't fit
-    const onViewRangeChange = vi.fn();
-    renderChart({ onViewRangeChange });
-    const canvas = screen.getByTestId('telemetry-canvas');
-
-    expect(wheel(canvas, {}).defaultPrevented).toBe(false); // native scroll goes through
-    expect(wheel(canvas, { ctrlKey: true }).defaultPrevented).toBe(true);
-    expect(wheel(canvas, { metaKey: true }).defaultPrevented).toBe(true);
+    renderChart();
+    expect(wheel(screen.getByTestId('telemetry-canvas'), {}).defaultPrevented).toBe(true);
   });
 
   it('zooms on a plain wheel when everything fits', () => {
@@ -158,7 +153,7 @@ describe('TelemetryChart lap compare', () => {
         onViewRangeChange={onViewRangeChange} selectedLaps={[0, 1]} />,
     );
     const canvas = screen.getByTestId('telemetry-canvas');
-    wheel(canvas, { ctrlKey: true });
+    wheel(canvas, {});
     fireEvent.mouseDown(canvas, { clientX: 500, clientY: 50, button: 0 });
     fireEvent.mouseMove(canvas, { clientX: 400, clientY: 50 });
     fireEvent.mouseUp(canvas, { clientX: 400, clientY: 50 });
@@ -204,12 +199,24 @@ describe('TelemetryChart unit menu', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
-  it('says so when the channel has no other units', () => {
+  it('does not open for a channel whose units cannot change', () => {
     fakeLayout({ width: 1000, height: 400 });
     renderWithPrefs();
     fireEvent.mouseDown(screen.getByTestId('telemetry-canvas'), { clientX: 20, clientY: 300, button: 0 });
-    const menu = screen.getByRole('menu', { name: /RPM units/ });
-    expect(within(menu).getByText('No other units')).toBeTruthy();
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('does not open in overlay mode', () => {
+    fakeLayout({ width: 1000, height: 400 });
+    render(
+      <PreferencesProvider>
+        <TelemetryChart session={speedSession()} activeChannels={[{ channelId: 1, color: '#f00' }, { channelId: 2, color: '#0f0' }]}
+          viewRange={null} onViewRangeChange={() => {}} chartMode="overlay" />
+      </PreferencesProvider>,
+    );
+    const canvas = screen.getByTestId('telemetry-canvas');
+    for (const x of [5, 20, 40, 990]) fireEvent.mouseDown(canvas, { clientX: x, clientY: 60, button: 0 });
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 
   it('does not open from the plot area', () => {
