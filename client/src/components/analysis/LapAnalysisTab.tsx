@@ -180,7 +180,9 @@ export function LapAnalysisTab({
                 )}
               </div>
               <div className="flex items-baseline gap-2">
-                {!lap.isBest && bestTime !== undefined && (
+                {/* No gap on the first lap: it runs from the start of the log
+                    to the first beacon, so a difference to the best lap is meaningless. */}
+                {!lap.isBest && bestTime !== undefined && lap.index !== 0 && (
                   <span className={`text-xs tabular ${lap.gapS < 1 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}>
                     +{lap.gapS.toFixed(3)}
                   </span>

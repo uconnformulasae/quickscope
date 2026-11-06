@@ -74,6 +74,16 @@ describe('basic state', () => {
     expect(result.current.state.activeChannels).toEqual([]);
   });
 
+  it('clearActiveChannels deselects every channel but keeps derived definitions', () => {
+    const { result } = setup();
+    act(() => result.current.toggleChannel(1, '#f00'));
+    act(() => result.current.toggleChannel(2, '#0f0'));
+    const derivedBefore = result.current.state.derivedChannels;
+    act(() => result.current.clearActiveChannels());
+    expect(result.current.state.activeChannels).toEqual([]);
+    expect(result.current.state.derivedChannels).toBe(derivedBefore);
+  });
+
   it('setSession resets channels, derived channels and viewport', () => {
     const { result } = setup();
     act(() => result.current.toggleChannel(1, '#f00'));

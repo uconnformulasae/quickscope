@@ -134,7 +134,7 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
 }
 
 /** Draw hover crosshair with hollow dots */
-function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number) {
+function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number, showPills = true) {
   const { ctx, xRange, plotW, strips, channelDataMap, chartMode } = dc;
   const hoverT = cursor.hoverT;
   if (hoverT === null) return;
@@ -145,7 +145,7 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
     drawCursorLine(dc, hoverT, dc.colors.hoverLine, axisY, true);
   }
 
-  if (!cursor.deltaMode || cursor.cursorA !== null || cursor.cursorB !== null) {
+  if (showPills && (!cursor.deltaMode || cursor.cursorA !== null || cursor.cursorB !== null)) {
     let hoverPillIndex = 0;
     for (const strip of strips) {
       const data = channelDataMap.get(strip.channelId);
@@ -170,7 +170,8 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
       const tw = ctx.measureText(pillText).width;
       const pillW = tw + 6;
       const pillH = Math.round(14 * dc.fontScale);
-      const pillX = dotX + 8;
+      // Right of the dot, flipped to the left near the plot's right edge.
+      const pillX = dotX + 8 + pillW > dc.w - dc.rm ? dotX - 8 - pillW : dotX + 8;
       const pillY = chartMode === 'overlay'
         ? strip.top + 4 + hoverPillIndex * (pillH + 2)
         : Math.round(clamp(dotY - pillH / 2, strip.top + 2, strip.top + strip.height - pillH - 2));
@@ -228,7 +229,7 @@ function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
   const panelH = headerH + colHeaderH + panelLines.length * lineH + panelPad * 2;
   const panelW = nameColW + valColW * 3 + panelPad * 2;
   const panelX = w - rm - panelW - 10;
-  const panelY = 8;
+  const panelY = (dc.topInset ?? 0) + 8;
 
   ctx.fillStyle = dc.colors.deltaPanel;
   ctx.beginPath();
@@ -308,11 +309,15 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
     }
   }
 
+  // With both delta cursors placed, values live in the delta panel only —
+  // per-cursor and hover pills would just repeat them and pile up behind it.
+  const panelOpen = cursor.cursorA !== null && cursor.cursorB !== null;
+
   // Cursor A line + pills
   if (cursor.cursorA !== null) {
     const lineColor = cursor.cursorB !== null ? dc.colors.deltaLine : dc.colors.cursor;
     drawCursorLine(dc, cursor.cursorA, lineColor, axisY, true);
-    drawCursorPills(dc, cursor.cursorA, axisY);
+    if (!panelOpen) drawCursorPills(dc, cursor.cursorA, axisY);
   }
 
   // Cursor B line
@@ -321,7 +326,7 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
   }
 
   // Hover crosshair
-  drawHoverCrosshair(dc, cursor, axisY);
+  drawHoverCrosshair(dc, cursor, axisY, !panelOpen);
 
   // Delta panel
   if (cursor.cursorA !== null && cursor.cursorB !== null) {

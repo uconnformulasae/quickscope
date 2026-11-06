@@ -324,6 +324,11 @@ export function useAppState() {
     });
   }, []);
 
+  /** Deselect every channel on the chart (derived channel definitions are kept). */
+  const clearActiveChannels = useCallback(() => {
+    setState(prev => ({ ...prev, activeChannels: [] }));
+  }, []);
+
   const setViewRange = useCallback((range: TimeRange | null) => {
     setState(prev => ({ ...prev, viewRange: range }));
   }, []);
@@ -545,6 +550,7 @@ export function useAppState() {
     setError,
     setProgress,
     toggleChannel,
+    clearActiveChannels,
     setViewRange,
     setCursorTime,
     setAnalysisTab,

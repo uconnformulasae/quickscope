@@ -185,3 +185,18 @@ describe('drawCursors in lap compare mode', () => {
     expect(texts(calls)).toContain('30.00 / –');
   });
 });
+
+describe('drawCursors with the delta panel open', () => {
+  it('shows values only in the panel, not also in cursor/hover pills', () => {
+    const { dc, calls } = makeDc();
+    drawCursors(dc, { cursorA: 2, cursorB: 8, hoverT: 5, deltaMode: true }, 280);
+    expect(texts(calls).filter(t => t === 'RPM')).toHaveLength(1); // the panel row only
+  });
+
+  it('places the delta panel below a top inset (overlay legend band)', () => {
+    const { dc, calls } = makeDc({ topInset: 40 });
+    drawCursors(dc, { cursorA: 2, cursorB: 8, hoverT: null, deltaMode: true }, 280);
+    const panel = calls.find(c => c.op === 'roundRect' && (c.args[3] as number) > 40);
+    expect(panel && (panel.args[1] as number)).toBeGreaterThanOrEqual(40);
+  });
+});

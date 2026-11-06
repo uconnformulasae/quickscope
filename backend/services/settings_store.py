@@ -8,6 +8,8 @@ import threading
 import time
 from pathlib import Path
 
+from sanitize import InvalidInput, validate_device_ip, validate_device_port, validate_wifi_ssid
+
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
 SETTINGS_FILE = DATA_DIR / "settings.json"
@@ -19,6 +21,19 @@ DEFAULTS = {
 }
 
 ALLOWED_KEYS = frozenset(DEFAULTS.keys())
+
+# Every setting feeds the AiM socket code, so each one is validated on the way
+# in (PUT) and on the way out of a possibly hand-edited settings.json.
+_VALIDATORS = {
+    "aim_wifi_ssid": validate_wifi_ssid,
+    "aim_device_ip": validate_device_ip,
+    "aim_device_port": validate_device_port,
+}
+assert set(_VALIDATORS) == ALLOWED_KEYS
+
+
+class SettingsError(InvalidInput):
+    """A setting value was rejected; the message is user-visible."""
 
 _lock = threading.Lock()
 
@@ -51,11 +66,19 @@ def _load_unlocked() -> dict:
             pass
         _save_unlocked(DEFAULTS)
         return dict(DEFAULTS)
-    known = {k: v for k, v in stored.items() if k in ALLOWED_KEYS}
-    if len(known) != len(stored):
-        # Drop keys from older versions (e.g. railway_url) so they stop round-tripping.
-        _save_unlocked({**DEFAULTS, **known})
-    return {**DEFAULTS, **known}
+    known = {}
+    for k, v in stored.items():
+        if k not in ALLOWED_KEYS:
+            continue  # keys from older versions (e.g. railway_url)
+        try:
+            known[k] = _VALIDATORS[k](v)
+        except InvalidInput:
+            continue  # unusable hand-edited value: fall back to the default
+    merged = {**DEFAULTS, **known}
+    if merged != stored:
+        # Rewrite so dropped keys and repaired values stop round-tripping.
+        _save_unlocked(merged)
+    return merged
 
 
 def _save_unlocked(settings: dict):
@@ -73,9 +96,23 @@ def save(settings: dict):
         _save_unlocked(settings)
 
 
+def validate(partial: dict) -> dict:
+    """Validated, normalised known keys from ``partial``; unknown keys are dropped.
+
+    Raises :class:`SettingsError` on the first invalid value.
+    """
+    out = {}
+    for k, v in partial.items():
+        if k in ALLOWED_KEYS:
+            try:
+                out[k] = _VALIDATORS[k](v)
+            except InvalidInput as exc:
+                raise SettingsError(str(exc)) from None
+    return out
+
+
 def update(partial: dict) -> dict:
-    # Only allow known keys
-    filtered = {k: v for k, v in partial.items() if k in ALLOWED_KEYS}
+    filtered = validate(partial)  # all-or-nothing: nothing is saved if any value is bad
     with _lock:
         # Same corrupt-file recovery as load(), so a damaged settings.json
         # can't turn PUT /api/settings into a 500.

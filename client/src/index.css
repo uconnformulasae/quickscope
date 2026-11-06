@@ -340,6 +340,26 @@ button:is(.w-full, .flex-1):active { scale: none; }
 @keyframes qs-slide-in-left { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
 @keyframes qs-slide-in-right { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
 @keyframes qs-slide-down { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+/* Active-channels footer (ChannelSidebar). Closing = plain fade; after a
+   confirmed Reset the chips leave left to right, the ↺ icon makes one turn
+   and the footer folds shut so the channel list grows into the space.
+   Timeline: chips 0–240ms, icon 0–320ms, fold 140–320ms (RESET_EXIT_MS). */
+.qs-collapse { display: grid; grid-template-rows: 1fr; }
+[data-presence="closing"] .qs-collapse { animation: qs-fade-out var(--dur-fast) var(--ease-out) forwards; }
+.qs-resetting [data-presence="closing"] .qs-collapse {
+  animation: qs-fold-shut 180ms var(--ease-in-out) 140ms forwards;
+}
+.qs-resetting [data-presence="closing"] .qs-chip {
+  animation: qs-chip-out var(--dur-fast) var(--ease-out) calc(var(--i, 0) * 15ms) forwards;
+}
+.qs-resetting [data-presence="closing"] .qs-reset-icon {
+  animation: qs-rewind 320ms var(--ease-out) forwards;
+}
+[data-presence="closing"] .qs-collapse * { pointer-events: none; }
+
+@keyframes qs-fold-shut { from { grid-template-rows: 1fr; opacity: 1; } to { grid-template-rows: 0fr; opacity: 0; } }
+@keyframes qs-chip-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.9); } }
+@keyframes qs-rewind { from { transform: none; } to { transform: rotate(-1turn); } }
 @keyframes qs-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 @keyframes qs-alert-pulse { 0%, 60% { opacity: 1; } 80% { opacity: .35; } 100% { opacity: 1; } }
 
@@ -349,6 +369,9 @@ button:is(.w-full, .flex-1):active { scale: none; }
   .qs-slide-in-left, .qs-slide-in-right, .qs-slide-down,
   .qs-breathe, .qs-alert-pulse { animation: none; }
   .qs-dialog, .qs-menu, .qs-scrim, .qs-fade-in { animation: qs-fade-in var(--dur-fast) linear both; }
+  /* Presence already skips exits under Reduce Motion; belt and braces. */
+  .qs-resetting [data-presence="closing"] .qs-chip,
+  .qs-resetting [data-presence="closing"] .qs-reset-icon { animation: none; }
   [data-presence="closing"] .qs-dialog,
   [data-presence="closing"] .qs-menu,
   [data-presence="closing"] .qs-scrim { animation: qs-fade-out var(--dur-fast) linear forwards; }

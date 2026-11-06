@@ -21,6 +21,12 @@ describe('loadPreferences', () => {
     expect(p.gpsGradient).toEqual(DEFAULT_PREFERENCES.gpsGradient);
   });
 
+  it('keeps per-theme channel colours and defaults them to empty', () => {
+    expect(loadPreferences().channelColors).toEqual({ dark: {}, light: {} });
+    localStorage.setItem(KEY, '{"channelColors":{"dark":{"RPM":"#123456"}}}');
+    expect(loadPreferences().channelColors).toEqual({ dark: { RPM: '#123456' }, light: {} });
+  });
+
   it('falls back to defaults on corrupt JSON', () => {
     localStorage.setItem(KEY, 'not json');
     expect(loadPreferences()).toEqual(DEFAULT_PREFERENCES);
