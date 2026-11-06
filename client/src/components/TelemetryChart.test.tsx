@@ -120,6 +120,51 @@ describe('TelemetryChart delta cursor drag', () => {
   });
 });
 
+describe('TelemetryChart delta readout', () => {
+  const at = (x: number) => ({ clientX: x, clientY: 50, button: 0 });
+  const place = (canvas: HTMLElement, x: number) => {
+    fireEvent.mouseDown(canvas, at(x));
+    fireEvent.mouseUp(canvas, at(x));
+  };
+
+  it('docks under the chart once both cursors are placed, and follows a drag', () => {
+    fakeLayout({ width: 1000, height: 900 });
+    renderChart({ activeChannels: [{ channelId: 1, color: '#f00' }] });
+    fireEvent.click(screen.getByTestId('delta-toggle'));
+    const canvas = screen.getByTestId('telemetry-canvas');
+
+    place(canvas, 300);
+    expect(screen.queryByTestId('delta-readout')).toBeNull(); // only one cursor yet
+    place(canvas, 600);
+
+    const readout = screen.getByTestId('delta-readout');
+    // Docked after the plot, not inside the canvas container.
+    expect(canvas.parentElement!.contains(readout)).toBe(false);
+    expect(readout.textContent).toMatch(/Δt\s*=\s*\d+\.\d{3}s/);
+    const rows = readout.querySelectorAll('tbody tr');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].querySelectorAll('td')).toHaveLength(4);
+
+    const before = readout.textContent;
+    fireEvent.mouseDown(canvas, at(600));
+    fireEvent.mouseMove(canvas, at(800));
+    fireEvent.mouseUp(canvas, at(800));
+    expect(screen.getByTestId('delta-readout').textContent).not.toBe(before);
+  });
+
+  it('goes away when delta mode is turned off', () => {
+    fakeLayout({ width: 1000, height: 900 });
+    renderChart({ activeChannels: [{ channelId: 1, color: '#f00' }] });
+    fireEvent.click(screen.getByTestId('delta-toggle'));
+    const canvas = screen.getByTestId('telemetry-canvas');
+    place(canvas, 300);
+    place(canvas, 600);
+    expect(screen.getByTestId('delta-readout')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('delta-toggle'));
+    expect(screen.queryByTestId('delta-readout')).toBeNull();
+  });
+});
+
 describe('TelemetryChart lap compare', () => {
   const lapSess = {
     ...makeSession({ 1: { name: 'A', samples: ramp(1001) } }), // 10 s

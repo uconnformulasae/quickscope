@@ -190,105 +190,40 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number,
   }
 }
 
-/** Draw the delta comparison panel */
-function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
-  const { ctx, w, rm, strips, channelDataMap } = dc;
+export interface DeltaRow {
+  channelId: number;
+  label: string;
+  color: string;
+  valA: string;
+  valB: string;
+  delta: string;
+}
 
-  const deltaT = Math.abs(cursorB - cursorA);
-  const panelLines: { label: string; valA: string; valB: string; delta: string; color: string }[] = [];
-
+/** Values at the two delta cursors for each plotted channel (Δ = B − A).
+ *  Shown in the readout docked under the chart, not over the plot. */
+export function computeDelta(
+  strips: Pick<StripLayout, 'channelId' | 'color'>[],
+  channelDataMap: DrawContext['channelDataMap'],
+  cursorA: number,
+  cursorB: number,
+): { deltaT: number; rows: DeltaRow[] } {
+  const rows: DeltaRow[] = [];
   for (const strip of strips) {
     const data = channelDataMap.get(strip.channelId);
     if (!data || data.allSamples.length === 0) continue;
     const snapA = nearestSample(data.allSamples, cursorA * 1000);
     const snapB = nearestSample(data.allSamples, cursorB * 1000);
     if (!snapA || !snapB) continue;
-    panelLines.push({
+    rows.push({
+      channelId: strip.channelId,
       label: data.def.shortName,
+      color: strip.color,
       valA: formatValue(snapA.value),
       valB: formatValue(snapB.value),
       delta: formatValue(snapB.value - snapA.value),
-      color: strip.color,
     });
   }
-
-  // Measure widths for dynamic layout
-  ctx.font = scaledFont(10, dc.fontScale, 'bold');
-  let maxNameW = ctx.measureText('Channel').width;
-  for (const row of panelLines) {
-    const tw = ctx.measureText(row.label).width;
-    if (tw > maxNameW) maxNameW = tw;
-  }
-  const nameColW = maxNameW + 14;
-  const valColW = 70;
-
-  const panelPad = 10;
-  const headerH = 22;
-  const colHeaderH = 18;
-  const lineH = 20;
-  const panelH = headerH + colHeaderH + panelLines.length * lineH + panelPad * 2;
-  const panelW = nameColW + valColW * 3 + panelPad * 2;
-  const panelX = w - rm - panelW - 10;
-  const panelY = (dc.topInset ?? 0) + 8;
-
-  ctx.fillStyle = dc.colors.deltaPanel;
-  ctx.beginPath();
-  ctx.roundRect(panelX, panelY, panelW, panelH, 6);
-  ctx.fill();
-
-  ctx.strokeStyle = dc.colors.deltaLine;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(panelX, panelY, panelW, panelH, 6);
-  ctx.stroke();
-
-  ctx.font = scaledFont(11, dc.fontScale, 'bold');
-  ctx.fillStyle = dc.colors.deltaAccent;
-  ctx.textAlign = 'left';
-  ctx.fillText(`Δt = ${deltaT.toFixed(3)}s`, panelX + panelPad, panelY + panelPad + 12);
-
-  const col1 = panelX + panelPad;
-  const col2 = panelX + panelPad + nameColW + valColW;
-  const col3 = col2 + valColW;
-  const col4 = col3 + valColW;
-
-  const colY = panelY + panelPad + headerH + 10;
-  ctx.font = scaledFont(9, dc.fontScale);
-  ctx.fillStyle = dc.colors.text;
-  ctx.textAlign = 'left';
-  ctx.fillText('Channel', col1, colY);
-  ctx.textAlign = 'right';
-  ctx.fillText('A', col2, colY);
-  ctx.fillText('B', col3, colY);
-  ctx.fillText('Δ', col4, colY);
-
-  const sepY = colY + 5;
-  ctx.strokeStyle = dc.colors.separator;
-  ctx.beginPath();
-  ctx.moveTo(col1, sepY);
-  ctx.lineTo(panelX + panelW - panelPad, sepY);
-  ctx.stroke();
-
-  const rowStartY = sepY + 4;
-  for (let i = 0; i < panelLines.length; i++) {
-    const row = panelLines[i];
-    const ry = rowStartY + i * lineH + 12;
-
-    ctx.font = scaledFont(10, dc.fontScale, 'bold');
-    ctx.fillStyle = row.color;
-    ctx.textAlign = 'left';
-    ctx.fillText(row.label, col1, ry);
-
-    ctx.font = scaledFont(10, dc.fontScale);
-    ctx.fillStyle = dc.colors.text;
-    ctx.textAlign = 'right';
-    ctx.fillText(row.valA, col2, ry);
-    ctx.fillText(row.valB, col3, ry);
-
-    ctx.font = scaledFont(10, dc.fontScale, 'bold');
-    ctx.fillStyle = dc.colors.deltaAccent;
-    ctx.fillText(row.delta, col4, ry);
-  }
+  return { deltaT: Math.abs(cursorB - cursorA), rows };
 }
 
 /** Draw all cursor overlays: cursor lines, value pills, hover, delta panel */
@@ -309,8 +244,8 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
     }
   }
 
-  // With both delta cursors placed, values live in the delta panel only —
-  // per-cursor and hover pills would just repeat them and pile up behind it.
+  // With both delta cursors placed, values live in the delta readout docked
+  // under the chart — per-cursor and hover pills would just repeat them.
   const panelOpen = cursor.cursorA !== null && cursor.cursorB !== null;
 
   // Cursor A line + pills
@@ -328,10 +263,6 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
   // Hover crosshair
   drawHoverCrosshair(dc, cursor, axisY, !panelOpen);
 
-  // Delta panel
-  if (cursor.cursorA !== null && cursor.cursorB !== null) {
-    drawDeltaPanel(dc, cursor.cursorA, cursor.cursorB);
-  }
 }
 
 /** Which delta cursor (if any) is under the mouse. Inputs are canvas-px x

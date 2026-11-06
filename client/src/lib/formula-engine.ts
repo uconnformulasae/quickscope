@@ -155,23 +155,46 @@ interface Token {
   type: TokenType;
   value: string;
   pos: number;
+  /** Index just past the token's last character in the source text. */
+  end: number;
+  /** True for a `[bracket quoted]` channel name. */
+  quoted?: boolean;
+}
+
+/** A syntax error that also carries a plain-language message and the
+ *  character range it refers to (for the formula editor's diagnostics).
+ *  `message` keeps the original technical wording used by evaluateFormula. */
+class ParseError extends Error {
+  constructor(message: string, readonly friendly: string, readonly start: number, readonly end: number) {
+    super(message);
+  }
 }
 
 function tokenize(expr: string): Token[] {
   const tokens: Token[] = [];
+  const push = (type: TokenType, value: string, pos: number, end: number, quoted?: boolean) =>
+    tokens.push(quoted ? { type, value, pos, end, quoted } : { type, value, pos, end });
   let i = 0;
   while (i < expr.length) {
     const ch = expr[i];
-    if (ch === ' ' || ch === '\t' || ch === '\n') { i++; continue; }
-    if (ch === '(') { tokens.push({ type: 'lparen', value: '(', pos: i }); i++; continue; }
-    if (ch === ')') { tokens.push({ type: 'rparen', value: ')', pos: i }); i++; continue; }
-    if (ch === ',') { tokens.push({ type: 'comma', value: ',', pos: i }); i++; continue; }
-    if ('+-*/^'.includes(ch)) { tokens.push({ type: 'op', value: ch, pos: i }); i++; continue; }
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { i++; continue; }
+    if (ch === '(') { push('lparen', '(', i, i + 1); i++; continue; }
+    if (ch === ')') { push('rparen', ')', i, i + 1); i++; continue; }
+    if (ch === ',') { push('comma', ',', i, i + 1); i++; continue; }
+    if ('+-*/^'.includes(ch)) { push('op', ch, i, i + 1); i++; continue; }
+    if (ch === '[') {
+      // [Channel Name] — lets channels with spaces or symbols be referenced.
+      const close = expr.indexOf(']', i + 1);
+      if (close < 0) throw new ParseError(`Unclosed '[' at position ${i}`, "A '[' is never closed", i, expr.length);
+      push('ident', expr.slice(i + 1, close), i, close + 1, true);
+      i = close + 1;
+      continue;
+    }
     if ((ch >= '0' && ch <= '9') || ch === '.') {
       // number literal
       let j = i;
       while (j < expr.length && (expr[j] >= '0' && expr[j] <= '9' || expr[j] === '.')) j++;
-      tokens.push({ type: 'number', value: expr.slice(i, j), pos: i });
+      push('number', expr.slice(i, j), i, j);
       i = j;
       continue;
     }
@@ -183,13 +206,13 @@ function tokenize(expr: string): Token[] {
         (expr[j] >= '0' && expr[j] <= '9') ||
         expr[j] === '_'
       )) j++;
-      tokens.push({ type: 'ident', value: expr.slice(i, j), pos: i });
+      push('ident', expr.slice(i, j), i, j);
       i = j;
       continue;
     }
-    throw new Error(`Unexpected character '${ch}' at position ${i}`);
+    throw new ParseError(`Unexpected character '${ch}' at position ${i}`, `'${ch}' can't be used in a formula`, i, i + 1);
   }
-  tokens.push({ type: 'eof', value: '', pos: expr.length });
+  push('eof', '', expr.length, expr.length);
   return tokens;
 }
 
@@ -197,10 +220,10 @@ function tokenize(expr: string): Token[] {
 
 type ASTNode =
   | { kind: 'number'; value: number }
-  | { kind: 'channel'; name: string }
+  | { kind: 'channel'; name: string; quoted?: boolean; start: number; end: number }
   | { kind: 'binop'; op: string; left: ASTNode; right: ASTNode }
   | { kind: 'unary'; op: string; arg: ASTNode }
-  | { kind: 'call'; name: string; args: ASTNode[] };
+  | { kind: 'call'; name: string; args: ASTNode[]; start: number; end: number };
 
 // ─── Parser (recursive descent) ───────────────────────────────────────────────
 
@@ -215,16 +238,42 @@ class Parser {
   private peek(): Token { return this.tokens[this.pos]; }
   private consume(): Token { return this.tokens[this.pos++]; }
 
-  private expect(type: TokenType): Token {
-    const t = this.consume();
-    if (t.type !== type) throw new Error(`Expected ${type} but got '${t.value}' (${t.type})`);
-    return t;
+  private prev(): Token | undefined { return this.tokens[this.pos - 1]; }
+
+  /** Text of a token as the user would recognise it. */
+  private static show(t: Token): string { return t.quoted ? `[${t.value}]` : t.value; }
+
+  /** Two values sit next to each other with nothing joining them. */
+  private missingOperator(next: Token): ParseError | null {
+    const p = this.prev();
+    const startsValue = next.type === 'ident' || next.type === 'number' || next.type === 'lparen';
+    if (!p || !startsValue || !(p.type === 'ident' || p.type === 'number' || p.type === 'rparen')) return null;
+    return new ParseError(
+      `Unexpected token '${next.value}'`,
+      `Add an operator (+ − × ÷) between ${Parser.show(p)} and ${Parser.show(next)}`,
+      p.pos, next.end,
+    );
+  }
+
+  private expectClose(open: Token): Token {
+    const t = this.peek();
+    if (t.type === 'rparen') return this.consume();
+    const missing = this.missingOperator(t);
+    if (missing) throw missing;
+    if (t.type === 'eof') {
+      throw new ParseError(`Expected rparen but got '' (eof)`, "A '(' is never closed", open.pos, open.end);
+    }
+    throw new ParseError(`Expected rparen but got '${t.value}' (${t.type})`, `Unexpected '${t.value}'`, t.pos, t.end);
   }
 
   parse(): ASTNode {
     const node = this.parseExpr();
-    if (this.peek().type !== 'eof') {
-      throw new Error(`Unexpected token '${this.peek().value}'`);
+    const t = this.peek();
+    if (t.type !== 'eof') {
+      const missing = this.missingOperator(t);
+      if (missing) throw missing;
+      const friendly = t.type === 'rparen' ? "There's an extra ')'" : `Unexpected '${t.value}'`;
+      throw new ParseError(`Unexpected token '${t.value}'`, friendly, t.pos, t.end);
     }
     return node;
   }
@@ -283,17 +332,17 @@ class Parser {
     }
 
     if (t.type === 'lparen') {
-      this.consume();
+      const open = this.consume();
       const inner = this.parseExpr();
-      this.expect('rparen');
+      this.expectClose(open);
       return inner;
     }
 
     if (t.type === 'ident') {
       this.consume();
-      // Check for function call
-      if (this.peek().type === 'lparen') {
-        this.consume(); // consume '('
+      // Check for function call (a [quoted] name is always a channel)
+      if (!t.quoted && this.peek().type === 'lparen') {
+        const open = this.consume(); // consume '('
         const args: ASTNode[] = [];
         if (this.peek().type !== 'rparen') {
           args.push(this.parseExpr());
@@ -302,14 +351,25 @@ class Parser {
             args.push(this.parseExpr());
           }
         }
-        this.expect('rparen');
-        return { kind: 'call', name: t.value, args };
+        const close = this.expectClose(open);
+        return { kind: 'call', name: t.value, args, start: t.pos, end: close.end };
       }
       // Channel identifier (falls back to e/pi constant if channel not present)
-      return { kind: 'channel', name: t.value };
+      return t.quoted
+        ? { kind: 'channel', name: t.value, quoted: true, start: t.pos, end: t.end }
+        : { kind: 'channel', name: t.value, start: t.pos, end: t.end };
     }
 
-    throw new Error(`Unexpected token '${t.value}' at position ${t.pos}`);
+    const p = this.prev();
+    const friendly = t.type === 'eof'
+      ? (p && p.type === 'op' ? `Missing something after the '${p.value}'`
+        : p && p.type === 'comma' ? "Missing something after the ','"
+        : p && p.type === 'lparen' ? "Missing something inside the '('"
+        : 'The formula is empty')
+      : p && p.type === 'op' ? `Missing something between '${p.value}' and '${t.value}'`
+      : `Unexpected '${t.value}'`;
+    const at = t.type === 'eof' && p ? p : t;
+    throw new ParseError(`Unexpected token '${t.value}' at position ${t.pos}`, friendly, at.pos, at.end);
   }
 }
 
@@ -403,8 +463,8 @@ function evalNode(node: ASTNode, channels: ChannelMap): EvalResult {
     case 'channel': {
       const ch = channels[node.name];
       if (!ch) {
-        if (node.name === 'e') return Math.E;
-        if (node.name === 'pi' || node.name === 'PI') return Math.PI;
+        if (!node.quoted && node.name === 'e') return Math.E;
+        if (!node.quoted && (node.name === 'pi' || node.name === 'PI')) return Math.PI;
         throw new Error(`Unknown channel: '${node.name}'`);
       }
       return ch;
@@ -525,6 +585,92 @@ export function extractChannelNames(expression: string): string[] {
     return Array.from(names);
   } catch {
     return [];
+  }
+}
+
+// ─── Editor helpers ───────────────────────────────────────────────────────────
+
+/** Plain-language reference for every function the engine supports. */
+export const FUNCTION_HELP: { name: string; signature: string; description: string }[] = [
+  { name: 'abs', signature: 'abs(x)', description: 'Absolute value (drops the minus sign)' },
+  { name: 'sqrt', signature: 'sqrt(x)', description: 'Square root' },
+  { name: 'pow', signature: 'pow(x, power)', description: 'x raised to a power (same as x ^ power)' },
+  { name: 'min', signature: 'min(a, b)', description: 'The smaller of two values at each moment' },
+  { name: 'max', signature: 'max(a, b)', description: 'The larger of two values at each moment' },
+  { name: 'round', signature: 'round(x)', description: 'Round to the nearest whole number' },
+  { name: 'floor', signature: 'floor(x)', description: 'Round down' },
+  { name: 'ceil', signature: 'ceil(x)', description: 'Round up' },
+  { name: 'sign', signature: 'sign(x)', description: '−1, 0 or 1 depending on the sign' },
+  { name: 'sin', signature: 'sin(radians)', description: 'Sine (input in radians)' },
+  { name: 'cos', signature: 'cos(radians)', description: 'Cosine (input in radians)' },
+  { name: 'tan', signature: 'tan(radians)', description: 'Tangent (input in radians)' },
+  { name: 'log', signature: 'log(x)', description: 'Natural logarithm' },
+  { name: 'log10', signature: 'log10(x)', description: 'Base-10 logarithm' },
+  { name: 'log2', signature: 'log2(x)', description: 'Base-2 logarithm' },
+  { name: 'exp', signature: 'exp(x)', description: 'e raised to x' },
+  { name: 'diff', signature: 'diff(channel)', description: 'Rate of change per second' },
+  { name: 'mavg', signature: 'mavg(channel, milliseconds)', description: 'Moving average over a time window' },
+  { name: 'smooth', signature: 'smooth(channel, samples)', description: 'Moving average over a number of samples' },
+  { name: 'delay', signature: 'delay(channel, samples)', description: 'Shift later in time by a number of samples (negative = earlier)' },
+];
+
+const FUNCTION_ARITY: Record<string, number> = {
+  ...Object.fromEntries(Object.keys(MATH_FUNCS).map(n => [n, 1])),
+  diff: 1, smooth: 2, mavg: 2, delay: 2, pow: 2, min: 2, max: 2,
+};
+
+const PLAIN_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** How to write a channel code inside a formula: bare when it's a plain
+ *  identifier that isn't also a function name, otherwise `[quoted]`. */
+export function formatChannelRef(code: string): string {
+  return PLAIN_IDENT.test(code) && !(code.toLowerCase() in FUNCTION_ARITY) ? code : `[${code}]`;
+}
+
+export interface FormulaProblem {
+  message: string;
+  start: number;
+  end: number;
+}
+
+function checkNode(node: ASTNode, isKnown: (name: string) => boolean): FormulaProblem | null {
+  switch (node.kind) {
+    case 'number': return null;
+    case 'channel':
+      if (isKnown(node.name)) return null;
+      if (!node.quoted && (node.name === 'e' || node.name === 'pi' || node.name === 'PI')) return null;
+      return { message: `There's no channel called '${node.name}' in this session`, start: node.start, end: node.end };
+    case 'unary': return checkNode(node.arg, isKnown);
+    case 'binop': return checkNode(node.left, isKnown) ?? checkNode(node.right, isKnown);
+    case 'call': {
+      const name = node.name.toLowerCase();
+      const arity = FUNCTION_ARITY[name];
+      if (arity === undefined) {
+        return { message: `Unknown function '${node.name}'`, start: node.start, end: node.start + node.name.length };
+      }
+      if (node.args.length !== arity) {
+        const help = FUNCTION_HELP.find(f => f.name === name);
+        const inputs = arity === 1 ? '1 input' : `${arity} inputs`;
+        return { message: `${node.name}() needs ${inputs}: ${help?.signature ?? name}`, start: node.start, end: node.end };
+      }
+      for (const a of node.args) {
+        const p = checkNode(a, isKnown);
+        if (p) return p;
+      }
+      return null;
+    }
+  }
+}
+
+/** Check a formula without evaluating it. Returns a plain-language problem
+ *  with the character range it refers to, or null when the formula is fine. */
+export function checkFormula(expr: string, isKnown: (name: string) => boolean): FormulaProblem | null {
+  try {
+    const ast = new Parser(tokenize(expr)).parse();
+    return checkNode(ast, isKnown);
+  } catch (err) {
+    if (err instanceof ParseError) return { message: err.friendly, start: err.start, end: err.end };
+    return { message: err instanceof Error ? err.message : String(err), start: 0, end: expr.length };
   }
 }
 
