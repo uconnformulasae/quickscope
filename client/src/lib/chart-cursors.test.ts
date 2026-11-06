@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { drawCursors, hitTestCursor } from './chart-cursors';
+import { computeDelta, drawCursors, hitTestCursor } from './chart-cursors';
 import type { ChartColors, DrawContext, StripLayout } from './chart-utils';
 import type { XRKSession } from './xrk-parser';
 
@@ -99,7 +99,7 @@ describe('drawCursors', () => {
     expect(calls.some((c) => c.op === 'moveTo')).toBe(false);
   });
 
-  it('shades the region between two visible cursors and shows a delta panel', () => {
+  it('shades the region between two visible cursors without drawing a panel over the plot', () => {
     const { dc, calls } = makeDc();
     drawCursors(dc, { cursorA: 0, cursorB: 10, hoverT: null, deltaMode: true }, 280);
 
@@ -107,8 +107,8 @@ describe('drawCursors', () => {
     expect(fill?.args).toEqual([60, 0, 920, 280]);
     expect(fill?.fillStyle).toBe('deltaFill');
     const labels = texts(calls);
-    expect(labels).toContain('Δt = 10.000s');
-    expect(labels).toEqual(expect.arrayContaining(['Channel', 'A', 'B', 'Δ', '1000.0', '3000.0', '2000.0']));
+    expect(labels.some(t => t.startsWith('Δt'))).toBe(false);
+    expect(labels).not.toContain('Channel');
   });
 
   it('orders the shaded region the same way when cursor B is left of A', () => {
@@ -116,7 +116,6 @@ describe('drawCursors', () => {
     drawCursors(dc, { cursorA: 7.5, cursorB: 2.5, hoverT: null, deltaMode: true }, 280);
 
     expect(calls.find((c) => c.op === 'fillRect')?.args).toEqual([290, 0, 460, 280]);
-    expect(texts(calls)).toContain('Δt = 5.000s');
   });
 
   it('draws a hover crosshair with a value pill', () => {
@@ -186,17 +185,29 @@ describe('drawCursors in lap compare mode', () => {
   });
 });
 
-describe('drawCursors with the delta panel open', () => {
-  it('shows values only in the panel, not also in cursor/hover pills', () => {
+describe('drawCursors with both delta cursors placed', () => {
+  it('leaves values to the docked readout instead of cursor/hover pills', () => {
     const { dc, calls } = makeDc();
     drawCursors(dc, { cursorA: 2, cursorB: 8, hoverT: 5, deltaMode: true }, 280);
-    expect(texts(calls).filter(t => t === 'RPM')).toHaveLength(1); // the panel row only
+    expect(texts(calls).filter(t => /^-?[\d.]+$/.test(t))).toEqual([]);
   });
+});
 
-  it('places the delta panel below a top inset (overlay legend band)', () => {
-    const { dc, calls } = makeDc({ topInset: 40 });
-    drawCursors(dc, { cursorA: 2, cursorB: 8, hoverT: null, deltaMode: true }, 280);
-    const panel = calls.find(c => c.op === 'roundRect' && (c.args[3] as number) > 40);
-    expect(panel && (panel.args[1] as number)).toBeGreaterThanOrEqual(40);
+describe('computeDelta', () => {
+  const { dc } = makeDc();
+  it('reports Δt and A / B / Δ per channel', () => {
+    expect(computeDelta(dc.strips, dc.channelDataMap, 0, 10)).toEqual({
+      deltaT: 10,
+      rows: [{ channelId: 1, label: 'RPM', color: '#f00', valA: '1000.0', valB: '3000.0', delta: '2000.0' }],
+    });
+  });
+  it('keeps Δt positive when B is left of A, but Δ is still B − A', () => {
+    const r = computeDelta(dc.strips, dc.channelDataMap, 10, 0);
+    expect(r.deltaT).toBe(10);
+    expect(r.rows[0].delta).toBe('-2000.0');
+  });
+  it('skips channels with no samples', () => {
+    const empty = new Map([[1, { ...dc.channelDataMap.get(1)!, allSamples: [] }]]);
+    expect(computeDelta(dc.strips, empty, 0, 10).rows).toEqual([]);
   });
 });

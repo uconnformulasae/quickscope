@@ -9,7 +9,8 @@ import {
   clamp, niceAxisTicks, getChartColors, toDarkChartColor,
 } from '../lib/chart-utils';
 import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawCompareLegend, drawXAxis, overlayLegendHeight } from '../lib/chart-draw';
-import { drawCursors, hitTestCursor } from '../lib/chart-cursors';
+import { computeDelta, drawCursors, hitTestCursor } from '../lib/chart-cursors';
+import { DeltaReadout } from './DeltaReadout';
 import type { ChartExportSpec } from '../lib/chart-export';
 import { ImageExportDialog } from './ImageExportDialog';
 import { Presence } from '../lib/motion';
@@ -46,6 +47,8 @@ export function TelemetryChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
+  // Both delta cursors (seconds), mirrored from the refs for the docked readout.
+  const [deltaCursors, setDeltaCursors] = useState<{ a: number; b: number } | null>(null);
   const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
   const [imageExportSpec, setImageExportSpec] = useState<ChartExportSpec | null>(null);
   // Unit menu opened from a strip label / overlay axis: channels + position (canvas px).
@@ -241,6 +244,7 @@ export function TelemetryChart({
       delete canvasRef.current.dataset.cursorA;
       delete canvasRef.current.dataset.cursorB;
     }
+    setDeltaCursors(null);
     requestDraw();
   }, [inCompare]);
 
@@ -252,6 +256,7 @@ export function TelemetryChart({
       cursor2XRef.current = null;
       dragCursorRef.current = null;
       if (canvasRef.current) delete canvasRef.current.dataset.cursorB;
+      setDeltaCursors(null);
       requestDraw();
     }
   }, [deltaMode]);
@@ -487,6 +492,10 @@ export function TelemetryChart({
     };
     set('cursorA', cursorXRef.current);
     set('cursorB', cursor2XRef.current);
+    const a = cursorXRef.current;
+    const b = cursor2XRef.current;
+    setDeltaCursors(prev => (a === null || b === null ? null
+      : prev && prev.a === a && prev.b === b ? prev : { a, b }));
   }, []);
 
   /** Delta cursor under the given canvas x, if any. */
@@ -1031,6 +1040,11 @@ export function TelemetryChart({
           data-testid="telemetry-canvas"
         />
       </div>
+
+      {deltaMode && deltaCursors && (() => {
+        const { deltaT, rows } = computeDelta(visibleChannels, channelDataMap, deltaCursors.a, deltaCursors.b);
+        return <DeltaReadout deltaT={deltaT} rows={rows} onClose={() => setDeltaMode(false)} />;
+      })()}
 
       {unitMenu && (() => {
         const chans = unitMenu.channelIds.flatMap(id => {

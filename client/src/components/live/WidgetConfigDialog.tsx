@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 import { ChannelDatalist, ChannelPicker, type ChannelSources } from './ChannelPicker';
+import { WidgetFormulaField } from './WidgetFormulaField';
 import { compatibleUnits } from './units';
 import {
   WIDGET_TYPES,
@@ -102,9 +103,10 @@ function UnitField({ ch, sourceUnit, set }: { ch: ChannelRef; sourceUnit?: strin
 }
 
 /** Type-specific settings for one channel row. */
-function ChannelDetails({ type, ch, sourceUnit, set }: {
+function ChannelDetails({ type, ch, sourceUnit, set, sources }: {
   type: WidgetType;
   ch: ChannelRef;
+  sources: ChannelSources;
   /** Unit the logger sends this channel in, when known. */
   sourceUnit?: string;
   set: (patch: Partial<ChannelRef>) => void;
@@ -147,12 +149,12 @@ function ChannelDetails({ type, ch, sourceUnit, set }: {
         <SelectField<Tone> label="Color" value={ch.tone} options={TONES} onChange={(v) => set({ tone: v })} />
         <NumField label="No data ≤" value={ch.invalidBelow} onChange={(v) => set({ invalidBelow: v })} />
       </div>
-      <label className="block">
+      <div>
         <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">
-          Formula (optional — replaces the channel, e.g. Pack_Voltage * Pack_Current / 1000)
+          Formula (optional — replaces the channel; type a channel name, e.g. battery voltage × battery current / 1000)
         </span>
-        <input value={ch.expr ?? ''} onChange={(e) => set({ expr: e.target.value || undefined })} spellCheck={false} className={`${INPUT} font-mono`} />
-      </label>
+        <WidgetFormulaField value={ch.expr} onChange={(expr) => set({ expr })} sources={sources} />
+      </div>
     </div>
   );
 }
@@ -313,7 +315,7 @@ export function WidgetConfigDialog({
                         </>
                       )}
                     </div>
-                    <ChannelDetails type={draft.type} ch={ch} sourceUnit={ch.expr ? undefined : sources.units[ch.name]} set={(patch) => setChannel(i, patch)} />
+                    <ChannelDetails type={draft.type} ch={ch} sources={sources} sourceUnit={ch.expr ? undefined : sources.units[ch.name]} set={(patch) => setChannel(i, patch)} />
                   </div>
                 ))}
               </div>

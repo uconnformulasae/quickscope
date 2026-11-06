@@ -3,6 +3,7 @@ import { buildLapWindows } from './lib/lap-compare';
 import { useSessionViewPersistence } from './lib/useSessionViewPersistence';
 import { applyChannelColors } from './lib/channelColors';
 import { usePreferences } from './lib/usePreferences';
+import { withFriendlyNames } from './lib/channel-dictionary';
 import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
@@ -355,6 +356,11 @@ export default function App() {
   }, [handleFileSelected]);
 
   const { session, activeChannels: rawActiveChannels, leftSidebarOpen, rightSidebarOpen } = state;
+  // The channel list shows plain-English names (and the user's renames) under each code.
+  const sidebarSession = useMemo(
+    () => (session ? withFriendlyNames(session, prefs.channelLabels) : null),
+    [session, prefs.channelLabels],
+  );
 
   // Resolve channel colors for current theme (dark colors need darker variants on light bg)
   // (and custom colours the user picked for this theme, by channel name).
@@ -426,7 +432,7 @@ export default function App() {
           >
             {session ? (
               <ChannelSidebar
-                session={session}
+                session={sidebarSession ?? session}
                 activeChannels={activeChannels}
                 derivedChannels={state.derivedChannels}
                 derivedSamplesMap={derivedSamplesMap}
@@ -588,6 +594,7 @@ export default function App() {
         <DerivedChannelDialog
           session={session}
           editing={editingDerived}
+          derivedChannels={state.derivedChannels}
           onClose={handleCloseDerivedDialog}
           onPreview={handlePreviewDerived}
           onSubmit={handleSubmitDerived}

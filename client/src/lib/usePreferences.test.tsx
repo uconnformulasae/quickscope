@@ -27,6 +27,14 @@ describe('loadPreferences', () => {
     expect(loadPreferences().channelColors).toEqual({ dark: { RPM: '#123456' }, light: {} });
   });
 
+  it('keeps user channel renames and drops non-string values', () => {
+    expect(loadPreferences().channelLabels).toEqual({});
+    localStorage.setItem('quickscope-preferences', JSON.stringify({ channelLabels: { Channel01: 'Steering', Bad: 3 } }));
+    expect(loadPreferences().channelLabels).toEqual({ Channel01: 'Steering' });
+    localStorage.setItem('quickscope-preferences', JSON.stringify({ channelLabels: 'nope' }));
+    expect(loadPreferences().channelLabels).toEqual({});
+  });
+
   it('falls back to defaults on corrupt JSON', () => {
     localStorage.setItem(KEY, 'not json');
     expect(loadPreferences()).toEqual(DEFAULT_PREFERENCES);
