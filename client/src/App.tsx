@@ -4,6 +4,7 @@ import { useSessionViewPersistence } from './lib/useSessionViewPersistence';
 import { applyChannelColors } from './lib/channelColors';
 import { usePreferences } from './lib/usePreferences';
 import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
+import { pathStem, quickscopeSessionExportBaseName, sanitizeExportFilePart } from './lib/sessionDisplayName';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import { useSidebarWidths, LEFT_SIDEBAR, RIGHT_SIDEBAR } from './lib/useSidebarWidths';
@@ -94,6 +95,7 @@ export default function App() {
   // Session ID from backend
   const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
   const [loadedSessionSource, setLoadedSessionSource] = useState<LocalSession['source']>('manual_upload');
+  const [loadedSessionExportBase, setLoadedSessionExportBase] = useState<string | null>(null);
 
   // Drag over state for chart area
   const [isDragOver, setIsDragOver] = useState(false);
@@ -190,10 +192,17 @@ export default function App() {
 
   /** Called when session browser loads a session */
   const handleSessionLoaded = useCallback(async (
-    info: SessionInfo, sessionId: string, fileName: string, source: LocalSession['source'],
+    info: SessionInfo,
+    sessionId: string,
+    fileName: string,
+    source: LocalSession['source'],
+    displayName: string,
   ) => {
     setLoadedSessionId(sessionId);
     setLoadedSessionSource(source);
+    setLoadedSessionExportBase(
+      sanitizeExportFilePart(quickscopeSessionExportBaseName(displayName)),
+    );
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
@@ -227,6 +236,7 @@ export default function App() {
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
       setLoadedSessionId(info.sessionId ?? null);
       setLoadedSessionSource('manual_upload');
+      setLoadedSessionExportBase(sanitizeExportFilePart(pathStem(file.name)));
       await buildAndSetSession(info, file.name, info.sessionId ?? file.name);
     } catch (err) {
       setError(`Failed to upload XRK file: ${err instanceof Error ? err.message : String(err)}`);
@@ -235,6 +245,7 @@ export default function App() {
 
   const handleBackToBrowser = useCallback(() => {
     setLoadedSessionId(null);
+    setLoadedSessionExportBase(null);
     clearSession();
     persistView.endSession();
     setView('browser');
@@ -602,6 +613,7 @@ export default function App() {
         <ExportDialog
           session={session}
           fileName={state.fileName}
+          exportBaseName={loadedSessionExportBase ?? undefined}
           onClose={() => setExportDialogOpen(false)}
         />
         )}

@@ -2,9 +2,16 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   listSessions, loadSession, deleteSession,
   renameSession, getAimStatus, uploadFile, fetchUploadLog, fetchAimPullLog,
+  fetchSessionFile,
   type LocalSession, type SessionInfo, type AimStatus, type UploadLogEntry,
   type AimPullLogEntry,
 } from '../lib/api';
+import { saveBlob } from '../lib/saveBlob';
+import {
+  pathStem,
+  quickscopeSessionDisplayName,
+  quickscopeSessionExportFileBase,
+} from '../lib/sessionDisplayName';
 import {
   RefreshCw, Wifi, WifiOff, Upload, Trash2,
   Download, Loader2, Radio,
@@ -15,9 +22,16 @@ import { Presence } from '../lib/motion';
 import { QuickScopeLogo } from './QuickScopeLogo';
 import { ThemeToggle } from './ThemeToggle';
 import { GPSThumbnail } from './GPSThumbnail';
+import { ExportDialog } from './ExportDialog';
 
 interface SessionBrowserProps {
-  onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string, source: LocalSession['source']) => void;
+  onSessionLoaded: (
+    info: SessionInfo,
+    sessionId: string,
+    fileName: string,
+    source: LocalSession['source'],
+    displayName: string,
+  ) => void;
   onOpenSettings: () => void;
   onOpenLive: (device: AimStatus['device']) => void;
   theme: 'dark' | 'light';
@@ -65,11 +79,6 @@ function formatDate(dateStr: string | null): string {
     + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
-function pathStem(filename: string): string {
-  const dot = filename.lastIndexOf('.');
-  return dot > 0 ? filename.slice(0, dot) : filename;
-}
-
 const SOURCE_CONFIG = {
   manual_upload: { icon: Upload, label: 'Uploaded' },
   aim_device: { icon: Radio, label: 'AiM' },
@@ -97,6 +106,15 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
   const renameInputRef = useRef<HTMLInputElement>(null);
   // Enter commits and then the input's blur fires too; only the first counts.
   const renameDoneRef = useRef(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const [exportMenuSessionId, setExportMenuSessionId] = useState<string | null>(null);
+  const [exportBusyId, setExportBusyId] = useState<string | null>(null);
+  const [csvExport, setCsvExport] = useState<{
+    sessionId: string;
+    fileName: string;
+    exportBaseName: string;
+    channels: { id: number; name: string; units: string; sampleCount: number }[];
+  } | null>(null);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -132,6 +150,16 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     return () => clearInterval(interval);
   }, [hasIndexingSessions, refreshSessions]);
 
+  useEffect(() => {
+    if (!exportMenuSessionId) return;
+    const onDocumentMouseDown = (event: MouseEvent) => {
+      if (exportMenuRef.current?.contains(event.target as Node)) return;
+      setExportMenuSessionId(null);
+    };
+    document.addEventListener('mousedown', onDocumentMouseDown);
+    return () => document.removeEventListener('mousedown', onDocumentMouseDown);
+  }, [exportMenuSessionId]);
+
   const handleAimPickerDownloaded = useCallback(() => {
     refreshSessions();
   }, [refreshSessions]);
@@ -140,13 +168,71 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     setLoadingId(session.id);
     try {
       const info = await loadSession(session.id);
-      onSessionLoaded(info, session.id, session.filename, session.source);
+      onSessionLoaded(
+        info,
+        session.id,
+        session.filename,
+        session.source,
+        quickscopeSessionDisplayName(session),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Load failed');
     } finally {
       setLoadingId(null);
     }
   }, [onSessionLoaded]);
+
+  const openExportMenu = useCallback((e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    setExportMenuSessionId(prev => (prev === sessionId ? null : sessionId));
+  }, []);
+
+  const handleExportCsv = useCallback(async (e: React.MouseEvent, session: LocalSession) => {
+    e.stopPropagation();
+    setExportMenuSessionId(null);
+    setExportBusyId(session.id);
+    setError(null);
+    try {
+      const info = await loadSession(session.id);
+      const channels = info.channels
+        .filter(ch => ch.sampleCount > 0)
+        .map(ch => ({
+          id: ch.index,
+          name: ch.name,
+          units: ch.units,
+          sampleCount: ch.sampleCount,
+        }));
+      if (channels.length === 0) {
+        setError('No channels with data to export');
+        return;
+      }
+      setCsvExport({
+        sessionId: session.id,
+        fileName: session.filename,
+        exportBaseName: quickscopeSessionExportFileBase(session),
+        channels,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExportBusyId(null);
+    }
+  }, []);
+
+  const handleExportXrk = useCallback(async (e: React.MouseEvent, session: LocalSession) => {
+    e.stopPropagation();
+    setExportMenuSessionId(null);
+    setExportBusyId(session.id);
+    setError(null);
+    try {
+      const { blob } = await fetchSessionFile(session.id);
+      await saveBlob(blob, `${quickscopeSessionExportFileBase(session)}.xrk`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Download failed');
+    } finally {
+      setExportBusyId(null);
+    }
+  }, []);
 
   const handleDelete = useCallback(async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
@@ -203,9 +289,15 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         ? updated.find(s => s.id === info.sessionId)
         : updated.find(s => s.filename === file.name);
       if (newest) {
-        onSessionLoaded(info, newest.id, file.name, newest.source);
+        onSessionLoaded(
+          info,
+          newest.id,
+          file.name,
+          newest.source,
+          quickscopeSessionDisplayName(newest),
+        );
       } else if (info.sessionId) {
-        onSessionLoaded(info, info.sessionId, file.name, 'manual_upload');
+        onSessionLoaded(info, info.sessionId, file.name, 'manual_upload', pathStem(file.name));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
@@ -663,6 +755,45 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                       <Loader2 className="w-4 h-4 text-primary-text animate-spin" />
                     ) : (
                       <>
+                        <div
+                          className="relative"
+                          ref={exportMenuSessionId === session.id ? exportMenuRef : undefined}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => openExportMenu(e, session.id)}
+                            disabled={exportBusyId === session.id}
+                            className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary transition-all disabled:opacity-50"
+                            title="Export"
+                          >
+                            {exportBusyId === session.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Download className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                          {exportMenuSessionId === session.id && (
+                            <div
+                              className="absolute right-0 top-full mt-1 z-30 min-w-[168px] rounded-md border border-border bg-card py-1 shadow-lg"
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                className="w-full px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted/50"
+                                onClick={(e) => handleExportCsv(e, session)}
+                              >
+                                Export CSV…
+                              </button>
+                              <button
+                                type="button"
+                                className="w-full px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted/50"
+                                onClick={(e) => handleExportXrk(e, session)}
+                              >
+                                Export XRK…
+                              </button>
+                            </div>
+                          )}
+                        </div>
                         <button
                           onClick={(e) => startRename(e, session)}
                           className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary-text transition-all"
@@ -710,6 +841,17 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         />
         )}
       </Presence>
+
+      {csvExport && (
+        <ExportDialog
+          key={csvExport.sessionId}
+          sessionId={csvExport.sessionId}
+          browserChannels={csvExport.channels}
+          fileName={csvExport.fileName}
+          exportBaseName={csvExport.exportBaseName}
+          onClose={() => setCsvExport(null)}
+        />
+      )}
 
       {/* Footer */}
       <div className="px-4 py-2 border-t border-border/50 bg-card/30 text-xs text-muted-foreground">

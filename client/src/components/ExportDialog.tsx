@@ -1,14 +1,22 @@
 import { useState, useMemo, useCallback } from 'react';
 import { X, Download, Search, CheckSquare, Square } from 'lucide-react';
 import type { XRKSession } from '../lib/xrk-parser';
-import { exportCSV, type ExportConversions } from '../lib/api';
+import { exportCSV, exportSessionCSV, type ExportConversions } from '../lib/api';
+import { sanitizeExportFilePart } from '../lib/sessionDisplayName';
 import { useDisplaySamples } from '../lib/useDisplaySamples';
 import { getConverter, linearCoefficients } from '../lib/units';
 
 interface ExportDialogProps {
-  session: XRKSession;
   fileName: string | null;
   onClose: () => void;
+  /** QuickScope session list label (preferred over ``fileName`` for download names). */
+  exportBaseName?: string;
+  /** Active analysis session (in-app export). */
+  session?: XRKSession;
+  /** Stored session id for export from the session browser. */
+  sessionId?: string;
+  /** Channel list from loadSession when not opening the log in analysis. */
+  browserChannels?: ExportChannel[];
 }
 
 interface ExportChannel {
@@ -18,21 +26,42 @@ interface ExportChannel {
   sampleCount: number;
 }
 
+function channelsForExport(
+  session: XRKSession | undefined,
+  browserChannels: ExportChannel[] | undefined,
+): ExportChannel[] {
+  if (browserChannels?.length) {
+    return [...browserChannels].sort((a, b) => a.name.localeCompare(b.name));
+  }
+  if (!session) return [];
+
+  const list: ExportChannel[] = [];
+  session.channels.forEach((ch) => {
+    const count = ch.fileSampleCount ?? (session.samples.get(ch.index) || []).length;
+    if (count === 0) return;
+    list.push({
+      id: ch.index,
+      name: ch.shortName,
+      units: ch.units,
+      sampleCount: count,
+    });
+  });
+  list.sort((a, b) => a.name.localeCompare(b.name));
+  return list;
+}
+
 export function ExportDialog({
   session,
+  sessionId,
+  browserChannels,
   fileName,
+  exportBaseName,
   onClose,
 }: ExportDialogProps) {
   const [search, setSearch] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => {
-    // Default: select all channels that have data in the file
     const ids = new Set<number>();
-    session.channels.forEach((ch) => {
-      const fileCount = ch.fileSampleCount ?? (session.samples.get(ch.index) || []).length;
-      if (fileCount > 0) {
-        ids.add(ch.index);
-      }
-    });
+    channelsForExport(session, browserChannels).forEach((ch) => ids.add(ch.id));
     return ids;
   });
   const display = useDisplaySamples();
@@ -40,27 +69,10 @@ export function ExportDialog({
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
-  // Build the full channel list (session + derived), only those with data
-  const allChannels = useMemo<ExportChannel[]>(() => {
-    const list: ExportChannel[] = [];
-
-    session.channels.forEach((ch) => {
-      const count = ch.fileSampleCount ?? (session.samples.get(ch.index) || []).length;
-      if (count === 0) return;
-      list.push({
-        id: ch.index,
-        name: ch.shortName,
-        units: ch.units,
-        sampleCount: count,
-      });
-    });
-
-    // Derived channels are not listed: the backend export only knows session channels.
-
-    // Sort alphabetically
-    list.sort((a, b) => a.name.localeCompare(b.name));
-    return list;
-  }, [session]);
+  const allChannels = useMemo(
+    () => channelsForExport(session, browserChannels),
+    [session, browserChannels],
+  );
 
   const filteredChannels = useMemo(() => {
     if (!search) return allChannels;
@@ -129,9 +141,15 @@ export function ExportDialog({
           if (!conv.identity) convert[c.name] = { unit: conv.unit, ...linearCoefficients(conv) };
         }
       }
-      const blob = await exportCSV(channelNames, convert);
+      const blob = sessionId
+        ? await exportSessionCSV(sessionId, channelNames, convert)
+        : await exportCSV(channelNames, convert);
       const url = URL.createObjectURL(blob);
-      const baseName = fileName ? fileName.replace(/\.(xrk|xrz)$/i, '') : 'export';
+      const baseName = exportBaseName
+        ? sanitizeExportFilePart(exportBaseName)
+        : fileName
+          ? sanitizeExportFilePart(fileName.replace(/\.(xrk|xrz)$/i, ''))
+          : 'export';
       const a = document.createElement('a');
       a.href = url;
       a.download = `${baseName}_export.csv`;
@@ -147,7 +165,7 @@ export function ExportDialog({
     } finally {
       setIsExporting(false);
     }
-  }, [selectedIds, allChannels, fileName, onClose, useDisplayUnits, display]);
+  }, [selectedIds, allChannels, fileName, exportBaseName, onClose, sessionId, useDisplayUnits, display]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onClick={onClose}>

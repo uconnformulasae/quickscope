@@ -3,6 +3,8 @@
  * Communicates with the Python/libxrk backend
  */
 
+import { filenameFromContentDisposition } from './contentDisposition';
+
 // In packaged Electron builds, preload.js injects window.__QUICKSCOPE_BACKEND__.
 // In browser dev (`npm run dev`), fall back to the current hostname on port 8000.
 declare global {
@@ -539,4 +541,35 @@ export async function exportCSV(channels: string[], convert?: ExportConversions)
     throw new Error(`Export failed: ${res.status}`);
   }
   return res.blob();
+}
+
+export async function exportSessionCSV(
+  sessionId: string,
+  channels: string[],
+  convert?: ExportConversions,
+): Promise<Blob> {
+  const params = new URLSearchParams({ channels: channels.join(',') });
+  if (convert && Object.keys(convert).length > 0) params.set('convert', JSON.stringify(convert));
+  const res = await fetch(
+    `${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/export?${params.toString()}`,
+  );
+  if (!res.ok) {
+    throw new Error(`Export failed: ${res.status}`);
+  }
+  return res.blob();
+}
+
+export interface SessionFileDownload {
+  blob: Blob;
+  filename: string;
+}
+
+export async function fetchSessionFile(sessionId: string): Promise<SessionFileDownload> {
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/file`);
+  if (!res.ok) {
+    throw new Error(`Download failed: ${res.status}`);
+  }
+  const filename =
+    filenameFromContentDisposition(res.headers.get('Content-Disposition')) ?? 'session.xrk';
+  return { blob: await res.blob(), filename };
 }

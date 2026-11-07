@@ -1,21 +1,16 @@
 """Analysis routes — upload, channel data, laps, GPS, export, derived channels."""
 
 import asyncio
-import io
-import json
-import csv
 import math
 import os
-import re
 import time
 import uuid
 
 from fastapi import APIRouter, UploadFile, File, Query, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from sanitize import (
-    InvalidInput, MAX_UNIT_LEN, clean_text, csv_safe_cell, is_finite_number,
+    InvalidInput, clean_text, is_finite_number,
     validate_channel_payload,
 )
 from services import session_store, lap_detection, upload_log, gps_preview, derived_eval
@@ -287,120 +282,27 @@ async def export_csv(channels: str = Query(...), convert: str | None = Query(Non
     if not state.loaded:
         raise HTTPException(400, "No file loaded")
 
-    conversions: dict = {}
-    if convert:
-        try:
-            parsed = json.loads(convert)
-            if not isinstance(parsed, dict):
-                raise ValueError
-            for cname, spec in parsed.items():
-                unit = clean_text(str(spec["unit"]), max_len=MAX_UNIT_LEN, truncate=True)
-                scale, offset = float(spec["scale"]), float(spec.get("offset", 0.0))
-                if not (math.isfinite(scale) and math.isfinite(offset)):
-                    raise ValueError("non-finite conversion")
-                conversions[cname] = (unit, scale, offset)
-        except (ValueError, TypeError, KeyError, AttributeError):
-            raise HTTPException(400, "Malformed convert parameter")
+    from services.csv_export import parse_conversions, streaming_csv_response
+
+    try:
+        conversions = parse_conversions(convert)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     names = [n.strip() for n in channels.split(",") if n.strip()]
     if not names:
         raise HTTPException(400, "No channels specified")
 
-    ch_data = {}
-    for name in names:
-        if name in state.log.channels:
-            ch_data[name] = channel_data(name, state.log.channels[name], drop_gaps=True)
+    entry = session_store.get_session(state.session_id) if state.session_id else None
+    aim_session_id = entry.get("aim_session_id") if entry else None
 
-    if not ch_data:
-        raise HTTPException(400, "None of the specified channels found")
-
-    # Union of every channel's timestamps so no channel's span is cut off.
-    timebase = np.unique(np.concatenate([
-        np.asarray(cd["timestamps"], dtype=np.float64) for cd in ch_data.values()
-    ]))
-
-    units_map = {}
-    for name in ch_data:
-        if name in state.log.channels:
-            cm = channel_meta(name, state.log.channels[name])
-            units_map[name] = cm["units"]
-
-    # One vectorised pass per channel over the sorted timebase instead of a
-    # binary search per row per channel.
-    columns = [
-        _interp_on_timebase(cd["timestamps"], cd["values"], timebase)
-        for cd in ch_data.values()
-    ]
-    for idx, name in enumerate(ch_data):
-        if name in conversions:
-            unit, scale, offset = conversions[name]
-            columns[idx] = columns[idx] * scale + offset
-            units_map[name] = unit
-
-    def _csv_chunks():
-        """Yield the CSV a few thousand rows at a time so the whole file is
-        never held in memory (StreamingResponse runs this in a thread)."""
-        output = io.StringIO()
-        writer = csv.writer(output)
-        headers = ["Time (s)"]
-        for name in ch_data:
-            u = units_map.get(name, "")
-            headers.append(f"{name} ({u})" if u else name)
-        # Channel names and units come from the XRK file or the request; a
-        # leading "=" would run as a formula when the CSV is opened in Excel.
-        writer.writerow([csv_safe_cell(h) for h in headers])
-
-        for start in range(0, len(timebase), _EXPORT_CHUNK_ROWS):
-            stop = start + _EXPORT_CHUNK_ROWS
-            for i, ts in enumerate(timebase[start:stop].tolist(), start):
-                row = [f"{ts / 1000:.6f}"]
-                for col in columns:
-                    val = col[i]
-                    # Blank outside the channel's own span instead of repeating its end values.
-                    row.append(f"{val:.5f}" if val == val else "")
-                writer.writerow(row)
-            yield output.getvalue().encode("utf-8")
-            output.seek(0)
-            output.truncate(0)
-        tail = output.getvalue()
-        if tail:
-            yield tail.encode("utf-8")
-
-    basename = re.sub(r'[^\w\-.]', '_', (state.filename or "export").rsplit(".", 1)[0])
-
-    return StreamingResponse(
-        _csv_chunks(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{basename}_export.csv"'},
-    )
-
-
-_EXPORT_CHUNK_ROWS = 5000
-
-
-def _interp_on_timebase(timestamps, values, timebase):
-    """Linear interpolation of one channel onto ``timebase`` (sorted, ms).
-
-    Matches ``state.interpolate`` inside the channel's span; rows outside it
-    are NaN so the export leaves them blank.
-    """
-    ts = np.asarray(timestamps, dtype=np.float64)
-    vs = np.asarray(values, dtype=np.float64)
-    out = np.full(len(timebase), np.nan)
-    if len(ts) == 0:
-        return out
-    inside = (timebase >= ts[0]) & (timebase <= ts[-1])
-    if len(ts) == 1:
-        out[inside] = vs[0]
-        return out
-    t = timebase[inside]
-    hi = np.clip(np.searchsorted(ts, t, side="right"), 1, len(ts) - 1)
-    lo = hi - 1
-    dt = ts[hi] - ts[lo]
-    with np.errstate(invalid="ignore", divide="ignore"):
-        frac = np.where(dt > 0, (t - ts[lo]) / dt, 1.0)
-    out[inside] = vs[lo] + frac * (vs[hi] - vs[lo])
-    return out
+    try:
+        return streaming_csv_response(
+            state.log, state.filename, names, aim_session_id=aim_session_id,
+            conversions=conversions,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 # ─── Derived Channels ───────────────────────────────────────────────────────
