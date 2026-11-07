@@ -291,26 +291,16 @@ class Parser {
   }
 
   private parseMulDiv(): ASTNode {
-    let left = this.parsePow();
+    let left = this.parseUnary();
     while (this.peek().type === 'op' && (this.peek().value === '*' || this.peek().value === '/')) {
       const op = this.consume().value;
-      const right = this.parsePow();
+      const right = this.parseUnary();
       left = { kind: 'binop', op, left, right };
     }
     return left;
   }
 
-  /** Parse ^ as right-associative: a^b^c = a^(b^c) */
-  private parsePow(): ASTNode {
-    const base = this.parseUnary();
-    if (this.peek().type === 'op' && this.peek().value === '^') {
-      this.consume();
-      const exponent = this.parsePow(); // right-recursive for right-associativity
-      return { kind: 'binop', op: '^', left: base, right: exponent };
-    }
-    return base;
-  }
-
+  /** Unary +/- binds looser than ^, as in math and Python: -2^2 = -(2^2). */
   private parseUnary(): ASTNode {
     if (this.peek().type === 'op' && this.peek().value === '-') {
       this.consume();
@@ -320,7 +310,18 @@ class Parser {
       this.consume();
       return this.parseUnary();
     }
-    return this.parseAtom();
+    return this.parsePow();
+  }
+
+  /** Parse ^ as right-associative: a^b^c = a^(b^c). The exponent may carry a sign: 2^-1. */
+  private parsePow(): ASTNode {
+    const base = this.parseAtom();
+    if (this.peek().type === 'op' && this.peek().value === '^') {
+      this.consume();
+      const exponent = this.parseUnary();
+      return { kind: 'binop', op: '^', left: base, right: exponent };
+    }
+    return base;
   }
 
   private parseAtom(): ASTNode {
