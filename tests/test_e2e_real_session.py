@@ -134,12 +134,8 @@ def test_export_real_channels_roundtrip(loaded):
     assert all(len(r) == 3 for r in rows)
 
 
-def test_derived_channel_over_real_data_end_to_end(loaded, monkeypatch):
+def test_derived_channel_over_real_data_end_to_end(loaded):
     """Fetch two real channels, then evaluate a derived formula over them."""
-    import signal
-
-    monkeypatch.setattr(signal, "signal", lambda *a, **k: None)
-    monkeypatch.setattr(signal, "alarm", lambda *a, **k: 0)
     c, _ = loaded
     data = c.get("/api/data", params={"channels": "RPM"}).json()
     res = c.post(

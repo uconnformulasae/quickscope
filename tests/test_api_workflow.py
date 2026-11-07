@@ -445,20 +445,6 @@ def test_session_export_errors(client_with_synthetic_log):
 
 # ─── Derived channels ────────────────────────────────────────────────────────
 
-@pytest.fixture
-def no_sigalrm(monkeypatch):
-    """The derived-channel timeout uses SIGALRM, which only works on the main thread.
-
-    Starlette's TestClient serves requests from a worker thread, so in-process
-    tests stub the alarm out. The real timeout is exercised against a live
-    uvicorn process in test_e2e_process.py.
-    """
-    import signal
-
-    monkeypatch.setattr(signal, "signal", lambda *a, **k: None)
-    monkeypatch.setattr(signal, "alarm", lambda *a, **k: 0)
-
-
 SERIES = {"A": {"timestamps": [0, 1000, 2000], "values": [1.0, 2.0, 3.0]}}
 
 
@@ -469,7 +455,7 @@ def evaluate(c: TestClient, expression: str, channels: dict | None = None):
     )
 
 
-def test_derived_scales_channel(client_with_synthetic_log, no_sigalrm):
+def test_derived_scales_channel(client_with_synthetic_log):
     res = evaluate(
         client_with_synthetic_log,
         "a = channels['A']\n"
@@ -479,7 +465,20 @@ def test_derived_scales_channel(client_with_synthetic_log, no_sigalrm):
     assert res.json() == {"timestamps": [0, 1000, 2000], "values": [2.0, 4.0, 6.0]}
 
 
-def test_derived_can_use_numpy_math_and_interpolate(client_with_synthetic_log, no_sigalrm):
+def test_derived_helper_function_can_read_top_level_variables(client_with_synthetic_log):
+    res = evaluate(
+        client_with_synthetic_log,
+        "a = channels['A']\n"
+        "gain = 3\n"
+        "def scale(v):\n"
+        "    return v * gain\n"
+        "result = {'timestamps': a['timestamps'], 'values': [scale(v) for v in a['values']]}",
+    )
+    assert res.status_code == 200
+    assert res.json()["values"] == [3.0, 6.0, 9.0]
+
+
+def test_derived_can_use_numpy_math_and_interpolate(client_with_synthetic_log):
     res = evaluate(
         client_with_synthetic_log,
         "a = channels['A']\n"
@@ -506,13 +505,13 @@ def test_derived_can_use_numpy_math_and_interpolate(client_with_synthetic_log, n
         ("__import__('os')", "not allowed"),
     ],
 )
-def test_derived_rejects_bad_scripts(client_with_synthetic_log, expression, fragment, no_sigalrm):
+def test_derived_rejects_bad_scripts(client_with_synthetic_log, expression, fragment):
     res = evaluate(client_with_synthetic_log, expression)
     assert res.status_code == 400
     assert fragment in res.json()["detail"]
 
 
-def test_derived_rejects_oversized_expression(client_with_synthetic_log, no_sigalrm):
+def test_derived_rejects_oversized_expression(client_with_synthetic_log):
     res = evaluate(client_with_synthetic_log, "x" * 50_001)
     assert res.status_code == 400
     assert "too long" in res.json()["detail"]

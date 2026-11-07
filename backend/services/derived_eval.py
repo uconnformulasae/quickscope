@@ -119,7 +119,7 @@ def run(expression: str, channels: dict, *, np, math_module, interpolate, timeou
         "interpolate": interpolate,
         "math": _safe_math(math_module),
     }
-    local_vars: dict = {}
+    injected = set(g)
 
     deadline = time.monotonic() + timeout
 
@@ -131,7 +131,9 @@ def run(expression: str, channels: dict, *, np, math_module, interpolate, timeou
     previous = sys.gettrace()
     sys.settrace(tracer)
     try:
-        exec(code, g, local_vars)
+        # One namespace: with separate locals, top-level names are invisible
+        # inside functions and generator expressions.
+        exec(code, g)
     finally:
         sys.settrace(previous)
-    return local_vars
+    return {name: value for name, value in g.items() if name not in injected}
