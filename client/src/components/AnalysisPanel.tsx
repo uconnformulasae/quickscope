@@ -149,7 +149,7 @@ export function AnalysisPanel({
           />
         )}
         {analysisTab === 'gps' && (
-          <GPSMapView cursorTime={cursorTime} lapMarkers={session.lapMarkers} selectedLaps={selectedLaps} />
+          <GPSMapView sessionKey={session.metadata} cursorTime={cursorTime} lapMarkers={session.lapMarkers} selectedLaps={selectedLaps} />
         )}
         </div>
       </div>

@@ -33,6 +33,8 @@ interface TrackData {
 }
 
 interface GPSMapViewProps {
+  /** Changes identity only when a different session is loaded (pass `session.metadata`); triggers a refetch. */
+  sessionKey: object;
   cursorTime?: number | null; // seconds (lap-relative in lap compare mode)
   lapMarkers?: LapMarker[];
   selectedLaps?: number[];
@@ -53,7 +55,7 @@ function nearestIndex(times: number[], tMs: number): number {
 const NO_LAPS: LapMarker[] = [];
 const NO_SELECTION: number[] = [];
 
-export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO_SELECTION }: GPSMapViewProps) {
+export function GPSMapView({ sessionKey, cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO_SELECTION }: GPSMapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.CircleMarker | null>(null);
@@ -93,7 +95,7 @@ export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO
       });
 
     return () => { cancelled = true; };
-  }, []);
+  }, [sessionKey]);
 
   // Initialize map when data is ready
   useEffect(() => {
