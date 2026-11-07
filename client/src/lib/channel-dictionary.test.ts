@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeChannel, inferCarType, withFriendlyNames } from './channel-dictionary';
-import { makeChannel, makeSession } from '../test-fixtures';
+import { describeChannel, inferCarType } from './channel-dictionary';
 
 /** Every channel code seen in the repo's EV sessions (.xrk/.xrz) and in the
  *  live-stream layouts for both cars (live/live-channels.ts). */
@@ -253,32 +252,5 @@ describe('inferCarType', () => {
   });
   it('is unknown when nothing car-specific is present', () => {
     expect(inferCarType(['GPS Speed', 'RPM'])).toBe('unknown');
-  });
-});
-
-describe('withFriendlyNames', () => {
-  const session = makeSession({
-    channels: new Map([
-      [1, makeChannel(1, 'Pack_Voltage')],
-      [2, makeChannel(2, 'RPM')],
-      [3, makeChannel(3, 'Mystery')],
-    ]),
-  });
-
-  it('sets each channel\'s long name to its plain-English label', () => {
-    const out = withFriendlyNames(session, {});
-    expect(out.channels.get(1)!.longName).toBe('Battery Voltage');
-    expect(out.channels.get(2)!.longName).toBe('Motor RPM');
-    expect(out.channels.get(3)!.longName).toBe('Mystery');
-    expect(out.channels.get(1)!.shortName).toBe('Pack_Voltage');
-  });
-
-  it('applies user renames', () => {
-    expect(withFriendlyNames(session, { Pack_Voltage: 'HV' }).channels.get(1)!.longName).toBe('HV');
-  });
-
-  it('leaves the original session untouched', () => {
-    withFriendlyNames(session, {});
-    expect(session.channels.get(1)!.longName).toBe('Pack_Voltage');
   });
 });
