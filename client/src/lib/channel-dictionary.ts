@@ -12,8 +12,6 @@
  * table keep working everywhere under their own name.
  */
 
-import type { ChannelDef, XRKSession } from './xrk-parser';
-
 export type CarType = 'ev' | 'ic' | 'unknown';
 
 export type ChannelCategory =
@@ -342,16 +340,4 @@ export function inferCarType(codes: Iterable<string>, vehicle?: string): CarType
   if (/(^|[^a-z])ev([^a-z]|$)/i.test(vehicle ?? '')) return 'ev';
   if (/(^|[^a-z])ic([^a-z]|$)/i.test(vehicle ?? '')) return 'ic';
   return 'unknown';
-}
-
-/** A copy of the session whose channels' `longName` is the plain-English
- *  label (with the user's renames), for display in channel lists. */
-export function withFriendlyNames(session: XRKSession, overrides: Record<string, string>): XRKSession {
-  const codes = Array.from(session.channels.values(), ch => ch.shortName);
-  const car = inferCarType(codes, session.metadata?.vehicle);
-  const channels = new Map<number, ChannelDef>();
-  for (const [idx, ch] of session.channels) {
-    channels.set(idx, { ...ch, longName: describeChannel(ch.shortName, car, overrides).label });
-  }
-  return { ...session, channels };
 }
