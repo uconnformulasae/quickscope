@@ -103,6 +103,30 @@ def test_reupload_same_filename_does_not_duplicate(client_with_synthetic_log):
     assert len(client_with_synthetic_log.get("/api/sessions").json()) == 1
 
 
+@pytest.mark.parametrize(
+    "bad_parse",
+    [
+        pytest.param(lambda *a, **k: (_ for _ in ()).throw(RuntimeError("corrupt")), id="parser-raises"),
+        pytest.param(lambda *a, **k: type("EmptyLog", (), {"channels": {}})(), id="no-channels"),
+    ],
+)
+def test_failed_reupload_keeps_existing_session_file(
+    client_with_synthetic_log, isolated_data_dir, monkeypatch, bad_parse
+):
+    c = client_with_synthetic_log
+    upload(c)
+    stored_file = isolated_data_dir / "sessions" / "run1.xrk"
+    assert stored_file.read_bytes() == b"bytes"
+
+    monkeypatch.setattr("routes.analysis.parse_file", bad_parse)
+    res = c.post("/api/upload", files={"file": ("run1.xrk", b"garbage", "application/octet-stream")})
+
+    assert res.status_code in (400, 500)
+    assert stored_file.read_bytes() == b"bytes"
+    assert [p.name for p in stored_file.parent.iterdir()] == ["run1.xrk"]
+    assert len(c.get("/api/sessions").json()) == 1
+
+
 @pytest.mark.parametrize("name", ["notes.txt", "run.csv", "run", "run.xrk.exe", ""])
 def test_upload_rejects_non_xrk_extensions(client_with_synthetic_log, name):
     res = client_with_synthetic_log.post(

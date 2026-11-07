@@ -87,7 +87,8 @@ async def upload_file(
 
     dest = session_store.session_file_path(filename)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp_dest = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
+    # Keep the real extension last: the AiM DLL may pick the format from it.
+    tmp_dest = dest.with_name(f".upload-{uuid.uuid4().hex}-{dest.name}")
     try:
         size = await _save_upload(file, tmp_dest)
     except _UploadTooLarge:
@@ -97,17 +98,18 @@ async def upload_file(
             status="upload_failed", error="file too large",
         )
         raise HTTPException(413, f"File is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
-    os.replace(tmp_dest, dest)
 
+    # Parse before replacing: a bad re-upload must not destroy the stored session file.
     try:
-        log = await asyncio.to_thread(parse_file, dest)
+        log = await asyncio.to_thread(parse_file, tmp_dest)
         # libxrk returns an empty log for bytes that aren't an XRK file instead of raising.
         if not log.channels:
             raise _NotAnXrkFile("file contains no channels")
+        os.replace(tmp_dest, dest)
         state.log = log
         state.filename = filename
     except Exception as exc:
-        dest.unlink(missing_ok=True)
+        tmp_dest.unlink(missing_ok=True)
         state.discard_pending()
         logger.exception("Failed to parse uploaded file")
         upload_log.record(
