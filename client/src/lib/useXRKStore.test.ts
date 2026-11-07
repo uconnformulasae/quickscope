@@ -74,6 +74,16 @@ describe('basic state', () => {
     expect(result.current.state.activeChannels).toEqual([]);
   });
 
+  it('clearActiveChannels deselects every channel but keeps derived definitions', () => {
+    const { result } = setup();
+    act(() => result.current.toggleChannel(1, '#f00'));
+    act(() => result.current.toggleChannel(2, '#0f0'));
+    const derivedBefore = result.current.state.derivedChannels;
+    act(() => result.current.clearActiveChannels());
+    expect(result.current.state.activeChannels).toEqual([]);
+    expect(result.current.state.derivedChannels).toBe(derivedBefore);
+  });
+
   it('setSession resets channels, derived channels and viewport', () => {
     const { result } = setup();
     act(() => result.current.toggleChannel(1, '#f00'));
@@ -319,5 +329,52 @@ describe('derived channels (python mode)', () => {
     await act(async () => { out = await result.current.previewDerivedChannel(pyDef); });
 
     expect(out).toBe('Failed to fetch');
+  });
+
+  it('toggles lap selection in selection order and resets it on session switch', () => {
+    const { result } = setup();
+    act(() => result.current.setSession(makeSession(), 'a.xrk'));
+    act(() => result.current.toggleLapSelected(1));
+    act(() => result.current.toggleLapSelected(0));
+    expect(result.current.state.selectedLaps).toEqual([1, 0]);
+    act(() => result.current.toggleLapSelected(1));
+    expect(result.current.state.selectedLaps).toEqual([0]);
+    act(() => result.current.setSelectedLaps([2, 3]));
+    expect(result.current.state.selectedLaps).toEqual([2, 3]);
+    act(() => result.current.setSession(makeSession(), 'b.xrk'));
+    expect(result.current.state.selectedLaps).toEqual([]);
+  });
+
+  it('clears the cursor when lap compare mode starts or ends', () => {
+    const { result } = setup();
+    act(() => result.current.setSession(makeSession(), 'a.xrk'));
+    act(() => result.current.setCursorTime(600));
+    act(() => result.current.toggleLapSelected(1));
+    expect(result.current.state.cursorTime).toBe(600); // one lap: still session time
+    act(() => result.current.toggleLapSelected(2));
+    expect(result.current.state.cursorTime).toBeNull(); // entered compare
+    act(() => result.current.setCursorTime(40));
+    act(() => result.current.setSelectedLaps([]));
+    expect(result.current.state.cursorTime).toBeNull(); // left compare
+    act(() => result.current.setSelectedLaps([]));
+    act(() => result.current.setCursorTime(5));
+    expect(result.current.state.cursorTime).toBe(5);
+  });
+
+  it('applySessionView restores channels, modes, tab, zoom and laps in one step', () => {
+    const { result } = setup();
+    act(() => result.current.setSession(makeSession(), 'a.xrk'));
+    act(() => result.current.applySessionView({
+      activeChannels: [{ channelId: 2, color: '#0f0' }, { channelId: 1, color: '#f00' }],
+      chartMode: 'overlay', viewMode: 'table', analysisTab: 'gps',
+      viewRange: { startMs: 100, endMs: 900 }, selectedLaps: [0, 1],
+    }));
+    const st = result.current.state;
+    expect(st.activeChannels).toEqual([{ channelId: 2, color: '#0f0' }, { channelId: 1, color: '#f00' }]);
+    expect(st.chartMode).toBe('overlay');
+    expect(st.viewMode).toBe('table');
+    expect(st.analysisTab).toBe('gps');
+    expect(st.viewRange).toEqual({ startMs: 100, endMs: 900 });
+    expect(st.selectedLaps).toEqual([0, 1]);
   });
 });

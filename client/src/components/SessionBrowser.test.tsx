@@ -198,14 +198,14 @@ describe('SessionBrowser', () => {
     const props = renderBrowser();
 
     expect(await screen.findByText('AiM (EVO5 Logger)')).toBeTruthy();
-    fireEvent.click(screen.getByText('Live'));
+    fireEvent.click(screen.getByText('Views'));
     expect(props.onOpenLive).toHaveBeenCalledWith(device);
   });
 
   it('opens Live without a device when AiM is unreachable', async () => {
     const props = renderBrowser();
     await screen.findByText('old.xrk');
-    fireEvent.click(screen.getByText('Live'));
+    fireEvent.click(screen.getByText('Views'));
     expect(props.onOpenLive).toHaveBeenCalledWith(null);
   });
 
@@ -222,7 +222,7 @@ describe('SessionBrowser', () => {
     routes['/api/aim/sessions'] = () => ({ ok: true, sessions: [] });
     renderBrowser();
     await screen.findByText('old.xrk');
-    fireEvent.click(screen.getByText('Pull from AiM'));
+    fireEvent.click(screen.getByText('Pull'));
     expect(screen.getByText('AiM Device Sessions')).toBeTruthy();
   });
 

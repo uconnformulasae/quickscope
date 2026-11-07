@@ -4,6 +4,7 @@ import type { XRKSession } from '../lib/xrk-parser';
 import { formatTime } from '../lib/xrk-parser';
 import { QuickScopeLogo } from './QuickScopeLogo';
 import { ThemeToggle } from './ThemeToggle';
+import { Presence } from '../lib/motion';
 
 interface SessionHeaderProps {
   session: XRKSession | null;
@@ -78,7 +79,7 @@ export function SessionHeader({
         {onBack && (
           <button
             onClick={onBack}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
             title="Back to sessions"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -86,7 +87,7 @@ export function SessionHeader({
         )}
         <button
           onClick={onToggleLeft}
-          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
           title={leftOpen ? 'Hide channels' : 'Show channels'}
         >
           {leftOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
@@ -96,12 +97,19 @@ export function SessionHeader({
 
       {/* Chart / Table segmented toggle */}
       {session && (
-        <div className="flex items-center bg-muted rounded-md p-0.5 border border-border/50">
+        <div className="relative grid grid-cols-2 bg-muted rounded-md p-0.5 border border-border/50">
+          {/* Sliding highlight; retargets mid-slide when toggled quickly. */}
+          <span
+            aria-hidden
+            data-seg-thumb
+            className="qs-indicator absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded bg-primary shadow-sm"
+            style={{ transform: viewMode === 'table' ? 'translateX(100%)' : 'translateX(0)' }}
+          />
           <button
             onClick={() => onViewModeChange('chart')}
-            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+            className={`relative z-10 px-2.5 py-1 rounded text-xs font-medium text-center transition-colors ${
               viewMode === 'chart'
-                ? 'bg-primary text-white'
+                ? 'text-white'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -109,9 +117,9 @@ export function SessionHeader({
           </button>
           <button
             onClick={() => onViewModeChange('table')}
-            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+            className={`relative z-10 px-2.5 py-1 rounded text-xs font-medium text-center transition-colors ${
               viewMode === 'table'
-                ? 'bg-primary text-white'
+                ? 'text-white'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -122,15 +130,16 @@ export function SessionHeader({
 
       {/* File name */}
       {fileName && (
-        <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 bg-muted/30 rounded-md">
-          <Activity className="w-3 h-3 text-primary" />
-          <span className="text-xs text-muted-foreground font-medium truncate max-w-[160px]">{fileName}</span>
+        // The file is this window's title: plain, foreground, no container.
+        <div className="hidden sm:flex items-center gap-1.5 min-w-0">
+          <Activity className="w-3.5 h-3.5 text-primary-text flex-shrink-0" />
+          <span className="text-[13px] text-foreground font-semibold truncate max-w-[200px]">{fileName}</span>
         </div>
       )}
 
       {/* Session metadata pills */}
       {metadata && (
-        <div className="flex items-center gap-2 overflow-hidden min-w-0">
+        <div className="flex items-center gap-3.5 overflow-hidden min-w-0">
           <MetaPill icon={<Car className="w-3 h-3" />} value={metadata.vehicle} />
           <MetaPill icon={<User className="w-3 h-3" />} value={metadata.driver} />
           <MetaPill icon={<Calendar className="w-3 h-3" />} value={metadata.date} />
@@ -149,7 +158,7 @@ export function SessionHeader({
       {/* Right controls */}
       <div className="flex items-center gap-1 ml-auto flex-shrink-0">
         {session && (
-          <div className="hidden md:flex items-center gap-1 px-2 py-1 bg-muted/20 rounded text-xs text-muted-foreground">
+          <div className="hidden md:flex items-center gap-1 px-2 text-xs text-muted-foreground">
             <span className="tabular">{totalSamples.toLocaleString()}</span>
             <span>samples</span>
           </div>
@@ -159,12 +168,13 @@ export function SessionHeader({
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setMenuOpen(!menuOpen)}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
             title="Menu"
           >
             <MoreVertical className="w-4 h-4" />
           </button>
-          {menuOpen && (
+          <Presence show={menuOpen}>
+            {menuOpen && (
             <>
               <div
                 className="fixed inset-0 z-[1090]"
@@ -173,7 +183,7 @@ export function SessionHeader({
               />
               <div
                 role="menu"
-                className="absolute right-0 top-full mt-1 w-40 bg-card border border-border rounded-md shadow-xl z-[1100] py-1"
+                className="qs-menu qs-origin-tr absolute right-0 top-full mt-1 w-40 bg-card border border-border rounded-md shadow-xl z-[1100] py-1"
               >
               <button
                 onClick={() => { handleLoadClick(); setMenuOpen(false); }}
@@ -202,7 +212,8 @@ export function SessionHeader({
               )}
               </div>
             </>
-          )}
+            )}
+          </Presence>
         </div>
 
         {/* Hidden file input */}
@@ -219,7 +230,7 @@ export function SessionHeader({
 
         <button
           onClick={onToggleRight}
-          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
           title={rightOpen ? 'Hide analysis' : 'Show analysis'}
         >
           {rightOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
@@ -234,9 +245,9 @@ function MetaPill({ icon, value, label }: { icon: React.ReactNode; value: string
   return (
     <div
       title={label}
-      className="hidden lg:flex items-center gap-1 px-1.5 py-0.5 bg-muted border border-border/40 rounded text-xs text-foreground/70 whitespace-nowrap"
+      className="hidden lg:flex items-center gap-1.5 text-xs text-muted-foreground whitespace-nowrap"
     >
-      <span className="text-primary">{icon}</span>
+      <span className="opacity-80">{icon}</span>
       <span>{value}</span>
     </div>
   );

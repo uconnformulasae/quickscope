@@ -4,15 +4,41 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import math
 from typing import Iterable
 
 import numpy as np
 from fastapi.responses import StreamingResponse
 
+from sanitize import MAX_UNIT_LEN, clean_text, csv_safe_cell
 from state import channel_data, channel_meta
 from services.xrk_export import quickscope_export_basename
 
 _EXPORT_CHUNK_ROWS = 5000
+
+
+def parse_conversions(convert: str | None) -> dict[str, tuple[str, float, float]]:
+    """Parse the ``convert`` query param: JSON ``{name: {"unit", "scale", "offset"}}``.
+
+    Raises ``ValueError`` when it is malformed.
+    """
+    conversions: dict[str, tuple[str, float, float]] = {}
+    if not convert:
+        return conversions
+    try:
+        parsed = json.loads(convert)
+        if not isinstance(parsed, dict):
+            raise ValueError
+        for cname, spec in parsed.items():
+            unit = clean_text(str(spec["unit"]), max_len=MAX_UNIT_LEN, truncate=True)
+            scale, offset = float(spec["scale"]), float(spec.get("offset", 0.0))
+            if not (math.isfinite(scale) and math.isfinite(offset)):
+                raise ValueError("non-finite conversion")
+            conversions[cname] = (unit, scale, offset)
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise ValueError("Malformed convert parameter") from exc
+    return conversions
 
 
 def _interp_on_timebase(timestamps, values, timebase):
@@ -41,8 +67,13 @@ def streaming_csv_response(
     filename: str | None,
     channel_names: Iterable[str],
     aim_session_id: str | None = None,
+    conversions: dict[str, tuple[str, float, float]] | None = None,
 ) -> StreamingResponse:
-    """Build a streaming CSV download for ``channel_names`` from a parsed log."""
+    """Build a streaming CSV download for ``channel_names`` from a parsed log.
+
+    ``conversions`` maps channel name -> ``(unit, scale, offset)``; matching
+    columns are written as ``value * scale + offset`` under ``unit``.
+    """
     names = [n.strip() for n in channel_names if n and n.strip()]
     ch_data = {}
     for name in names:
@@ -66,6 +97,11 @@ def streaming_csv_response(
         _interp_on_timebase(cd["timestamps"], cd["values"], timebase)
         for cd in ch_data.values()
     ]
+    for idx, name in enumerate(ch_data):
+        if conversions and name in conversions:
+            unit, scale, offset = conversions[name]
+            columns[idx] = columns[idx] * scale + offset
+            units_map[name] = unit
 
     def _csv_chunks():
         output = io.StringIO()
@@ -74,7 +110,9 @@ def streaming_csv_response(
         for name in ch_data:
             u = units_map.get(name, "")
             headers.append(f"{name} ({u})" if u else name)
-        writer.writerow(headers)
+        # Channel names and units come from the XRK file or the request; a
+        # leading "=" would run as a formula when the CSV is opened in Excel.
+        writer.writerow([csv_safe_cell(h) for h in headers])
 
         for start in range(0, len(timebase), _EXPORT_CHUNK_ROWS):
             stop = start + _EXPORT_CHUNK_ROWS

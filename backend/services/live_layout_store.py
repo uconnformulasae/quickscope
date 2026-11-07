@@ -13,6 +13,8 @@ import threading
 import time
 from pathlib import Path
 
+from sanitize import MAX_LAYOUT_NAME_LEN, InvalidInput, clean_text, is_valid_layout_id, validate_layout_id
+
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
 LAYOUTS_FILE = DATA_DIR / "live_layouts.json"
@@ -82,12 +84,18 @@ def load() -> dict:
 def _check_layout(layout_id: str, layout: object) -> dict:
     if not isinstance(layout, dict):
         raise LayoutError("Layout must be a JSON object")
+    try:
+        validate_layout_id(layout_id)
+        name = clean_text(layout.get("name"), max_len=MAX_LAYOUT_NAME_LEN, field="Layout name")
+    except InvalidInput as exc:
+        raise LayoutError(str(exc)) from None
     if layout.get("id") != layout_id:
         raise LayoutError("Layout id does not match the URL")
     if layout_id.startswith("builtin-"):
         raise LayoutError("Built-in layouts can't be overwritten; save a copy instead")
-    if not isinstance(layout.get("name"), str) or not layout["name"].strip():
+    if not name:
         raise LayoutError("Layout needs a name")
+    layout = {**layout, "name": name}
     if layout.get("vehicle") not in VEHICLES:
         raise LayoutError('Layout vehicle must be "ev" or "ic"')
     if not isinstance(layout.get("widgets"), list):
@@ -136,10 +144,10 @@ def update_selection(partial: dict) -> dict:
         sel = data["selection"]
         if isinstance(partial.get("active"), dict):
             sel["active"] = {
-                k: v for k, v in partial["active"].items() if k in VEHICLES and isinstance(v, str)
+                k: v for k, v in partial["active"].items() if k in VEHICLES and is_valid_layout_id(v)
             }
         for key in ("pinned", "last_used"):
-            if key in partial and (partial[key] is None or isinstance(partial[key], str)):
+            if key in partial and (partial[key] is None or is_valid_layout_id(partial[key])):
                 sel[key] = partial[key]
         _save_unlocked(data)
         return sel

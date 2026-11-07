@@ -91,10 +91,12 @@ const MIN_TILE_PX: Record<StatStyle, number> = { big: 140, tile: 110, compact: 7
 
 // `columns` is a maximum: tiles still wrap once they'd shrink below `minPx`,
 // so a fixed 8-across strip doesn't crush itself on a narrow window.
-function gridStyle(columns: number | undefined, minPx: number): React.CSSProperties {
+export function gridStyle(columns: number | undefined, minPx: number): React.CSSProperties {
+  // min(100%, …): a lone tile in a panel narrower than minPx shrinks to the
+  // panel instead of overflowing (and being cut off on the right).
   const track = columns
-    ? `max(${minPx}px, calc((100% - ${(columns - 1) * 0.5}rem) / ${columns}))`
-    : `${minPx}px`;
+    ? `min(100%, max(${minPx}px, calc((100% - ${(columns - 1) * 0.5}rem) / ${columns})))`
+    : `min(100%, ${minPx}px)`;
   return {
     display: 'grid',
     gap: '0.5rem',
@@ -138,7 +140,7 @@ export function WidgetRenderer({
   };
   const label = (ref: ChannelRef) => ref.label || ref.name || ref.expr || '—';
   const note = widget.note && widget.type !== 'note' && (
-    <p className="mt-2 text-[10px] text-muted-foreground/70 leading-snug whitespace-pre-wrap">{widget.note}</p>
+    <p className="mt-2 text-[10px] text-muted-foreground leading-snug whitespace-pre-wrap">{widget.note}</p>
   );
   // With a snapshot in hand but nothing for any of this widget's channels,
   // the source isn't transmitting (e.g. ECU unpowered) — say so instead of a wall of dashes.
@@ -208,7 +210,7 @@ export function WidgetRenderer({
     case 'otherChannels': {
       const entries = otherChannelEntries(ch, usedChannels);
       body = entries.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground/60">
+        <p className="text-[11px] text-muted-foreground">
           {latest
             ? 'Every channel in this snapshot is already on the dashboard.'
             : 'Channels the car sends that no other widget shows will appear here.'}
@@ -224,10 +226,10 @@ export function WidgetRenderer({
                 {...clickableProps(onClick)}
                 className={`rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5 ${onClick ? CLICKABLE : ''}`}
               >
-                <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={name}>{name}</p>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground truncate" title={name}>{name}</p>
                 <p className="text-sm font-semibold tabular mt-0.5 text-foreground">
                   {displayValue(ref, val)}
-                  {unit(ref) && <span className={`text-[9px] font-normal ml-1 ${unitTone(unitChanged)}`}>{unit(ref)}</span>}
+                  {unit(ref) && <span className={`text-[10px] font-normal ml-1 ${unitTone(unitChanged)}`}>{unit(ref)}</span>}
                 </p>
               </div>
             );
@@ -260,7 +262,7 @@ export function WidgetRenderer({
   }
 
   return (
-    <Panel title={widget.title} tone={widget.emphasis ? 'primary' : undefined} rightSlot={rightSlot} className="h-full">
+    <Panel title={widget.title} tone={widget.emphasis ? 'primary' : undefined} rightSlot={rightSlot} className="h-full" fill={widget.type === 'gForce'}>
       {body}
       {note}
     </Panel>

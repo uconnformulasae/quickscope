@@ -10,6 +10,7 @@ import { useLiveLayouts } from './live/useLiveLayouts';
 import { useUnitOverrides } from './live/useUnitOverrides';
 import { LiveDashboard } from './live/LiveDashboard';
 import { WidgetConfigDialog } from './live/WidgetConfigDialog';
+import { Presence } from '../lib/motion';
 import { type ChannelSources } from './live/ChannelPicker';
 import { BUILTIN_ID, GRID_COLS, cloneLayout, newId, type LiveLayout, type WidgetConfig } from './live/layout-schema';
 
@@ -53,7 +54,7 @@ function downloadLayout(layout: LiveLayout) {
 
 const BTN = 'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors disabled:opacity-50';
 const BTN_MUTED = `${BTN} bg-muted/50 text-foreground hover:bg-muted`;
-const BTN_PRIMARY = `${BTN} bg-primary/10 text-primary hover:bg-primary/20`;
+const BTN_PRIMARY = `${BTN} bg-primary/10 text-primary-text hover:bg-primary/20`;
 
 export function LiveView({ onBack, aimDevice = null }: Props) {
   const {
@@ -180,7 +181,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
       {/* Header — mirrors SessionBrowser */}
-      <header className="flex items-center gap-3 px-4 h-12 border-b border-border bg-card flex-shrink-0">
+      <header className="flex items-center gap-3 px-4 h-14 border-b border-border bg-card flex-shrink-0">
         <button
           onClick={handleBack}
           className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
@@ -188,8 +189,8 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
         >
           <ArrowLeft className="w-4 h-4" />
         </button>
-        <Activity className="w-4 h-4 text-primary" />
-        <h1 className="text-sm font-semibold">Live data</h1>
+        <Activity className="w-4 h-4 text-primary-text" />
+        <h1 className="text-sm font-semibold">Views</h1>
 
         <div className="flex-1" />
 
@@ -197,9 +198,9 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
         {device && (
           <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
             <span className="font-mono">AiM {device.model}</span>
-            {device.serial && <span className="text-muted-foreground/50">·</span>}
+            {device.serial && <span className="text-muted-foreground">·</span>}
             {device.serial && <span className="font-mono">{device.serial}</span>}
-            {device.vehicle && <span className="text-muted-foreground/50">·</span>}
+            {device.vehicle && <span className="text-muted-foreground">·</span>}
             {device.vehicle && <span>{device.vehicle}</span>}
           </div>
         )}
@@ -207,37 +208,37 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
         {/* Status indicator — always shows something, so the dashboard can stay up offline */}
         <div className="flex items-center gap-1.5 text-xs">
           {status === 'streaming' && reconnecting && (
-            <span className="flex items-center gap-1.5 text-amber-500 dark:text-amber-400">
+            <span className="qs-fade-in flex items-center gap-1.5 text-amber-500 dark:text-amber-400">
               <Loader2 className="w-3 h-3 animate-spin" />
               Reconnecting to logger…
             </span>
           )}
           {status === 'streaming' && !reconnecting && (
-            <span className="flex items-center gap-1.5 text-emerald-500 dark:text-emerald-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse" />
+            <span className="qs-fade-in flex items-center gap-1.5 text-emerald-500 dark:text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 qs-breathe" />
               Streaming
             </span>
           )}
           {status === 'paused' && (
-            <span className="flex items-center gap-1.5 text-amber-500 dark:text-amber-400">
+            <span className="qs-fade-in flex items-center gap-1.5 text-amber-500 dark:text-amber-400">
               <Pause className="w-3 h-3" />
               Paused
             </span>
           )}
           {status === 'connecting' && (
-            <span className="flex items-center gap-1.5 text-muted-foreground">
+            <span className="qs-fade-in flex items-center gap-1.5 text-muted-foreground">
               <Loader2 className="w-3 h-3 animate-spin" />
               Connecting
             </span>
           )}
           {status === 'idle' && (
-            <span className="flex items-center gap-1.5 text-muted-foreground">
+            <span className="qs-fade-in flex items-center gap-1.5 text-muted-foreground">
               <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60" />
               Disconnected
             </span>
           )}
           {status === 'error' && (
-            <span className="flex items-center gap-1.5 text-red-500 dark:text-red-400">
+            <span className="qs-fade-in flex items-center gap-1.5 text-red-500 dark:text-red-400">
               <span className="w-1.5 h-1.5 rounded-full bg-red-500 dark:bg-red-400" />
               Not connected
             </span>
@@ -268,34 +269,35 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
           </>
         )}
 
-        <div className="w-px h-5 bg-border mx-1 hidden sm:block" />
+        {/* Divider only when stream controls precede it (none while connecting) */}
+        {(isLive || status !== 'connecting') && <div className="w-px h-5 bg-border mx-1 hidden sm:block" />}
 
         {draft ? (
           <>
             <input
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              className="px-2 py-1.5 w-48 bg-background border border-border rounded-md text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              className="qs-fade-in px-2 py-1.5 w-48 bg-background border border-border rounded-md text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               placeholder="Layout name"
               aria-label="Layout name"
             />
             <select
               value={draft.vehicle}
               onChange={(e) => setDraft({ ...draft, vehicle: e.target.value as VehicleKind })}
-              className="px-2 py-1.5 bg-background border border-border rounded-md text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              className="qs-fade-in px-2 py-1.5 bg-background border border-border rounded-md text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               title="Which car this layout is for — used to auto-pick it on connect"
               aria-label="Vehicle"
             >
               <option value="ev">EV</option>
               <option value="ic">IC</option>
             </select>
-            <button onClick={addWidget} className={BTN_PRIMARY}>
+            <button onClick={addWidget} className={`${BTN_PRIMARY} qs-fade-in`}>
               <Plus className="w-3.5 h-3.5" /> Add widget
             </button>
-            <button onClick={cancelEdit} className={BTN_MUTED}>
+            <button onClick={cancelEdit} className={`${BTN_MUTED} qs-fade-in`}>
               <X className="w-3.5 h-3.5" /> Cancel
             </button>
-            <button onClick={saveDraft} className={`${BTN} bg-primary text-primary-foreground hover:bg-primary/90`}>
+            <button onClick={saveDraft} className={`${BTN} qs-fade-in bg-primary text-primary-foreground hover:bg-primary/90`}>
               <Save className="w-3.5 h-3.5" /> Save
             </button>
           </>
@@ -319,7 +321,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
             <button
               onClick={layouts.togglePin}
               className={`p-1.5 rounded-md transition-colors ${
-                layouts.pinned ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                layouts.pinned ? 'bg-primary/15 text-primary-text' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
               }`}
               title={layouts.pinned
                 ? 'Pinned: connecting to a car keeps this layout. Click to unpin.'
@@ -340,10 +342,11 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
               >
                 <MoreHorizontal className="w-4 h-4" />
               </button>
-              {menuOpen && (
+              <Presence show={menuOpen}>
+                {menuOpen && (
                 <>
-                  <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
-                  <div role="menu" className="absolute left-0 top-full mt-1 z-50 w-44 py-1 rounded-md border border-border bg-card shadow-xl text-xs">
+                  <div className="qs-menu-catcher fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                  <div role="menu" className="qs-menu qs-origin-tl absolute left-0 top-full mt-1 z-50 w-44 py-1 rounded-md border border-border bg-card shadow-xl text-xs">
                     <MenuItem icon={Copy} label="Duplicate" onClick={() => { setMenuOpen(false); layouts.duplicate(layouts.current.id); }} />
                     <MenuItem icon={Download} label="Export to file" onClick={() => { setMenuOpen(false); downloadLayout(layouts.current); }} />
                     <MenuItem icon={Upload} label="Import from file…" onClick={() => { setMenuOpen(false); fileInput.current?.click(); }} />
@@ -360,7 +363,8 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
                     )}
                   </div>
                 </>
-              )}
+                )}
+              </Presence>
             </div>
             <input
               ref={fileInput}
@@ -451,7 +455,8 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
         </div>
       </main>
 
-      {editingWidget && sources && draft && (
+      <Presence show={!!(editingWidget && sources && draft)}>
+        {editingWidget && sources && draft && (
         <WidgetConfigDialog
           key={editingWidget.id}
           widget={editingWidget}
@@ -462,7 +467,8 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
             setEditingWidgetId(null);
           }}
         />
-      )}
+        )}
+      </Presence>
     </div>
   );
 }
@@ -490,7 +496,7 @@ function MenuItem({ icon: Icon, label, onClick, danger }: {
 const BANNER_TONE = {
   red: 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400',
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
-  primary: 'border-primary/30 bg-primary/10 text-primary',
+  primary: 'border-primary/30 bg-primary/10 text-primary-text',
   muted: 'border-border bg-card/60 text-muted-foreground',
 } as const;
 
@@ -501,7 +507,7 @@ function Banner({ tone, icon, children, onDismiss }: {
   onDismiss?: () => void;
 }) {
   return (
-    <div className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs ${BANNER_TONE[tone]}`}>
+    <div className={`qs-slide-down flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs ${BANNER_TONE[tone]}`}>
       <span className="flex-shrink-0">{icon}</span>
       <div className="flex-1 min-w-0">{children}</div>
       {onDismiss && (

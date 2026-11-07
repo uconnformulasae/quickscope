@@ -58,6 +58,8 @@ export interface GPSData {
   lat: number[];
   lon: number[];
   speed: number[] | null;
+  /** Units of the speed channel ('' when unknown / no speed channel). */
+  speedUnits?: string;
 }
 
 export interface LocalSession {
@@ -116,7 +118,7 @@ export async function listSessions(): Promise<LocalSession[]> {
 }
 
 export async function loadSession(sessionId: string): Promise<SessionInfo> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/load`, { method: 'POST' });
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/load`, { method: 'POST' });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || `Load failed: ${res.status}`);
@@ -125,7 +127,7 @@ export async function loadSession(sessionId: string): Promise<SessionInfo> {
 }
 
 export async function renameSession(sessionId: string, filename: string): Promise<LocalSession> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/rename`, {
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/rename`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ filename }),
@@ -138,7 +140,7 @@ export async function renameSession(sessionId: string, filename: string): Promis
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`, { method: 'DELETE' });
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
@@ -241,7 +243,10 @@ export async function updateSettings(settings: Partial<Settings>): Promise<Setti
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   });
-  if (!res.ok) throw new Error(`Failed to update settings: ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(typeof err.detail === 'string' ? err.detail : `Failed to update settings: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -408,7 +413,7 @@ export interface GPSPreview {
 }
 
 export async function fetchGPSPreview(sessionId: string): Promise<GPSPreview | null> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/gps-preview`);
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/gps-preview`);
   if (!res.ok) {
     if (res.status === 404) return null;
     throw new Error(`Failed to fetch GPS preview: ${res.status}`);
@@ -525,19 +530,28 @@ export async function fetchLiveChannels(vehicle: 'ev' | 'ic'): Promise<LiveChann
   return res.json();
 }
 
-export async function exportCSV(channels: string[]): Promise<Blob> {
-  const res = await fetch(
-    `${API_BASE}/api/export?channels=${encodeURIComponent(channels.join(','))}`,
-  );
+/** Per-channel display-unit conversion for the CSV: value * scale + offset. */
+export type ExportConversions = Record<string, { unit: string; scale: number; offset: number }>;
+
+export async function exportCSV(channels: string[], convert?: ExportConversions): Promise<Blob> {
+  const params = new URLSearchParams({ channels: channels.join(',') });
+  if (convert && Object.keys(convert).length > 0) params.set('convert', JSON.stringify(convert));
+  const res = await fetch(`${API_BASE}/api/export?${params.toString()}`);
   if (!res.ok) {
     throw new Error(`Export failed: ${res.status}`);
   }
   return res.blob();
 }
 
-export async function exportSessionCSV(sessionId: string, channels: string[]): Promise<Blob> {
+export async function exportSessionCSV(
+  sessionId: string,
+  channels: string[],
+  convert?: ExportConversions,
+): Promise<Blob> {
+  const params = new URLSearchParams({ channels: channels.join(',') });
+  if (convert && Object.keys(convert).length > 0) params.set('convert', JSON.stringify(convert));
   const res = await fetch(
-    `${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/export?channels=${encodeURIComponent(channels.join(','))}`,
+    `${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/export?${params.toString()}`,
   );
   if (!res.ok) {
     throw new Error(`Export failed: ${res.status}`);

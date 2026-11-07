@@ -1,17 +1,28 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { formatChartElapsed } from '../lib/time-format';
 import type { ChannelSample } from '../lib/xrk-parser';
-import { RotateCcw, ImageDown } from 'lucide-react';
+import { RotateCcw, ImageDown, X } from 'lucide-react';
 import {
   type TelemetryChartProps, type StripLayout, type DrawContext,
   LEFT_MARGIN, RIGHT_MARGIN, BOTTOM_AXIS_HEIGHT, MIN_STRIP_HEIGHT, AXIS_WIDTH,
   DEBOUNCE_MS,
   clamp, niceAxisTicks, getChartColors, toDarkChartColor,
 } from '../lib/chart-utils';
-import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawXAxis } from '../lib/chart-draw';
-import { drawCursors } from '../lib/chart-cursors';
+import { computeOverlayYRanges, drawStrips, drawOverlayLegend, drawCompareLegend, drawXAxis, overlayLegendHeight } from '../lib/chart-draw';
+import { computeDelta, drawCursors, hitTestCursor } from '../lib/chart-cursors';
+import { DeltaReadout } from './DeltaReadout';
 import type { ChartExportSpec } from '../lib/chart-export';
 import { ImageExportDialog } from './ImageExportDialog';
+import { Presence } from '../lib/motion';
+import { usePreferences } from '../lib/usePreferences';
+import { convertibleUnits, resolveDisplayUnit } from '../lib/units';
+import { ChartUnitMenu } from './ChartUnitMenu';
+import { useDisplaySamples } from '../lib/useDisplaySamples';
+import { buildLapWindows, selectedWindows, shiftToLap, lapColor } from '../lib/lap-compare';
+import { formatLapTime } from '../lib/xrk-parser';
+
+/** Grab distance (px) for dragging a delta cursor. */
+const CURSOR_HIT_PX = 6;
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -26,13 +37,22 @@ export function TelemetryChart({
   onCursorTimeChange,
   chartMode = 'separate',
   fileName = null,
+  selectedLaps,
+  onClearLapSelection,
 }: TelemetryChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const { prefs, update: updatePrefs } = usePreferences();
+  const fontScale = prefs.uiScale;
+  const display = useDisplaySamples();
   const containerRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
-  const [canScroll, setCanScroll] = useState(false); // separate mode with more strips than fit
+  // Both delta cursors (seconds), mirrored from the refs for the docked readout.
+  const [deltaCursors, setDeltaCursors] = useState<{ a: number; b: number } | null>(null);
   const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
   const [imageExportSpec, setImageExportSpec] = useState<ChartExportSpec | null>(null);
+  // Unit menu opened from a strip label / overlay axis: channels + position (canvas px).
+  const [unitMenu, setUnitMenu] = useState<{ channelIds: number[]; x: number; y: number } | null>(null);
 
   // ─── Refs for transient state (no React re-renders) ─────────────────────
   const cursorEmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -42,6 +62,7 @@ export function TelemetryChart({
   const cursor2XRef = useRef<number | null>(null); // seconds (placed cursor B, delta mode)
   const hoverXRef = useRef<number | null>(null); // seconds (live mouse position, always tracks)
   const isDraggingRef = useRef(false);
+  const dragCursorRef = useRef<'A' | 'B' | null>(null); // delta cursor being dragged
   const dragStartRef = useRef<{ mouseX: number; xRange: [number, number] } | null>(null);
   const canvasSizeRef = useRef({ w: 0, h: 0 });
   const rafIdRef = useRef<number>(0);
@@ -77,31 +98,65 @@ export function TelemetryChart({
   // ─── Derived data ───────────────────────────────────────────────────────
   const visibleChannels = activeChannels;
 
-  const sessionDuration = session.durationMs / 1000; // seconds
+  // Lap compare mode: 2+ selected laps, x = lap-relative time.
+  const lapWindows = useMemo(() => buildLapWindows(session.lapMarkers), [session.lapMarkers]);
+  const compareLaps = useMemo(() => {
+    const sel = selectedWindows(lapWindows, selectedLaps ?? []);
+    return sel.length >= 2 ? sel : null;
+  }, [lapWindows, selectedLaps]);
+  const compareRef = useRef(false);
+  compareRef.current = compareLaps !== null;
+
+  // Timeline length in seconds: the session, or the longest compared lap.
+  const sessionDuration = compareLaps
+    ? Math.max(...compareLaps.map(l => l.durationMs)) / 1000
+    : session.durationMs / 1000;
 
   // Resolve channels: get definition + all samples for each visible channel
-  const channelDataMap = useMemo(() => {
+  const baseChannelDataMap = useMemo(() => {
     const map = new Map<number, { def: { shortName: string; units: string; color: string }; allSamples: ChannelSample[] }>();
     for (const ac of visibleChannels) {
       const sessionChan = session.channels.get(ac.channelId);
       if (sessionChan) {
+        const d = display(ac.channelId, sessionChan.shortName, sessionChan.units, session.samples.get(ac.channelId) || []);
         map.set(ac.channelId, {
-          def: { shortName: sessionChan.shortName, units: sessionChan.units, color: ac.color },
-          allSamples: session.samples.get(ac.channelId) || [],
+          def: { shortName: sessionChan.shortName, units: d.unit, color: ac.color },
+          allSamples: d.samples,
         });
         continue;
       }
       // Check derived
       const dc = derivedChannels?.find(d => d.id === ac.channelId);
       if (dc) {
+        const d = display(ac.channelId, dc.name, dc.units, derivedSamplesMap?.get(ac.channelId) || []);
         map.set(ac.channelId, {
-          def: { shortName: dc.name, units: dc.units, color: ac.color },
-          allSamples: derivedSamplesMap?.get(ac.channelId) || [],
+          def: { shortName: dc.name, units: d.unit, color: ac.color },
+          allSamples: d.samples,
         });
       }
     }
     return map;
-  }, [visibleChannels, session, derivedChannels, derivedSamplesMap]);
+  }, [visibleChannels, session, derivedChannels, derivedSamplesMap, display]);
+
+  // In compare mode each channel's samples become lap-relative series; the
+  // first lap stands in as allSamples so cursors/min-max/delta work unchanged.
+  const compareSeries = useMemo(() => {
+    if (!compareLaps) return null;
+    const series = new Map<number, ChannelSample[][]>();
+    for (const [id, data] of baseChannelDataMap) {
+      series.set(id, compareLaps.map(lap => shiftToLap(data.allSamples, lap)));
+    }
+    return series;
+  }, [compareLaps, baseChannelDataMap]);
+
+  const channelDataMap = useMemo(() => {
+    if (!compareSeries) return baseChannelDataMap;
+    const map = new Map(baseChannelDataMap);
+    for (const [id, data] of baseChannelDataMap) {
+      map.set(id, { ...data, allSamples: compareSeries.get(id)?.[0] ?? [] });
+    }
+    return map;
+  }, [baseChannelDataMap, compareSeries]);
 
   // ─── Dynamic margins for overlay Y-axes ────────────────────────────────
   // Build unique unit groups for overlay axis layout
@@ -123,16 +178,16 @@ export function TelemetryChart({
 
   const { leftMargin, rightMargin } = useMemo(() => {
     if (chartMode !== 'overlay' || overlayAxisLayout.axisCount <= 1) {
-      return { leftMargin: LEFT_MARGIN, rightMargin: RIGHT_MARGIN };
+      return { leftMargin: Math.round(LEFT_MARGIN * fontScale), rightMargin: RIGHT_MARGIN };
     }
     const n = overlayAxisLayout.axisCount;
     const leftCount = Math.ceil(n / 2);
     const rightCount = Math.floor(n / 2);
     return {
-      leftMargin: Math.max(LEFT_MARGIN, leftCount * AXIS_WIDTH),
-      rightMargin: Math.max(RIGHT_MARGIN, rightCount * AXIS_WIDTH),
+      leftMargin: Math.round(Math.max(LEFT_MARGIN, leftCount * AXIS_WIDTH) * fontScale),
+      rightMargin: Math.round(Math.max(RIGHT_MARGIN, rightCount * AXIS_WIDTH) * fontScale),
     };
-  }, [chartMode, overlayAxisLayout]);
+  }, [chartMode, overlayAxisLayout, fontScale]);
 
   // ─── Rebuild global min/max cache when channel data changes ─────────────
   useEffect(() => {
@@ -166,14 +221,32 @@ export function TelemetryChart({
   }, [cursorTime]);
 
   // ─── Sync external viewRange → internal xRange ─────────────────────────
+  // (Compare mode keeps its own lap-relative zoom; on entering/leaving it the
+  // cursors reset and the x-range goes to the full lap / the session viewRange.)
+  const inCompare = compareLaps !== null;
   useEffect(() => {
-    if (!viewRange) {
+    if (inCompare) {
+      xRangeRef.current = null;
+    } else if (!viewRange) {
       xRangeRef.current = null;
     } else {
       xRangeRef.current = [viewRange.startMs / 1000, viewRange.endMs / 1000];
     }
     requestDraw();
-  }, [viewRange]);
+  }, [viewRange, inCompare]);
+
+  useEffect(() => {
+    cursorXRef.current = null;
+    cursor2XRef.current = null;
+    clickedXRef.current = null;
+    hoverXRef.current = null;
+    if (canvasRef.current) {
+      delete canvasRef.current.dataset.cursorA;
+      delete canvasRef.current.dataset.cursorB;
+    }
+    setDeltaCursors(null);
+    requestDraw();
+  }, [inCompare]);
 
   // ─── Keep deltaMode ref in sync ────────────────────────────────────────
   useEffect(() => {
@@ -181,12 +254,17 @@ export function TelemetryChart({
     // When turning delta mode off, clear cursor2
     if (!deltaMode) {
       cursor2XRef.current = null;
+      dragCursorRef.current = null;
+      if (canvasRef.current) delete canvasRef.current.dataset.cursorB;
+      setDeltaCursors(null);
       requestDraw();
     }
   }, [deltaMode]);
 
   // ─── Debounced onViewRangeChange ───────────────────────────────────────
   const emitViewRange = useCallback((range: [number, number] | null) => {
+    // Compare zoom is lap-relative: it must not leak into the session viewRange.
+    if (compareRef.current) return;
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     debounceTimerRef.current = setTimeout(() => {
       if (!range) {
@@ -237,7 +315,7 @@ export function TelemetryChart({
 
   // ─── Compute strip layout ─────────────────────────────────────────────
   const computeStripLayouts = useCallback((canvasH: number): StripLayout[] => {
-    const plotH = canvasH - BOTTOM_AXIS_HEIGHT;
+    const plotH = canvasH - BOTTOM_AXIS_HEIGHT * fontScale;
     const numCh = visibleChannels.length;
     if (numCh === 0) return [];
 
@@ -272,7 +350,7 @@ export function TelemetryChart({
         units,
       };
     });
-  }, [visibleChannels, channelDataMap, chartMode]);
+  }, [visibleChannels, channelDataMap, chartMode, fontScale]);
 
   // ─── Time ↔ Pixel conversions ─────────────────────────────────────────
   const timeToX = useCallback((t: number, xRange: [number, number], plotW: number): number => {
@@ -310,14 +388,25 @@ export function TelemetryChart({
       smoothedYRanges: smoothedYRanges.current,
       needsDrawRef,
       colors,
+      fontScale,
+      compare: compareLaps && compareSeries ? { laps: compareLaps, series: compareSeries } : null,
     };
+    if (compareLaps) dc.session = { ...session, logStartMs: null, lapMarkers: [] };
+    // Overlay: the legend gets its own band above the plot so it never sits
+    // on traces, lap labels or the delta panel.
+    const legendBand = overlayLegendHeight(dc);
+    if (legendBand > 0) {
+      dc.topInset = legendBand;
+      dc.strips = strips.map(st => ({ ...st, top: st.top + legendBand, height: Math.max(20, st.height - legendBand) }));
+    }
 
     ctx.save();
     ctx.clearRect(0, 0, w, h);
 
     computeOverlayYRanges(dc);
-    drawStrips(dc, globalMinMaxCache.current);
+    drawStrips(dc);
     drawOverlayLegend(dc);
+    drawCompareLegend(dc);
     const axisY = drawXAxis(dc);
     drawCursors(dc, {
       cursorA: cursorXRef.current,
@@ -327,7 +416,7 @@ export function TelemetryChart({
     }, axisY);
 
     ctx.restore();
-  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout]);
+  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout, fontScale, compareLaps, compareSeries]);
 
 
   // ─── On-demand drawing ─────────────────────────────────────────────────
@@ -345,8 +434,8 @@ export function TelemetryChart({
   const numVisible = visibleChannels.length;
   const requiredCanvasHeight = useMemo(() => {
     if (chartMode === 'overlay' || numVisible === 0) return 0; // 0 = use container height
-    return numVisible * MIN_STRIP_HEIGHT + BOTTOM_AXIS_HEIGHT;
-  }, [chartMode, numVisible]);
+    return numVisible * MIN_STRIP_HEIGHT + BOTTOM_AXIS_HEIGHT * fontScale;
+  }, [chartMode, numVisible, fontScale]);
 
   // ─── Canvas sizing via ResizeObserver ──────────────────────────────────
   useEffect(() => {
@@ -368,7 +457,6 @@ export function TelemetryChart({
       const ctx = canvas.getContext('2d');
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       canvasSizeRef.current = { w, h };
-      setCanScroll(h > containerH);
       requestDraw();
     };
 
@@ -394,6 +482,64 @@ export function TelemetryChart({
     return xRangeRef.current || [0, sessionDuration];
   }, [sessionDuration]);
 
+  /** Mirror placed cursor times onto the canvas (data-cursor-a/b) for tests
+   *  and debugging — DOM only, no React state. */
+  const syncCursorAttrs = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const set = (k: 'cursorA' | 'cursorB', v: number | null) => {
+      if (v === null) delete c.dataset[k]; else c.dataset[k] = v.toFixed(3);
+    };
+    set('cursorA', cursorXRef.current);
+    set('cursorB', cursor2XRef.current);
+    const a = cursorXRef.current;
+    const b = cursor2XRef.current;
+    setDeltaCursors(prev => (a === null || b === null ? null
+      : prev && prev.a === a && prev.b === b ? prev : { a, b }));
+  }, []);
+
+  /** Delta cursor under the given canvas x, if any. */
+  const cursorAtX = useCallback((mouseX: number): 'A' | 'B' | null => {
+    if (!deltaModeRef.current) return null;
+    const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
+    if (plotW <= 0) return null;
+    const xRange = getEffectiveXRange();
+    const toPx = (t: number | null) => (t === null ? null : timeToX(t, xRange, plotW));
+    return hitTestCursor(mouseX, toPx(cursorXRef.current), toPx(cursor2XRef.current), CURSOR_HIT_PX * fontScale);
+  }, [getEffectiveXRange, timeToX, leftMargin, rightMargin, fontScale]);
+
+  /** Channel whose label column is under (x, y), if its units can be changed.
+   *  Separate mode only: in overlay mode channels share axes, so no menu. */
+  const labelChannelsAt = useCallback((mouseX: number, mouseY: number): number[] | null => {
+    if (chartMode === 'overlay' || mouseX >= leftMargin) return null;
+    const strip = computeStripLayouts(canvasSizeRef.current.h)
+      .find(st => mouseY >= st.top && mouseY < st.top + st.height);
+    if (!strip || convertibleUnits(channelDataMap.get(strip.channelId)?.def.units ?? '').length === 0) return null;
+    return [strip.channelId];
+  }, [chartMode, leftMargin, computeStripLayouts, channelDataMap]);
+
+  /** Move a dragged delta cursor to canvas x. */
+  const moveDraggedCursor = useCallback((which: 'A' | 'B', mouseX: number) => {
+    const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
+    if (plotW <= 0) return;
+    const xRange = getEffectiveXRange();
+    const t = clamp(xToTime(mouseX, xRange, plotW), xRange[0], xRange[1]);
+    if (which === 'A') {
+      cursorXRef.current = t;
+      clickedXRef.current = t;
+      if (onCursorTimeChange && !cursorEmitTimer.current) {
+        cursorEmitTimer.current = setTimeout(() => {
+          cursorEmitTimer.current = null;
+          if (cursorXRef.current !== null) onCursorTimeChange(cursorXRef.current);
+        }, 60);
+      }
+    } else {
+      cursor2XRef.current = t;
+    }
+    syncCursorAttrs();
+    requestDraw();
+  }, [getEffectiveXRange, xToTime, leftMargin, rightMargin, onCursorTimeChange, syncCursorAttrs]);
+
   // Store wheel handler deps in a ref so the native listener stays stable
   const wheelDepsRef = useRef({ sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin });
   useEffect(() => {
@@ -406,12 +552,6 @@ export function TelemetryChart({
     if (!canvas) return;
 
     const onWheel = (e: WheelEvent) => {
-      // With more strips than fit, the container scrolls vertically: a plain
-      // wheel scrolls through channels and Ctrl/Cmd+wheel (or a trackpad
-      // pinch, which arrives as ctrlKey) zooms time instead.
-      const container = containerRef.current;
-      const scrollable = !!container && container.scrollHeight > container.clientHeight;
-      if (scrollable && !e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const { sessionDuration: dur, getEffectiveXRange: getXR, xToTime: x2t, emitViewRange: emit, leftMargin: lm, rightMargin: rm } = wheelDepsRef.current;
       const plotW = canvasSizeRef.current.w - lm - rm;
@@ -455,13 +595,24 @@ export function TelemetryChart({
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
 
-    // Check if in delta mode and this is a click (not drag)
-    isDraggingRef.current = true;
-    setCursorStyle('grabbing');
     const rect = canvasRef.current!.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const labelHit = labelChannelsAt(mouseX, mouseY);
+    if (labelHit) {
+      setUnitMenu({ channelIds: labelHit, x: mouseX, y: mouseY });
+      return;
+    }
+    const hit = cursorAtX(mouseX);
+    if (hit) {
+      dragCursorRef.current = hit;
+      setCursorStyle('ew-resize');
+      return;
+    }
+    isDraggingRef.current = true;
+    setCursorStyle('grabbing');
     dragStartRef.current = { mouseX, xRange: [...getEffectiveXRange()] as [number, number] };
-  }, [getEffectiveXRange]);
+  }, [getEffectiveXRange, cursorAtX, labelChannelsAt]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -471,7 +622,9 @@ export function TelemetryChart({
     const plotW = canvasSizeRef.current.w - leftMargin - rightMargin;
     if (plotW <= 0) return;
 
-    if (isDraggingRef.current && dragStartRef.current) {
+    if (dragCursorRef.current) {
+      moveDraggedCursor(dragCursorRef.current, mouseX);
+    } else if (isDraggingRef.current && dragStartRef.current) {
       // Pan
       const dx = mouseX - dragStartRef.current.mouseX;
       const origRange = dragStartRef.current.xRange;
@@ -490,6 +643,8 @@ export function TelemetryChart({
       emitViewRange([newStart, newEnd]);
       requestDraw();
     } else {
+      const overLabel = labelChannelsAt(mouseX, e.clientY - rect.top) !== null;
+      setCursorStyle(overLabel ? 'pointer' : deltaModeRef.current && cursorAtX(mouseX) ? 'ew-resize' : 'crosshair');
       // Update hover cursor (always, regardless of delta mode)
       const xRange = getEffectiveXRange();
       const t = xToTime(mouseX, xRange, plotW);
@@ -507,9 +662,15 @@ export function TelemetryChart({
       }
       requestDraw();
     }
-  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin, onCursorTimeChange]);
+  }, [sessionDuration, getEffectiveXRange, xToTime, emitViewRange, leftMargin, rightMargin, onCursorTimeChange, moveDraggedCursor, cursorAtX, labelChannelsAt]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    if (dragCursorRef.current) {
+      // End of a cursor drag — never a click/re-place.
+      dragCursorRef.current = null;
+      if (cursorXRef.current !== null) onCursorTimeChange?.(cursorXRef.current);
+      return;
+    }
     const wasDragging = isDraggingRef.current;
     const dragStart = dragStartRef.current;
     isDraggingRef.current = false;
@@ -553,14 +714,16 @@ export function TelemetryChart({
           }
           onCursorTimeChange?.(t);
         }
+        syncCursorAttrs();
         requestDraw();
       }
     }
     dragStartRef.current = null;
-  }, [getEffectiveXRange, xToTime, leftMargin, rightMargin, onCursorTimeChange]);
+  }, [getEffectiveXRange, xToTime, leftMargin, rightMargin, onCursorTimeChange, syncCursorAttrs]);
 
   const handleMouseLeave = useCallback(() => {
     isDraggingRef.current = false;
+    dragCursorRef.current = null;
     setCursorStyle('crosshair');
     dragStartRef.current = null;
     hoverXRef.current = null;
@@ -595,6 +758,7 @@ export function TelemetryChart({
       const t = touches[0];
       const x = t.clientX - rect.left;
       const y = t.clientY - rect.top;
+      dragCursorRef.current = cursorAtX(x);
       touchStartRef.current = {
         x, y,
         t: Date.now(),
@@ -612,8 +776,9 @@ export function TelemetryChart({
         centerX,
       };
       touchStartRef.current = null;
+      dragCursorRef.current = null;
     }
-  }, [getEffectiveXRange]);
+  }, [getEffectiveXRange, cursorAtX]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     e.preventDefault();
@@ -624,7 +789,9 @@ export function TelemetryChart({
     if (plotW <= 0) return;
     const touches = e.touches;
 
-    if (touches.length === 1 && touchStartRef.current) {
+    if (touches.length === 1 && dragCursorRef.current) {
+      moveDraggedCursor(dragCursorRef.current, touches[0].clientX - rect.left);
+    } else if (touches.length === 1 && touchStartRef.current) {
       // Single-finger pan
       const t = touches[0];
       const x = t.clientX - rect.left;
@@ -671,7 +838,7 @@ export function TelemetryChart({
       }
       requestDraw();
     }
-  }, [sessionDuration, xToTime, emitViewRange, leftMargin, rightMargin]);
+  }, [sessionDuration, xToTime, emitViewRange, leftMargin, rightMargin, moveDraggedCursor]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     e.preventDefault();
@@ -679,7 +846,11 @@ export function TelemetryChart({
     if (!canvas) return;
     const remainingTouches = e.touches.length;
 
-    if (remainingTouches === 0) {
+    if (remainingTouches === 0 && dragCursorRef.current) {
+      dragCursorRef.current = null;
+      touchStartRef.current = null;
+      if (cursorXRef.current !== null) onCursorTimeChange?.(cursorXRef.current);
+    } else if (remainingTouches === 0) {
       // Check for tap (no significant movement, short duration)
       if (touchStartRef.current && e.changedTouches.length > 0) {
         const touch = e.changedTouches[0];
@@ -698,6 +869,7 @@ export function TelemetryChart({
           const t = clamp(xToTime(endX, xRange, plotW), xRange[0], xRange[1]);
           cursorXRef.current = t;
           if (onCursorTimeChange) onCursorTimeChange(t);
+          syncCursorAttrs();
           requestDraw();
         }
       }
@@ -715,16 +887,17 @@ export function TelemetryChart({
         xRange: [...getEffectiveXRange()] as [number, number],
       };
     }
-  }, [getEffectiveXRange, xToTime, onCursorTimeChange, leftMargin, rightMargin]);
+  }, [getEffectiveXRange, xToTime, onCursorTimeChange, leftMargin, rightMargin, syncCursorAttrs]);
 
   // ─── Reset zoom from toolbar ──────────────────────────────────────────
   const resetZoom = useCallback(() => {
     xRangeRef.current = null;
     cursorXRef.current = null;
     cursor2XRef.current = null;
+    syncCursorAttrs();
     emitViewRange(null);
     requestDraw();
-  }, [emitViewRange]);
+  }, [emitViewRange, syncCursorAttrs]);
 
   // ─── Toggle delta mode ────────────────────────────────────────────────
   const toggleDelta = useCallback(() => {
@@ -753,11 +926,11 @@ export function TelemetryChart({
       xRange: getEffectiveXRange(),
       sessionDurationSec: sessionDuration,
       chartMode,
-      lapMarkers: session.lapMarkers,
+      lapMarkers: compareLaps ? [] : session.lapMarkers,
       exportedAt: new Date(),
     };
     setImageExportSpec(spec);
-  }, [fileName, session, visibleChannels, channelDataMap, getEffectiveXRange, sessionDuration, chartMode]);
+  }, [fileName, session, visibleChannels, channelDataMap, getEffectiveXRange, sessionDuration, chartMode, compareLaps]);
 
   const closeImageExport = useCallback(() => setImageExportSpec(null), []);
 
@@ -774,10 +947,32 @@ export function TelemetryChart({
   }
 
   return (
-    <div className="flex flex-col h-full" data-testid="chart-container">
+    <div className="flex flex-col h-full relative" data-testid="chart-container">
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border flex-shrink-0">
+      <div ref={toolbarRef} className="flex items-center justify-between px-3 py-1.5 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2">
+          {compareLaps ? (
+            <span
+              data-testid="lap-compare-chip"
+              className="inline-flex items-center gap-1.5 pl-2 pr-1 py-0.5 rounded-full border border-primary/30 bg-primary/10 text-xs text-foreground"
+            >
+              <span className="text-muted-foreground">Compare:</span>
+              {compareLaps.map((lap, i) => (
+                <span key={lap.index} className="inline-flex items-center gap-1 tabular">
+                  <span className="inline-block w-2 h-2 rounded-sm" style={{ background: lapColor(i) }} aria-hidden />
+                  Lap {lap.lapNumber} <span className="text-muted-foreground">{formatLapTime(lap.durationMs / 1000)}</span>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={onClearLapSelection}
+                aria-label="Exit lap compare"
+                className="p-0.5 rounded-full hover:bg-muted/50 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ) : (
           <span className="text-xs text-muted-foreground">
             {viewRange
               ? `${formatChartElapsed(viewRange.startMs, session.logStartMs)} — ${formatChartElapsed(viewRange.endMs, session.logStartMs)}`
@@ -786,6 +981,7 @@ export function TelemetryChart({
                 : `Full session: ${formatChartElapsed(session.durationMs, session.logStartMs)}`
             }
           </span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           <button
@@ -820,9 +1016,7 @@ export function TelemetryChart({
               Reset
             </button>
           )}
-          <span className="text-xs text-muted-foreground/40 ml-1">
-            {canScroll ? 'scroll for channels · ⌘/Ctrl+scroll to zoom · drag to pan' : 'scroll to zoom · drag to pan'}
-          </span>
+          <span className="text-xs text-muted-foreground ml-1">scroll to zoom · drag to pan</span>
         </div>
       </div>
 
@@ -847,9 +1041,49 @@ export function TelemetryChart({
         />
       </div>
 
-      {imageExportSpec && (
+      {deltaMode && deltaCursors && (() => {
+        const { deltaT, rows } = computeDelta(visibleChannels, channelDataMap, deltaCursors.a, deltaCursors.b);
+        return <DeltaReadout deltaT={deltaT} rows={rows} onClose={() => setDeltaMode(false)} />;
+      })()}
+
+      {unitMenu && (() => {
+        const chans = unitMenu.channelIds.flatMap(id => {
+          const sc = session.channels.get(id);
+          const dc = derivedChannels?.find(d => d.id === id);
+          const shortName = sc?.shortName ?? dc?.name;
+          return shortName === undefined ? [] : [{ shortName, rawUnit: sc?.units ?? dc?.units ?? '' }];
+        });
+        if (chans.length === 0) return null;
+        const first = chans[0];
+        const sysOnly = { unitSystem: prefs.unitSystem, unitOverrides: {} };
+        return (
+          <ChartUnitMenu
+            channels={chans}
+            options={convertibleUnits(first.rawUnit)}
+            current={resolveDisplayUnit(first.shortName, first.rawUnit, prefs)}
+            defaultUnit={resolveDisplayUnit(first.shortName, first.rawUnit, sysOnly)}
+            overridden={chans.some(c => prefs.unitOverrides[c.shortName] !== undefined)}
+            x={Math.min(unitMenu.x + 4, Math.max(0, canvasSizeRef.current.w - 180))}
+            y={unitMenu.y + 4 + (toolbarRef.current?.offsetHeight ?? 0) - (containerRef.current?.scrollTop ?? 0)}
+            onPick={unit => {
+              const next = { ...prefs.unitOverrides };
+              for (const c of chans) {
+                if (unit === null || !convertibleUnits(c.rawUnit).includes(unit)) delete next[c.shortName];
+                else next[c.shortName] = unit;
+              }
+              updatePrefs({ unitOverrides: next });
+              setUnitMenu(null);
+            }}
+            onClose={() => setUnitMenu(null)}
+          />
+        );
+      })()}
+
+      <Presence show={!!imageExportSpec}>
+        {imageExportSpec && (
         <ImageExportDialog spec={imageExportSpec} onClose={closeImageExport} />
-      )}
+        )}
+      </Presence>
     </div>
   );
 }

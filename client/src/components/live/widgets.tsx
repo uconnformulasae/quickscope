@@ -14,7 +14,7 @@ export function directionLabel(v: number | undefined): string {
 export type StatTone = 'primary' | 'emerald' | 'amber' | 'red' | 'muted';
 
 const TEXT_TONE: Record<StatTone, string> = {
-  primary: 'text-primary',
+  primary: 'text-primary-text',
   emerald: 'text-emerald-600 dark:text-emerald-400',
   amber: 'text-amber-600 dark:text-amber-400',
   red: 'text-red-500 dark:text-red-400',
@@ -38,7 +38,9 @@ const BAR_TONE: Record<StatTone, string> = {
 };
 
 export const CLICKABLE =
-  'cursor-pointer select-none transition-shadow hover:ring-1 hover:ring-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60';
+  // ring-inset: the highlight is drawn inside the tile's edge, so a panel's
+  // scroll area can never clip it.
+  'cursor-pointer select-none transition-shadow ring-inset hover:ring-1 hover:ring-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60';
 
 /** Makes a value switch units on click / Enter / Space; nothing when `onClick` is absent. */
 export function clickableProps(onClick: (() => void) | undefined): React.HTMLAttributes<HTMLElement> {
@@ -58,7 +60,7 @@ export function clickableProps(onClick: (() => void) | undefined): React.HTMLAtt
 
 /** A unit the viewer switched away from the layout's is tinted so a stray tap is noticeable. */
 export function unitTone(changed: boolean | undefined): string {
-  return changed ? 'text-primary' : 'text-muted-foreground';
+  return changed ? 'text-primary-text' : 'text-muted-foreground';
 }
 
 interface StatProps {
@@ -78,16 +80,20 @@ export function Panel({
   className = '',
   rightSlot,
   tone,
+  fill = false,
 }: {
   title: string;
   children: React.ReactNode;
   className?: string;
   rightSlot?: React.ReactNode;
   tone?: 'primary';
+  /** Content stretches to the panel (e.g. G-force circle) instead of having a
+   *  natural height, so the dashboard doesn't auto-grow it. */
+  fill?: boolean;
 }) {
   return (
     <section
-      className={`flex flex-col rounded-lg bg-[hsl(225,30%,95%)] dark:bg-card border ${
+      className={`flex flex-col rounded-xl bg-[hsl(225,30%,95%)] dark:bg-card border ${
         tone === 'primary'
           ? 'border-primary/30'
           : 'border-[hsl(225,25%,85%)] dark:border-border/50'
@@ -97,7 +103,12 @@ export function Panel({
         <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground truncate">{title}</h3>
         {rightSlot}
       </header>
-      <div className="flex-1 min-h-0 overflow-auto">{children}</div>
+      <div className="flex-1 min-h-0 overflow-auto">
+        {fill
+          ? children
+          : /* Natural-height wrapper: the dashboard measures it to grow the widget. */
+            <div data-panel-content>{children}</div>}
+      </div>
     </section>
   );
 }
@@ -138,10 +149,10 @@ export function VehicleStat({ label, value, unit, tone, unitChanged, onClick }: 
       {...clickableProps(onClick)}
       className={`rounded-md bg-background/60 dark:bg-background/30 border border-[hsl(225,25%,85%)] dark:border-border/40 px-2 py-1.5 text-center ${onClick ? CLICKABLE : ''}`}
     >
-      <p className="text-[9px] uppercase tracking-wide text-muted-foreground truncate" title={label}>{label}</p>
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground truncate" title={label}>{label}</p>
       <p className={`text-sm font-bold tabular mt-0.5 ${tone && tone !== 'muted' ? TEXT_TONE[tone] : 'text-foreground'}`}>
         {value}
-        {unit && <span className={`text-[9px] font-normal ml-0.5 ${unitTone(unitChanged)}`}>{unit}</span>}
+        {unit && <span className={`text-[10px] font-normal ml-0.5 ${unitTone(unitChanged)}`}>{unit}</span>}
       </p>
     </div>
   );
@@ -194,7 +205,7 @@ export function BoolPill({
       <div
         className={`flex items-center justify-between rounded-md px-2 py-1.5 border text-[11px] ${
           !hasValue
-            ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
+            ? 'bg-muted/20 border-border/30 text-muted-foreground'
             : on
             ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400'
             : 'bg-muted/40 border-border/40 text-muted-foreground'
@@ -210,7 +221,7 @@ export function BoolPill({
     <div
       className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 border text-[11px] ${
         !hasValue
-          ? 'bg-muted/20 border-border/30 text-muted-foreground/50'
+          ? 'bg-muted/20 border-border/30 text-muted-foreground'
           : on
           ? 'bg-red-500/10 border-red-500/40 text-red-600 dark:text-red-400'
           : 'bg-emerald-500/5 border-emerald-500/20 text-muted-foreground'
@@ -219,7 +230,7 @@ export function BoolPill({
     >
       <span
         className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-          !hasValue ? 'bg-muted-foreground/30' : on ? 'bg-red-500 animate-pulse' : 'bg-emerald-500/60'
+          !hasValue ? 'bg-muted-foreground/30' : on ? 'bg-red-500 qs-alert-pulse' : 'bg-emerald-500/60'
         }`}
       />
       <span className="truncate">{label}</span>

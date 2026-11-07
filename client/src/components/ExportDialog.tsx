@@ -1,8 +1,10 @@
 import { useState, useMemo, useCallback } from 'react';
 import { X, Download, Search, CheckSquare, Square } from 'lucide-react';
 import type { XRKSession } from '../lib/xrk-parser';
-import { exportCSV, exportSessionCSV } from '../lib/api';
+import { exportCSV, exportSessionCSV, type ExportConversions } from '../lib/api';
 import { sanitizeExportFilePart } from '../lib/sessionDisplayName';
+import { useDisplaySamples } from '../lib/useDisplaySamples';
+import { getConverter, linearCoefficients } from '../lib/units';
 
 interface ExportDialogProps {
   fileName: string | null;
@@ -62,6 +64,8 @@ export function ExportDialog({
     channelsForExport(session, browserChannels).forEach((ch) => ids.add(ch.id));
     return ids;
   });
+  const display = useDisplaySamples();
+  const [useDisplayUnits, setUseDisplayUnits] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -129,9 +133,17 @@ export function ExportDialog({
       }
 
       // Call backend export endpoint
+      const convert: ExportConversions = {};
+      if (useDisplayUnits) {
+        for (const c of selectedChannels) {
+          const target = display.unitOf(c.name, c.units);
+          const conv = getConverter(c.units, target);
+          if (!conv.identity) convert[c.name] = { unit: conv.unit, ...linearCoefficients(conv) };
+        }
+      }
       const blob = sessionId
-        ? await exportSessionCSV(sessionId, channelNames)
-        : await exportCSV(channelNames);
+        ? await exportSessionCSV(sessionId, channelNames, convert)
+        : await exportCSV(channelNames, convert);
       const url = URL.createObjectURL(blob);
       const baseName = exportBaseName
         ? sanitizeExportFilePart(exportBaseName)
@@ -153,19 +165,19 @@ export function ExportDialog({
     } finally {
       setIsExporting(false);
     }
-  }, [selectedIds, allChannels, fileName, exportBaseName, onClose, sessionId]);
+  }, [selectedIds, allChannels, fileName, exportBaseName, onClose, sessionId, useDisplayUnits, display]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onClick={onClose}>
       <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col overflow-hidden"
+        className="qs-dialog bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col overflow-hidden"
         style={{ maxHeight: '80vh' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Download className="w-4 h-4 text-primary" />
+            <Download className="w-4 h-4 text-primary-text" />
             <span className="text-sm font-semibold text-foreground">Export CSV</span>
           </div>
           <button
@@ -213,7 +225,7 @@ export function ExportDialog({
               <button
                 key={ch.id}
                 onClick={() => toggleChannel(ch.id)}
-                className={`flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-left transition-colors hover:bg-muted/30 ${isSelected ? 'bg-muted/20' : ''}`}
+                className={`no-press flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-left transition-colors hover:bg-muted/30 ${isSelected ? 'bg-muted/20' : ''}`}
               >
                 <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-border'}`}>
                   {isSelected && (
@@ -225,10 +237,10 @@ export function ExportDialog({
                 <div className="flex-1 min-w-0">
                   <span className={`text-xs font-medium ${isSelected ? 'text-foreground' : 'text-muted-foreground'}`}>
                     {ch.name}
-                    {ch.units && <span className="ml-1 text-muted-foreground/50">{ch.units}</span>}
+                    {ch.units && <span className="ml-1 text-muted-foreground">{useDisplayUnits ? display.unitOf(ch.name, ch.units) : ch.units}</span>}
                   </span>
                 </div>
-                <span className="text-xs text-muted-foreground/40 tabular flex-shrink-0">
+                <span className="text-xs text-muted-foreground tabular flex-shrink-0">
                   {ch.sampleCount >= 1000 ? `${(ch.sampleCount / 1000).toFixed(0)}K` : ch.sampleCount}
                 </span>
               </button>
@@ -251,6 +263,15 @@ export function ExportDialog({
             )}
           </div>
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground mr-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useDisplayUnits}
+                onChange={e => setUseDisplayUnits(e.target.checked)}
+                className="accent-primary"
+              />
+              Display units
+            </label>
             <button
               onClick={onClose}
               className="px-3 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors border border-border"

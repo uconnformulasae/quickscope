@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from services.csv_export import streaming_csv_response
+from services.csv_export import parse_conversions, streaming_csv_response
 from services.xrk_export import read_xrk_export_bytes
 
 from services import (
@@ -126,8 +126,17 @@ async def download_session_file(session_id: str):
 
 
 @router.get("/sessions/{session_id}/export")
-async def export_session_csv(session_id: str, channels: str = Query(...)):
-    """CSV export for a stored session without requiring it to be the active analysis session."""
+async def export_session_csv(
+    session_id: str, channels: str = Query(...), convert: str | None = Query(None),
+):
+    """CSV export for a stored session without requiring it to be the active analysis session.
+
+    ``convert`` works as in ``GET /api/export``.
+    """
+    try:
+        conversions = parse_conversions(convert)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     names = [n.strip() for n in channels.split(",") if n.strip()]
     if not names:
         raise HTTPException(400, "No channels specified")
@@ -137,9 +146,13 @@ async def export_session_csv(session_id: str, channels: str = Query(...)):
     try:
         return streaming_csv_response(
             log, entry["filename"], names, aim_session_id=entry.get("aim_session_id"),
+            conversions=conversions,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+_MAX_RENAME_INPUT_LEN = 1024
 
 
 class RenameRequest(BaseModel):
@@ -152,6 +165,8 @@ async def rename_session(session_id: str, body: RenameRequest):
     if not entry:
         raise HTTPException(404, "Session not found")
 
+    if len(body.filename) > _MAX_RENAME_INPUT_LEN:
+        raise HTTPException(400, "Filename is too long")
     try:
         new_filename = sanitize_filename(body.filename)
     except ValueError:

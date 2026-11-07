@@ -4,7 +4,7 @@
  */
 import type { DrawContext, StripLayout } from './chart-utils';
 import {
-  MONO_FONT,
+  MONO_FONT, scaledFont,
   clamp, interpolateValue, nearestSample, formatValue,
 } from './chart-utils';
 import { formatChartCursorTime } from './time-format';
@@ -31,10 +31,10 @@ function drawCursorLine(
 
   if (showTimestamp) {
     const label = formatChartCursorTime(t, dc.session.logStartMs);
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     const tw = ctx.measureText(label).width;
     const pillW = tw + 8;
-    const pillH = 16;
+    const pillH = Math.round(16 * dc.fontScale);
     const pillX = Math.round(clamp(x - pillW / 2, lm, w - rm - pillW));
     const pillY = axisY + 2;
     ctx.fillStyle = dc.colors.cursorPill;
@@ -57,6 +57,18 @@ function getStripYRange(dc: DrawContext, strip: StripLayout, def: { units: strin
     if (smoothed) return smoothed;
   }
   return [0, 1];
+}
+
+/** Compare mode: each lap's nearest value at lap-relative tMs, "a / b / c". */
+function compareValueText(dc: DrawContext, channelId: number, tMs: number): string | null {
+  const series = dc.compare?.series.get(channelId);
+  if (!series) return null;
+  return series.map((s, i) => {
+    const endMs = dc.compare!.laps[i]?.durationMs ?? (s.length > 0 ? s[s.length - 1].timestamp : -1);
+    if (tMs > endMs) return '–'; // this lap has already ended
+    const snap = s.length > 0 ? nearestSample(s, tMs) : null;
+    return snap ? formatValue(snap.value) : '–';
+  }).join(' / ');
 }
 
 function stripValToY(strip: StripLayout, yRange: [number, number], v: number): number {
@@ -88,17 +100,17 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
     ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
     ctx.fill();
 
-    // Value pill — shows nearest real measured value
-    const valText = formatValue(snap.value);
+    // Value pill — nearest real measured value (every lap's, in compare mode)
+    const valText = compareValueText(dc, strip.channelId, cursorT * 1000) ?? formatValue(snap.value);
     const nameText = data.def.shortName;
-    ctx.font = `bold 10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale, 'bold');
     const nameW = ctx.measureText(nameText).width;
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     const valW = ctx.measureText(valText).width;
     const pillGap = 6;
     const pillPadX = 8;
     const pillW = nameW + pillGap + valW + pillPadX * 2;
-    const pillH = 20;
+    const pillH = Math.round(20 * dc.fontScale);
     const pillX = w - rm - pillW - 4;
     const pillY = chartMode === 'overlay'
       ? strip.top + 4 + pillIndex * (pillH + 3)
@@ -109,12 +121,12 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
     ctx.roundRect(pillX, pillY, pillW, pillH, 4);
     ctx.fill();
 
-    ctx.font = `bold 10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale, 'bold');
     ctx.fillStyle = strip.color;
     ctx.textAlign = 'left';
     ctx.fillText(nameText, pillX + pillPadX, pillY + 14);
 
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     ctx.fillStyle = dc.colors.cursorPillText;
     ctx.fillText(valText, pillX + pillPadX + nameW + pillGap, pillY + 14);
     pillIndex++;
@@ -122,7 +134,7 @@ function drawCursorPills(dc: DrawContext, cursorT: number, axisY: number) {
 }
 
 /** Draw hover crosshair with hollow dots */
-function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number) {
+function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number, showPills = true) {
   const { ctx, xRange, plotW, strips, channelDataMap, chartMode } = dc;
   const hoverT = cursor.hoverT;
   if (hoverT === null) return;
@@ -133,7 +145,7 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
     drawCursorLine(dc, hoverT, dc.colors.hoverLine, axisY, true);
   }
 
-  if (!cursor.deltaMode || cursor.cursorA !== null || cursor.cursorB !== null) {
+  if (showPills && (!cursor.deltaMode || cursor.cursorA !== null || cursor.cursorB !== null)) {
     let hoverPillIndex = 0;
     for (const strip of strips) {
       const data = channelDataMap.get(strip.channelId);
@@ -153,12 +165,13 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
       ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
       ctx.stroke();
 
-      const pillText = formatValue(snap.value);
-      ctx.font = `8px ${MONO_FONT}`;
+      const pillText = compareValueText(dc, strip.channelId, hoverT * 1000) ?? formatValue(snap.value);
+      ctx.font = scaledFont(8, dc.fontScale);
       const tw = ctx.measureText(pillText).width;
       const pillW = tw + 6;
-      const pillH = 14;
-      const pillX = dotX + 8;
+      const pillH = Math.round(14 * dc.fontScale);
+      // Right of the dot, flipped to the left near the plot's right edge.
+      const pillX = dotX + 8 + pillW > dc.w - dc.rm ? dotX - 8 - pillW : dotX + 8;
       const pillY = chartMode === 'overlay'
         ? strip.top + 4 + hoverPillIndex * (pillH + 2)
         : Math.round(clamp(dotY - pillH / 2, strip.top + 2, strip.top + strip.height - pillH - 2));
@@ -177,105 +190,40 @@ function drawHoverCrosshair(dc: DrawContext, cursor: CursorState, axisY: number)
   }
 }
 
-/** Draw the delta comparison panel */
-function drawDeltaPanel(dc: DrawContext, cursorA: number, cursorB: number) {
-  const { ctx, w, rm, strips, channelDataMap } = dc;
+export interface DeltaRow {
+  channelId: number;
+  label: string;
+  color: string;
+  valA: string;
+  valB: string;
+  delta: string;
+}
 
-  const deltaT = Math.abs(cursorB - cursorA);
-  const panelLines: { label: string; valA: string; valB: string; delta: string; color: string }[] = [];
-
+/** Values at the two delta cursors for each plotted channel (Δ = B − A).
+ *  Shown in the readout docked under the chart, not over the plot. */
+export function computeDelta(
+  strips: Pick<StripLayout, 'channelId' | 'color'>[],
+  channelDataMap: DrawContext['channelDataMap'],
+  cursorA: number,
+  cursorB: number,
+): { deltaT: number; rows: DeltaRow[] } {
+  const rows: DeltaRow[] = [];
   for (const strip of strips) {
     const data = channelDataMap.get(strip.channelId);
     if (!data || data.allSamples.length === 0) continue;
     const snapA = nearestSample(data.allSamples, cursorA * 1000);
     const snapB = nearestSample(data.allSamples, cursorB * 1000);
     if (!snapA || !snapB) continue;
-    panelLines.push({
+    rows.push({
+      channelId: strip.channelId,
       label: data.def.shortName,
+      color: strip.color,
       valA: formatValue(snapA.value),
       valB: formatValue(snapB.value),
       delta: formatValue(snapB.value - snapA.value),
-      color: strip.color,
     });
   }
-
-  // Measure widths for dynamic layout
-  ctx.font = `bold 10px ${MONO_FONT}`;
-  let maxNameW = ctx.measureText('Channel').width;
-  for (const row of panelLines) {
-    const tw = ctx.measureText(row.label).width;
-    if (tw > maxNameW) maxNameW = tw;
-  }
-  const nameColW = maxNameW + 14;
-  const valColW = 70;
-
-  const panelPad = 10;
-  const headerH = 22;
-  const colHeaderH = 18;
-  const lineH = 20;
-  const panelH = headerH + colHeaderH + panelLines.length * lineH + panelPad * 2;
-  const panelW = nameColW + valColW * 3 + panelPad * 2;
-  const panelX = w - rm - panelW - 10;
-  const panelY = 8;
-
-  ctx.fillStyle = dc.colors.deltaPanel;
-  ctx.beginPath();
-  ctx.roundRect(panelX, panelY, panelW, panelH, 6);
-  ctx.fill();
-
-  ctx.strokeStyle = dc.colors.deltaLine;
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.roundRect(panelX, panelY, panelW, panelH, 6);
-  ctx.stroke();
-
-  ctx.font = `bold 11px ${MONO_FONT}`;
-  ctx.fillStyle = dc.colors.deltaAccent;
-  ctx.textAlign = 'left';
-  ctx.fillText(`Δt = ${deltaT.toFixed(3)}s`, panelX + panelPad, panelY + panelPad + 12);
-
-  const col1 = panelX + panelPad;
-  const col2 = panelX + panelPad + nameColW + valColW;
-  const col3 = col2 + valColW;
-  const col4 = col3 + valColW;
-
-  const colY = panelY + panelPad + headerH + 10;
-  ctx.font = `9px ${MONO_FONT}`;
-  ctx.fillStyle = dc.colors.text;
-  ctx.textAlign = 'left';
-  ctx.fillText('Channel', col1, colY);
-  ctx.textAlign = 'right';
-  ctx.fillText('A', col2, colY);
-  ctx.fillText('B', col3, colY);
-  ctx.fillText('Δ', col4, colY);
-
-  const sepY = colY + 5;
-  ctx.strokeStyle = dc.colors.separator;
-  ctx.beginPath();
-  ctx.moveTo(col1, sepY);
-  ctx.lineTo(panelX + panelW - panelPad, sepY);
-  ctx.stroke();
-
-  const rowStartY = sepY + 4;
-  for (let i = 0; i < panelLines.length; i++) {
-    const row = panelLines[i];
-    const ry = rowStartY + i * lineH + 12;
-
-    ctx.font = `bold 10px ${MONO_FONT}`;
-    ctx.fillStyle = row.color;
-    ctx.textAlign = 'left';
-    ctx.fillText(row.label, col1, ry);
-
-    ctx.font = `10px ${MONO_FONT}`;
-    ctx.fillStyle = dc.colors.text;
-    ctx.textAlign = 'right';
-    ctx.fillText(row.valA, col2, ry);
-    ctx.fillText(row.valB, col3, ry);
-
-    ctx.font = `bold 10px ${MONO_FONT}`;
-    ctx.fillStyle = dc.colors.deltaAccent;
-    ctx.fillText(row.delta, col4, ry);
-  }
+  return { deltaT: Math.abs(cursorB - cursorA), rows };
 }
 
 /** Draw all cursor overlays: cursor lines, value pills, hover, delta panel */
@@ -296,11 +244,15 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
     }
   }
 
+  // With both delta cursors placed, values live in the delta readout docked
+  // under the chart — per-cursor and hover pills would just repeat them.
+  const panelOpen = cursor.cursorA !== null && cursor.cursorB !== null;
+
   // Cursor A line + pills
   if (cursor.cursorA !== null) {
     const lineColor = cursor.cursorB !== null ? dc.colors.deltaLine : dc.colors.cursor;
     drawCursorLine(dc, cursor.cursorA, lineColor, axisY, true);
-    drawCursorPills(dc, cursor.cursorA, axisY);
+    if (!panelOpen) drawCursorPills(dc, cursor.cursorA, axisY);
   }
 
   // Cursor B line
@@ -309,10 +261,17 @@ export function drawCursors(dc: DrawContext, cursor: CursorState, axisY: number)
   }
 
   // Hover crosshair
-  drawHoverCrosshair(dc, cursor, axisY);
+  drawHoverCrosshair(dc, cursor, axisY, !panelOpen);
 
-  // Delta panel
-  if (cursor.cursorA !== null && cursor.cursorB !== null) {
-    drawDeltaPanel(dc, cursor.cursorA, cursor.cursorB);
-  }
+}
+
+/** Which delta cursor (if any) is under the mouse. Inputs are canvas-px x
+ *  positions; the nearer cursor wins, ties go to B. */
+export function hitTestCursor(
+  mouseX: number, cursorAX: number | null, cursorBX: number | null, tolerancePx: number,
+): 'A' | 'B' | null {
+  const dA = cursorAX === null ? Infinity : Math.abs(mouseX - cursorAX);
+  const dB = cursorBX === null ? Infinity : Math.abs(mouseX - cursorBX);
+  if (Math.min(dA, dB) > tolerancePx) return null;
+  return dB <= dA ? 'B' : 'A';
 }

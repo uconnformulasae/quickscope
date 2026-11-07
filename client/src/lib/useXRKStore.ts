@@ -61,6 +61,9 @@ export interface AppState {
   // Chart display mode
   chartMode: ChartMode;
 
+  // Laps selected in the Laps tab (indices into lap windows), in selection order
+  selectedLaps: number[];
+
   // View mode (chart vs table)
   viewMode: ViewMode;
 
@@ -88,6 +91,7 @@ const SESSION_SCOPED_RESET = {
   histogramChannelId: null,
   xyXChannelId: null,
   xyYChannelId: null,
+  selectedLaps: [],
 } satisfies Partial<AppState>;
 
 /** Build channel data map for formula/python evaluation.
@@ -262,6 +266,7 @@ export function useAppState() {
     xyYChannelId: null,
     cursorTime: null,
     chartMode: 'separate',
+    selectedLaps: [],
     viewMode: 'chart' as ViewMode,
     leftSidebarOpen: true,
     rightSidebarOpen: true,
@@ -319,6 +324,11 @@ export function useAppState() {
     });
   }, []);
 
+  /** Deselect every channel on the chart (derived channel definitions are kept). */
+  const clearActiveChannels = useCallback(() => {
+    setState(prev => ({ ...prev, activeChannels: [] }));
+  }, []);
+
   const setViewRange = useCallback((range: TimeRange | null) => {
     setState(prev => ({ ...prev, viewRange: range }));
   }, []);
@@ -337,6 +347,30 @@ export function useAppState() {
 
   const setShowOnlyWithData = useCallback((show: boolean) => {
     setState(prev => ({ ...prev, showOnlyWithData: show }));
+  }, []);
+
+  // cursorTime is session time normally but lap-relative in compare mode
+  // (2+ laps), so it is cleared whenever the selection crosses that line.
+  const withLaps = (prev: AppState, selectedLaps: number[]): AppState => {
+    const crossed = (prev.selectedLaps.length >= 2) !== (selectedLaps.length >= 2);
+    return { ...prev, selectedLaps, cursorTime: crossed ? null : prev.cursorTime };
+  };
+
+  /** Restore a saved per-session view (see sessionViewState). Derived channels
+   *  are re-added separately since they must be re-evaluated. */
+  const applySessionView = useCallback((v: Pick<AppState,
+    'activeChannels' | 'chartMode' | 'viewMode' | 'analysisTab' | 'viewRange' | 'selectedLaps'>) => {
+    setState(prev => ({ ...prev, ...v }));
+  }, []);
+
+  const toggleLapSelected = useCallback((index: number) => {
+    setState(prev => withLaps(prev, prev.selectedLaps.includes(index)
+      ? prev.selectedLaps.filter(i => i !== index)
+      : [...prev.selectedLaps, index]));
+  }, []);
+
+  const setSelectedLaps = useCallback((indices: number[]) => {
+    setState(prev => withLaps(prev, indices));
   }, []);
 
   const setChartMode = useCallback((mode: ChartMode) => {
@@ -516,12 +550,16 @@ export function useAppState() {
     setError,
     setProgress,
     toggleChannel,
+    clearActiveChannels,
     setViewRange,
     setCursorTime,
     setAnalysisTab,
     setChannelSearch,
     setShowOnlyWithData,
     setChartMode,
+    toggleLapSelected,
+    setSelectedLaps,
+    applySessionView,
     setViewMode,
     toggleLeftSidebar,
     toggleRightSidebar,

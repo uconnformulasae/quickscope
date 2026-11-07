@@ -114,9 +114,9 @@ export function SessionInfoModal({
     <div
       ref={backdropRef}
       onClick={handleBackdropClick}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center qs-scrim"
     >
-      <div className="w-[520px] bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
+      <div className="qs-dialog w-[520px] bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border">
           <span className="text-[15px] font-semibold text-foreground">Session Info</span>
@@ -124,7 +124,7 @@ export function SessionInfoModal({
             {!editing && (
               <button
                 onClick={() => setEditing(true)}
-                className="px-3.5 py-1 rounded-md bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors"
+                className="px-3.5 py-1 rounded-md bg-primary/10 text-primary-text text-xs font-medium hover:bg-primary/20 transition-colors"
               >
                 Rename
               </button>

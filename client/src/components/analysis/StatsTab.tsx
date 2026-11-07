@@ -4,6 +4,7 @@ import { computeStats, formatTime } from '../../lib/xrk-parser';
 import type { ActiveChannel, TimeRange, DerivedChannel } from '../../lib/useXRKStore';
 import { TrendingUp, Crosshair } from 'lucide-react';
 import { resolveChannel, resolveSamples, formatNum } from './analysis-helpers';
+import { useDisplaySamples } from '../../lib/useDisplaySamples';
 
 export function StatsTab({ session, activeChannels, viewRange, derivedChannels, derivedSamplesMap, onNavigateToTime }: {
   session: XRKSession;
@@ -13,11 +14,12 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
   derivedSamplesMap?: Map<number, ChannelSample[]>;
   onNavigateToTime?: (timestampMs: number) => void;
 }) {
+  const display = useDisplaySamples();
   const stats = useMemo(() => {
     return activeChannels.map(ac => {
-      const chan = resolveChannel(ac.channelId, session, derivedChannels);
+      const chan = resolveChannel(ac.channelId, session, derivedChannels, display);
       if (!chan) return null;
-      const allSamps = resolveSamples(ac.channelId, session, derivedSamplesMap);
+      const allSamps = resolveSamples(ac.channelId, session, derivedSamplesMap, display, derivedChannels);
       const globalStats = computeStats(allSamps);
       let viewSamps = allSamps;
       if (viewRange) {
@@ -27,7 +29,7 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
       const totalSamples = allSamps.length;
       return { chan, color: ac.color, globalStats, viewStats, totalSamples };
     }).filter(Boolean) as { chan: any; color: string; globalStats: any; viewStats: any; totalSamples: number }[];
-  }, [session, activeChannels, viewRange, derivedChannels, derivedSamplesMap]);
+  }, [session, activeChannels, viewRange, derivedChannels, derivedSamplesMap, display]);
 
   if (stats.length === 0) {
     return (
@@ -65,7 +67,7 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
               {hasData ? (
                 <span className="text-xs text-muted-foreground tabular">{vs.count.toLocaleString()} pts</span>
               ) : (
-                <span className="text-xs px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground/60">No data</span>
+                <span className="text-xs px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground">No data</span>
               )}
             </div>
             {hasData ? (
@@ -78,10 +80,10 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
                 >
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-muted-foreground leading-none mb-0.5">Min</p>
-                    {canNavigate && <Crosshair className="w-3 h-3 text-muted-foreground/30 group-hover:text-primary/60 transition-colors" />}
+                    {canNavigate && <Crosshair className="w-3 h-3 text-muted-foreground/30 group-hover:text-primary-text/60 transition-colors" />}
                   </div>
                   <p className="text-sm font-medium text-foreground tabular">{formatNum(displayMin)}</p>
-                  <p className="text-xs text-muted-foreground/50 leading-none mt-0.5">@ {formatTime(displayMinTs)}</p>
+                  <p className="text-xs text-muted-foreground leading-none mt-0.5">@ {formatTime(displayMinTs)}</p>
                 </button>
                 <button
                   className={`bg-card px-2.5 py-1.5 text-left group ${canNavigate ? 'cursor-pointer hover:bg-muted/30 transition-colors' : 'cursor-default'}`}
@@ -91,10 +93,10 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
                 >
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-muted-foreground leading-none mb-0.5">Max</p>
-                    {canNavigate && <Crosshair className="w-3 h-3 text-muted-foreground/30 group-hover:text-primary/60 transition-colors" />}
+                    {canNavigate && <Crosshair className="w-3 h-3 text-muted-foreground/30 group-hover:text-primary-text/60 transition-colors" />}
                   </div>
                   <p className="text-sm font-medium text-foreground tabular">{formatNum(displayMax)}</p>
-                  <p className="text-xs text-muted-foreground/50 leading-none mt-0.5">@ {formatTime(displayMaxTs)}</p>
+                  <p className="text-xs text-muted-foreground leading-none mt-0.5">@ {formatTime(displayMaxTs)}</p>
                 </button>
                 <div className="bg-card px-2.5 py-1.5">
                   <p className="text-xs text-muted-foreground leading-none mb-0.5">Mean</p>
@@ -106,7 +108,7 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
                 </div>
               </div>
             ) : (
-              <div className="px-2.5 py-3 text-xs text-muted-foreground/50 italic">
+              <div className="px-2.5 py-3 text-xs text-muted-foreground italic">
                 No data recorded for this channel in this session
               </div>
             )}

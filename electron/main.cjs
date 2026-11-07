@@ -5,7 +5,8 @@
  * become ready, then opens a BrowserWindow loading the built Vite bundle.
  */
 
-const { app, BrowserWindow, shell, dialog, Menu, protocol, net: electronNet } = require('electron');
+const { app, BrowserWindow, shell, dialog, Menu, protocol, screen, net: electronNet } = require('electron');
+const { initialWindowBounds, fitBoundsToWorkArea } = require('./window-size.cjs');
 const path = require('node:path');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -209,12 +210,23 @@ function openExternalSafely(url) {
   }
 }
 
+/** Keep the window on-screen when the resolution or display layout changes
+ *  (monitor unplugged, scaling changed, dock resized). */
+function refitWindowToDisplay() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFullScreen() || mainWindow.isMaximized()) return;
+  const bounds = mainWindow.getBounds();
+  const { workArea } = screen.getDisplayMatching(bounds);
+  mainWindow.setMinimumSize(Math.min(1024, workArea.width), Math.min(640, workArea.height));
+  const fitted = fitBoundsToWorkArea(bounds, workArea);
+  if (fitted) mainWindow.setBounds(fitted);
+}
+
 function createWindow() {
+  // Size to the display the user is on (where the cursor is), not a fixed size.
+  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const initial = initialWindowBounds(workArea);
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 640,
+    ...initial,
     backgroundColor: '#0b0d12',
     title: 'QuickScope',
     webPreferences: {
@@ -299,6 +311,9 @@ app.whenReady().then(async () => {
   }
 
   createWindow();
+  // `screen` is only usable after ready.
+  screen.on('display-metrics-changed', refitWindowToDisplay);
+  screen.on('display-removed', refitWindowToDisplay);
 });
 
 function buildMenuTemplate() {

@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExportDialog } from './ExportDialog';
 import { ChannelSidebar } from './ChannelSidebar';
 import { makeChannel, makeSamples, makeSession } from '../test-fixtures';
 import type { DerivedChannel } from '../lib/useXRKStore';
+import { PreferencesProvider } from '../lib/usePreferences';
+import { CHANNEL_PALETTE } from '../lib/channelColors';
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -121,6 +123,68 @@ describe('ChannelSidebar', () => {
     return { ...utils, handlers };
   }
 
+  describe('reset button', () => {
+    const active = [{ channelId: 1, color: '#f00' }, { channelId: 2, color: '#0f0' }];
+
+    it('asks for confirmation and clears every selected channel when confirmed', () => {
+      const confirm = vi.fn(() => true);
+      vi.stubGlobal('confirm', confirm);
+      const onClearChannels = vi.fn();
+      renderSidebar({ activeChannels: active, onClearChannels });
+
+      fireEvent.click(screen.getByRole('button', { name: /reset selected channels/i }));
+      expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/2 selected channels/));
+      expect(onClearChannels).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the selection when the user cancels', () => {
+      vi.stubGlobal('confirm', vi.fn(() => false));
+      const onClearChannels = vi.fn();
+      renderSidebar({ activeChannels: active, onClearChannels });
+
+      fireEvent.click(screen.getByRole('button', { name: /reset selected channels/i }));
+      expect(onClearChannels).not.toHaveBeenCalled();
+    });
+
+    it('sits in the Active channels section, not the crowded header', () => {
+      renderSidebar({ activeChannels: active, onClearChannels: vi.fn() });
+      const label = screen.getByText('Active channels');
+      const button = screen.getByRole('button', { name: /reset selected channels/i });
+      expect(label.parentElement?.contains(button)).toBe(true);
+    });
+
+    it('plays the reset choreography only after a confirmed reset', () => {
+      vi.stubGlobal('confirm', vi.fn(() => true));
+      renderSidebar({ activeChannels: active, onClearChannels: vi.fn() });
+      const footer = screen.getByTestId('active-channels-footer');
+      expect(footer.classList.contains('qs-resetting')).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: /reset selected channels/i }));
+      expect(footer.classList.contains('qs-resetting')).toBe(true);
+    });
+
+    it('does not mark a cancelled reset or a manual chip removal as a reset', () => {
+      vi.stubGlobal('confirm', vi.fn(() => false));
+      const { handlers } = renderSidebar({ activeChannels: active, onClearChannels: vi.fn() });
+      fireEvent.click(screen.getByRole('button', { name: /reset selected channels/i }));
+      fireEvent.click(screen.getByTitle('Remove RPM'));
+      expect(handlers.onToggleChannel).toHaveBeenCalledWith(1, '#f00');
+      expect(screen.getByTestId('active-channels-footer').classList.contains('qs-resetting')).toBe(false);
+    });
+
+    it('staggers chips by position, capped so long lists finish quickly', () => {
+      const many = Array.from({ length: 9 }, (_, k) => ({ channelId: k < 2 ? k + 1 : 100 + k, color: '#f00' }));
+      const { container } = renderSidebar({ activeChannels: many, onClearChannels: vi.fn() });
+      const steps = [...container.querySelectorAll<HTMLElement>('.qs-chip')].map(c => c.style.getPropertyValue('--i'));
+      expect(steps).toEqual(['0', '1', '2', '3', '4', '5', '6', '6', '6']);
+    });
+
+    it('is hidden when nothing is selected', () => {
+      renderSidebar({ activeChannels: [], onClearChannels: vi.fn() });
+      expect(screen.queryByRole('button', { name: /reset selected channels/i })).toBeNull();
+    });
+  });
+
   it('lists session channels with sample counts, rates and no-data badges', () => {
     renderSidebar();
     expect(screen.getByText('3 channels')).toBeTruthy();
@@ -180,5 +244,28 @@ describe('ChannelSidebar', () => {
     expect(handlers.onRemoveDerived).toHaveBeenCalledWith(10000);
     fireEvent.click(screen.getByText('Power'));
     expect(handlers.onToggleChannel).toHaveBeenCalledWith(10000, '#0f0');
+  });
+
+  it('lets a channel colour be customised per theme from its swatch, and reset', () => {
+    localStorage.clear();
+    const props = {
+      session: session(), activeChannels: [{ channelId: 1, color: '#f77f00' }], derivedChannels: [], derivedSamplesMap: new Map(),
+      search: '', showOnlyWithData: false, chartMode: 'separate' as const,
+      onToggleChannel: vi.fn(), onRemoveDerived: vi.fn(), onEditDerived: vi.fn(), onCreateDerived: vi.fn(),
+      onSearchChange: vi.fn(), onShowOnlyWithDataChange: vi.fn(), onChartModeChange: vi.fn(),
+    };
+    const { rerender } = render(<PreferencesProvider><ChannelSidebar {...props} theme="dark" /></PreferencesProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'RPM colour' }));
+    expect(props.onToggleChannel).not.toHaveBeenCalled(); // swatch doesn't toggle the channel
+    const picker = screen.getByRole('dialog', { name: 'RPM colour' });
+    fireEvent.click(within(picker).getByRole('button', { name: CHANNEL_PALETTE.dark[3] }));
+    const stored = () => JSON.parse(localStorage.getItem('quickscope-preferences')!).channelColors;
+    expect(stored()).toEqual({ dark: { RPM: CHANNEL_PALETTE.dark[3] }, light: {} });
+
+    // Light theme keeps its own colours
+    rerender(<PreferencesProvider><ChannelSidebar {...props} theme="light" /></PreferencesProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'RPM colour' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'RPM colour' })).getByRole('button', { name: 'Reset to default' }));
+    expect(stored()).toEqual({ dark: { RPM: CHANNEL_PALETTE.dark[3] }, light: {} });
   });
 });

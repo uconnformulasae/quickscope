@@ -33,3 +33,7 @@ tests/fixtures/*.xrz
 backend/data
 # Pre-library snapshot kept for comparison (66 MB).
 backend/data.before-library/
+
+# Locally installed agent skills (not part of the app)
+.agents/
+skills-lock.json

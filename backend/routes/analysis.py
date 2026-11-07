@@ -9,6 +9,10 @@ import uuid
 from fastapi import APIRouter, UploadFile, File, Query, HTTPException, Request
 from pydantic import BaseModel
 
+from sanitize import (
+    InvalidInput, clean_text, is_finite_number,
+    validate_channel_payload,
+)
 from services import session_store, lap_detection, upload_log, gps_preview, derived_eval
 from services.session_cache import session_cache
 from state import (
@@ -24,6 +28,32 @@ class _NotAnXrkFile(Exception):
     pass
 
 
+# Largest XRK/XRZ accepted. Real endurance logs are tens of MB; the cap only
+# stops a runaway or hostile upload from filling the disk.
+MAX_UPLOAD_BYTES = int(os.environ.get("QUICKSCOPE_MAX_UPLOAD_MB", "1024")) * 1024 * 1024
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+class _UploadTooLarge(Exception):
+    pass
+
+
+async def _save_upload(file: UploadFile, tmp_dest) -> int:
+    """Stream the upload to ``tmp_dest``; raise _UploadTooLarge past the cap."""
+    size = 0
+    try:
+        with open(tmp_dest, "wb") as out:
+            while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise _UploadTooLarge()
+                out.write(chunk)
+    except BaseException:
+        tmp_dest.unlink(missing_ok=True)
+        raise
+    return size
+
+
 # ─── Upload ──────────────────────────────────────────────────────────────────
 
 @router.post("/upload")
@@ -34,7 +64,8 @@ async def upload_file(
     started = time.monotonic()
     client_ip = request.client.host if request.client else "?"
     user_agent = request.headers.get("user-agent", "")[:200]
-    raw_filename = file.filename or ""
+    # Logged and echoed as-is otherwise: strip control characters and bound it.
+    raw_filename = clean_text(file.filename or "", max_len=255, truncate=True)
 
     if not raw_filename or not raw_filename.lower().endswith((".xrk", ".xrz")):
         upload_log.record(
@@ -44,14 +75,28 @@ async def upload_file(
         )
         raise HTTPException(400, "Only .xrk/.xrz files are supported")
 
-    filename = sanitize_filename(raw_filename)
-    content = await file.read()
-    size = len(content)
+    try:
+        filename = sanitize_filename(raw_filename)
+    except ValueError:
+        upload_log.record(
+            filename=raw_filename, size=0, duration_s=time.monotonic() - started,
+            client_ip=client_ip, user_agent=user_agent,
+            status="upload_failed", error="invalid filename",
+        )
+        raise HTTPException(400, "Invalid filename")
 
     dest = session_store.session_file_path(filename)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_dest = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
-    tmp_dest.write_bytes(content)
+    try:
+        size = await _save_upload(file, tmp_dest)
+    except _UploadTooLarge:
+        upload_log.record(
+            filename=filename, size=MAX_UPLOAD_BYTES, duration_s=time.monotonic() - started,
+            client_ip=client_ip, user_agent=user_agent,
+            status="upload_failed", error="file too large",
+        )
+        raise HTTPException(413, f"File is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
     os.replace(tmp_dest, dest)
 
     try:
@@ -219,21 +264,34 @@ async def get_gps():
     if not filtered["lat"]:
         return {"gps": None}
 
+    # Units of the speed channel so the client can convert the trail colours;
+    # speed is null (not zeros) when the session has no GPS speed channel.
+    filtered["speedUnits"] = channel_meta(speed_name, ch[speed_name])["units"] if speed_name else ""
+    if not speed_name:
+        filtered["speed"] = None
+
     return {"gps": filtered}
 
 
 # ─── Export ──────────────────────────────────────────────────────────────────
 
 @router.get("/export")
-async def export_csv(channels: str = Query(...)):
+async def export_csv(channels: str = Query(...), convert: str | None = Query(None)):
+    """``convert`` (optional) is JSON ``{name: {"unit", "scale", "offset"}}``:
+    the client's display-unit conversion, applied as ``value * scale + offset``."""
     if not state.loaded:
         raise HTTPException(400, "No file loaded")
+
+    from services.csv_export import parse_conversions, streaming_csv_response
+
+    try:
+        conversions = parse_conversions(convert)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     names = [n.strip() for n in channels.split(",") if n.strip()]
     if not names:
         raise HTTPException(400, "No channels specified")
-
-    from services.csv_export import streaming_csv_response
 
     entry = session_store.get_session(state.session_id) if state.session_id else None
     aim_session_id = entry.get("aim_session_id") if entry else None
@@ -241,6 +299,7 @@ async def export_csv(channels: str = Query(...)):
     try:
         return streaming_csv_response(
             state.log, state.filename, names, aim_session_id=aim_session_id,
+            conversions=conversions,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -282,6 +341,10 @@ def evaluate_derived_channel(body: DerivedChannelRequest):
 
     if len(body.expression) > _MAX_EXPRESSION_LEN:
         raise HTTPException(400, f"Expression too long (max {_MAX_EXPRESSION_LEN} characters)")
+    try:
+        validate_channel_payload(body.channels)
+    except InvalidInput as e:
+        raise HTTPException(400, str(e))
 
     try:
         local_vars = derived_eval.run(
@@ -312,6 +375,8 @@ def evaluate_derived_channel(body: DerivedChannelRequest):
     if hasattr(vals_out, "tolist"):
         vals_out = vals_out.tolist()
 
+    if not isinstance(ts_out, (list, tuple)) or not isinstance(vals_out, (list, tuple)):
+        raise HTTPException(400, "result 'timestamps' and 'values' must be lists or arrays")
     if len(ts_out) != len(vals_out):
         raise HTTPException(400, "timestamps and values must have the same length")
 
@@ -319,7 +384,7 @@ def evaluate_derived_channel(body: DerivedChannelRequest):
     clean_ts = []
     clean_vals = []
     for t, v in zip(ts_out, vals_out):
-        if isinstance(v, (int, float)) and math.isfinite(v):
+        if is_finite_number(t) and is_finite_number(v):
             clean_ts.append(float(t))
             clean_vals.append(float(v))
 

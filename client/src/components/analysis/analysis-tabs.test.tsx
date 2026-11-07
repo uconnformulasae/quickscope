@@ -128,6 +128,12 @@ describe('LapAnalysisTab', () => {
     expect(screen.getByText('Best')).toBeTruthy();
   });
 
+  it('leaves the gap blank on the first lap (out lap) but shows it on later laps', () => {
+    render(<LapAnalysisTab session={lapSession()} activeChannels={[]} />);
+    expect(screen.queryByText('+5.000')).toBeNull(); // lap 1: 60 s vs best 55 s
+    expect(screen.getByText('+3.000')).toBeTruthy(); // lap 3: 58 s vs best 55 s
+  });
+
   it('labels auto-detected laps', () => {
     const { rerender } = render(<LapAnalysisTab session={lapSession('gps_auto')} activeChannels={[]} />);
     expect(screen.getByText('Auto-detected (GPS)')).toBeTruthy();
@@ -143,5 +149,49 @@ describe('LapAnalysisTab', () => {
     expect(screen.getByText('50.00')).toBeTruthy();
     expect(screen.getByText('80.00')).toBeTruthy();
     expect(screen.getAllByText('Speed').length).toBeGreaterThan(0);
+  });
+
+  it('selects laps with checkboxes, best and clear', () => {
+    const onSelect = vi.fn();
+    const onToggle = vi.fn();
+    const { rerender } = render(
+      <LapAnalysisTab session={lapSession()} activeChannels={[]} selectedLaps={[]}
+        onToggleLap={onToggle} onSetSelectedLaps={onSelect} />,
+    );
+    const boxes = screen.getAllByRole('checkbox');
+    expect(boxes).toHaveLength(3);
+    fireEvent.click(boxes[2]);
+    expect(onToggle).toHaveBeenCalledWith(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Select best' }));
+    expect(onSelect).toHaveBeenCalledWith([1]); // lap 2 (55 s) is best
+    rerender(
+      <LapAnalysisTab session={lapSession()} activeChannels={[]} selectedLaps={[0, 2]}
+        onToggleLap={onToggle} onSetSelectedLaps={onSelect} />,
+    );
+    expect(screen.getByText('2 selected — comparing')).toBeTruthy();
+    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(onSelect).toHaveBeenCalledWith([]);
+  });
+
+  it('truncates long channel names with the full name on hover', () => {
+    const long = 'LF_BRKTempCH1_VeryLongName';
+    const sess = lapSession();
+    sess.channels.set(1, { ...sess.channels.get(1)!, shortName: long });
+    render(<LapAnalysisTab session={sess} activeChannels={[{ channelId: 1, color: '#f00', visible: true }]} />);
+    const names = screen.getAllByTitle(long);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names[0].className).toContain('truncate');
+  });
+
+  it('shows each lap\'s gap to the best lap and flags much slower laps', () => {
+    const sess = lapSession();
+    // Add a 3-minute lap 4 (173 s → 353 s): far slower than the ~58 s median.
+    sess.lapMarkers = [...sess.lapMarkers, { timestamp: 353_000, lapNumber: 5 }];
+    render(<LapAnalysisTab session={sess} activeChannels={[]} />);
+    expect(screen.queryByText('+5.000')).toBeNull(); // lap 1: out lap, gap left blank
+    expect(screen.getByText('+3.000')).toBeTruthy(); // lap 3: 58 s
+    expect(screen.getByText('+125.000')).toBeTruthy(); // lap 4: 180 s
+    expect(screen.getAllByText('slow')).toHaveLength(1);
   });
 });
