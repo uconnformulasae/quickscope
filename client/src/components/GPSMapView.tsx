@@ -26,6 +26,12 @@ function rangeOf(values: number[]): [number, number] {
 }
 
 const NO_SPEED_COLOR = '#4361ee';
+/**
+ * Own pane for cursor markers: the trail is redrawn after the cursor exists, and
+ * vectors in one pane stack in insertion order. 450 sits above overlayPane (400)
+ * and below Leaflet's marker/tooltip/popup panes.
+ */
+const CURSOR_PANE = 'qs-cursor';
 
 interface TrackData {
   coords: [number, number][];
@@ -91,6 +97,7 @@ export function GPSMapView({ sessionKey, cursorTime, lapMarkers = NO_LAPS, selec
     if (!gpsData || !mapContainerRef.current) return;
 
     const container = mapContainerRef.current;
+    let refitFrame = 0;
     const buildMap = () => {
       if (mapRef.current) {
         mapRef.current.remove();
@@ -126,18 +133,20 @@ export function GPSMapView({ sessionKey, cursorTime, lapMarkers = NO_LAPS, selec
       }).addTo(map);
 
       const trail = L.layerGroup().addTo(map);
+      map.createPane(CURSOR_PANE).style.zIndex = '450';
 
       // Fit bounds
       const bounds = L.latLngBounds(coords);
       map.fitBounds(bounds, { padding: [20, 20] });
       // Tab panel may mount before layout settles; tiles stay blank without this.
-      requestAnimationFrame(() => {
+      refitFrame = requestAnimationFrame(() => {
         map.invalidateSize();
         map.fitBounds(bounds, { padding: [20, 20] });
       });
 
       // Cursor position marker
       const marker = L.circleMarker(coords[0], {
+        pane: CURSOR_PANE,
         radius: 6,
         fillColor: '#ffffff',
         fillOpacity: 1,
@@ -156,6 +165,7 @@ export function GPSMapView({ sessionKey, cursorTime, lapMarkers = NO_LAPS, selec
     buildMap();
 
     return () => {
+      cancelAnimationFrame(refitFrame);
       trackRef.current = null;
       markerRef.current = null;
       trailRef.current = null;
@@ -220,7 +230,7 @@ export function GPSMapView({ sessionKey, cursorTime, lapMarkers = NO_LAPS, selec
       if (cursorTime == null) return;
       lapMarkersRef.current = lapSel.map((lap, i) => L.circleMarker(
         coords[Math.min(nearestIndex(times, Math.min(toSessionMs(cursorTime, lap), lap.endMs)), coords.length - 1)],
-        { radius: 6, fillColor: lapColor(i), fillOpacity: 1, color: '#ffffff', weight: 2 },
+        { pane: CURSOR_PANE, radius: 6, fillColor: lapColor(i), fillOpacity: 1, color: '#ffffff', weight: 2 },
       ).addTo(map));
       return;
     }
