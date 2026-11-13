@@ -19,11 +19,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from services.aim_device_cache import get_cached
-from services.aim_discovery import DEFAULT_DEVICE_IP, configured_device_ip
+from services.aim_discovery import configured_device_port, resolve_device_host
 from services.aim_live import AimLiveClient
 from services.aim_live_trace import AimLiveTrace
-from services.settings_store import load as load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +78,7 @@ class AimPrimaryHub:
 
     def resolve_host(self, host: str | None) -> str:
         """Explicit host, else cached discovery IP, else settings/default."""
-        if host:
-            return host
-        cached = get_cached()
-        if cached is not None:
-            return cached.ip
-        return load_settings().get("aim_device_ip", configured_device_ip() or DEFAULT_DEVICE_IP)
+        return resolve_device_host(host)
 
     async def ensure_primary(
         self,
@@ -95,11 +88,15 @@ class AimPrimaryHub:
     ) -> AimLiveClient:
         """Connect + live handshake on primary TCP if not already up."""
         target = self.resolve_host(host)
+        # The port in Settings applies here too, not only to the fallback
+        # download socket.
+        port = configured_device_port()
         if (
             self._client is not None
             and self._client.connected
             and getattr(self._client, "_handshake_done", False)
             and self._client.host == target
+            and getattr(self._client, "port", port) == port
         ):
             if trace is not None:
                 # Rebind to the current WS session's trace -- the client
@@ -110,8 +107,8 @@ class AimPrimaryHub:
             return self._client
 
         await self.close_primary()
-        logger.info("AiM primary hub: opening TCP to %s (live handshake)", target)
-        client = AimLiveClient(host=target, trace=trace)
+        logger.info("AiM primary hub: opening TCP to %s:%d (live handshake)", target, port)
+        client = AimLiveClient(host=target, port=port, trace=trace)
         try:
             await client.connect()
         except BaseException:
@@ -127,8 +124,19 @@ class AimPrimaryHub:
             client = await self.ensure_primary(host)
             return await self._fetch_list(client)
 
+    @property
+    def primary_connected(self) -> bool:
+        """True while the primary TCP is up, i.e. the device needs no rediscovery."""
+        return self._client is not None and self._client.connected
+
     async def _fetch_list(self, client: AimLiveClient) -> list[dict]:
-        sessions = await client.fetch_session_list()
+        try:
+            sessions = await client.fetch_session_list()
+        except BaseException:
+            # A list that failed part-way leaves the socket mid-exchange (or
+            # dead). Drop it so the next attempt dials a fresh one.
+            await self.close_primary()
+            raise
         self._listed_by, self._listed_sessions = client, sessions
         return sessions
 

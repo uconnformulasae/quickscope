@@ -29,6 +29,12 @@ describe('scalar arithmetic', () => {
     ['2 + 3 * 4', 14],
     ['(2 + 3) * 4', 20],
     ['2 ^ 3 ^ 2', 512],
+    ['-2 ^ 2', -4],
+    ['2 ^ -1', 0.5],
+    ['-2 ^ -2', -0.25],
+    ['--2 ^ 2', 4],
+    ['3 * -2', -6],
+    ['(-2) ^ 2', 4],
     ['sqrt(16)', 4],
     ['abs(-3.5)', 3.5],
     ['min(3, 9)', 3],
@@ -62,6 +68,10 @@ describe('channel arithmetic', () => {
 
   it('unary minus negates channels', () => {
     expect(ok('-A').values).toEqual([-1, -2, -3]);
+  });
+
+  it('unary minus applies after ^ on channels', () => {
+    expect(ok('-A ^ 2').values).toEqual([-1, -4, -9]);
   });
 
   it('min/max of two channels is element-wise', () => {

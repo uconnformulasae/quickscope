@@ -8,12 +8,12 @@ router = APIRouter(prefix="/api")
 
 
 @router.get("/settings")
-async def get_settings():
+def get_settings():
     return settings_store.load()
 
 
 @router.put("/settings")
-async def update_settings(body: dict):
+def update_settings(body: dict):
     try:
         return settings_store.update(body)
     except settings_store.SettingsError as exc:

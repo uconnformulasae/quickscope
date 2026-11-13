@@ -4,30 +4,74 @@
  */
 import type { UnitSystem } from './usePreferences';
 
-type Dimension = 'speed' | 'temperature' | 'pressure' | 'length' | 'torque' | 'volume' | 'mass';
+type Dimension =
+  | 'speed' | 'temperature' | 'pressure' | 'length' | 'torque' | 'volume' | 'mass'
+  | 'voltage' | 'acceleration' | 'angle' | 'angularRate' | 'time' | 'power';
 
-/** Canonical unit → dimension and affine transform to the dimension's base unit
- *  (base = value * scale + offset). */
-const UNITS: Record<string, { dim: Dimension; scale: number; offset?: number }> = {
-  'km/h': { dim: 'speed', scale: 1 },
-  'mph': { dim: 'speed', scale: 1.609344 },
+interface UnitDef {
+  dim: Dimension;
+  /** Affine transform to the dimension's base unit: base = value * scale + offset. */
+  scale: number;
+  offset?: number;
+  /** Offered when a live tile's unit is clicked (see components/live/units.ts). */
+  live?: boolean;
+}
+
+/**
+ * Every unit the app converts, defined once. Three things read it:
+ *  - the analysis views, through the aliases below (logger spellings vary);
+ *  - the live tiles, by exact label, for the units marked `live`;
+ *  - the formula recipes, which print a factor into the formula.
+ * Within a dimension, order is the order units are offered in.
+ */
+const UNITS: Record<string, UnitDef> = {
+  'km/h': { dim: 'speed', scale: 1, live: true },
+  'mph': { dim: 'speed', scale: 1.609344, live: true },
   'm/s': { dim: 'speed', scale: 3.6 },
-  '°C': { dim: 'temperature', scale: 1 },
-  '°F': { dim: 'temperature', scale: 5 / 9, offset: -32 * 5 / 9 },
-  'bar': { dim: 'pressure', scale: 1 },
-  'kPa': { dim: 'pressure', scale: 0.01 },
-  'psi': { dim: 'pressure', scale: 0.0689475729 },
+  '°C': { dim: 'temperature', scale: 1, live: true },
+  '°F': { dim: 'temperature', scale: 5 / 9, offset: -32 * 5 / 9, live: true },
+  'bar': { dim: 'pressure', scale: 1, live: true },
+  'psi': { dim: 'pressure', scale: 0.0689475729, live: true },
+  'kPa': { dim: 'pressure', scale: 0.01, live: true },
   'm': { dim: 'length', scale: 1 },
   'km': { dim: 'length', scale: 1000 },
   'ft': { dim: 'length', scale: 0.3048 },
   'mi': { dim: 'length', scale: 1609.344 },
-  'Nm': { dim: 'torque', scale: 1 },
-  'lb·ft': { dim: 'torque', scale: 1.3558179483 },
+  'Nm': { dim: 'torque', scale: 1, live: true },
+  'lb·ft': { dim: 'torque', scale: 1.3558179483, live: true },
   'L': { dim: 'volume', scale: 1 },
   'gal': { dim: 'volume', scale: 3.785411784 },
   'kg': { dim: 'mass', scale: 1 },
   'lb': { dim: 'mass', scale: 0.45359237 },
+  'V': { dim: 'voltage', scale: 1, live: true },
+  'mV': { dim: 'voltage', scale: 0.001, live: true },
+  'g': { dim: 'acceleration', scale: 1, live: true },
+  'm/s²': { dim: 'acceleration', scale: 1 / 9.80665, live: true },
+  '°': { dim: 'angle', scale: 1, live: true },
+  'rad': { dim: 'angle', scale: 180 / Math.PI, live: true },
+  '°/s': { dim: 'angularRate', scale: 1, live: true },
+  'rad/s': { dim: 'angularRate', scale: 180 / Math.PI, live: true },
+  'ms': { dim: 'time', scale: 1, live: true },
+  's': { dim: 'time', scale: 1000, live: true },
+  'kW': { dim: 'power', scale: 1 },
+  'hp': { dim: 'power', scale: 0.745699872 },
 };
+
+/** `value * scale + offset` taking a value in `from` to `to`, by exact table
+ *  label; undefined when either is unknown or they measure different things. */
+export function unitCoefficients(from: string, to: string): { scale: number; offset: number } | undefined {
+  const a = UNITS[from], b = UNITS[to];
+  if (!a || !b || a.dim !== b.dim) return undefined;
+  return { scale: a.scale / b.scale, offset: ((a.offset ?? 0) - (b.offset ?? 0)) / b.scale };
+}
+
+/** Units of the same kind as `unit` that live tiles offer, in table order
+ *  (including `unit`); empty when it is not a live-tile unit. */
+export function liveUnitFamily(unit: string): string[] {
+  const def = UNITS[unit];
+  if (!def?.live) return [];
+  return Object.keys(UNITS).filter(k => UNITS[k].live && UNITS[k].dim === def.dim);
+}
 
 /** Lower-cased, space-stripped spelling → canonical label. */
 const ALIASES: Record<string, string> = {

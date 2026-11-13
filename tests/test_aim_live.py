@@ -233,7 +233,7 @@ def test_stream_impl_no_post_snapshot_micro_ack() -> None:
 
     src = inspect.getsource(AimLiveClient.stream)
     assert "yield snap" in src
-    assert "_send_stcp(_STCP_4BYTE_ACK)" not in src
+    assert "_send_stcp(STCP_4BYTE_ACK)" not in src
 
 
 def test_rs3_aux_enum_sends_date_without_immediate_micro_ack() -> None:
@@ -268,7 +268,7 @@ def test_reconnect_is_fast_and_reader_never_blocks() -> None:
                 raise ConnectionError("no hello-ack")
 
         c._reconnect = fake_reconnect  # type: ignore[method-assign]
-        await c._reconnect_with_retry(max_attempts=10, base_backoff_s=1.0)
+        await c._reconnect_with_retry()
         assert [e["state"] for e in events] == ["reconnecting", "reconnecting"]
 
     asyncio.run(run())

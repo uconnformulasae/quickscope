@@ -196,7 +196,7 @@ describe('ChannelSidebar', () => {
 
   it('toggles channels and shows active chips', () => {
     const { handlers } = renderSidebar({
-      activeChannels: [{ channelId: 1, color: '#f00', visible: true }, { channelId: 10000, color: '#0f0', visible: true }],
+      activeChannels: [{ channelId: 1, color: '#f00' }, { channelId: 10000, color: '#0f0' }],
     });
     expect(screen.getByText('2 active')).toBeTruthy();
     expect(screen.getByText('Active channels')).toBeTruthy();

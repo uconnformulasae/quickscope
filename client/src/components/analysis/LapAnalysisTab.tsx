@@ -6,6 +6,7 @@ import { Timer } from 'lucide-react';
 import { lapColor } from '../../lib/lap-compare';
 import { formatNum, resolveChannel, resolveSamples } from './analysis-helpers';
 import { useDisplaySamples } from '../../lib/useDisplaySamples';
+import { samplesInRange } from '../../lib/binary-search';
 
 /** Laps shorter than this fraction of the median lap can't be the best lap. */
 const MIN_BEST_LAP_FRACTION = 0.5;
@@ -61,6 +62,17 @@ export function LapAnalysisTab({
     const medianLapS = sortedTimes[Math.floor(sortedTimes.length / 2)];
     const minBestLapS = medianLapS * MIN_BEST_LAP_FRACTION;
 
+    // Resolve each shown channel once, not once per lap.
+    const shown = activeChannels.slice(0, 3).flatMap(ac => {
+      const chan = resolveChannel(ac.channelId, session, derivedChannels, display);
+      if (!chan) return [];
+      return [{
+        name: chan.shortName,
+        color: ac.color,
+        samples: resolveSamples(ac.channelId, session, derivedSamplesMap, display, derivedChannels),
+      }];
+    });
+
     for (let i = 0; i < markers.length - 1; i++) {
       const startMs = markers[i].timestamp;
       const endMs = markers[i + 1].timestamp;
@@ -72,12 +84,9 @@ export function LapAnalysisTab({
       }
 
       const channelStats: Record<string, any> = {};
-      for (const ac of activeChannels.slice(0, 3)) {
-        const chan = resolveChannel(ac.channelId, session, derivedChannels, display);
-        if (!chan) continue;
-        const allSamps = resolveSamples(ac.channelId, session, derivedSamplesMap, display, derivedChannels);
-        const samps = allSamps.filter(s => s.timestamp >= startMs && s.timestamp <= endMs);
-        channelStats[chan.shortName] = { ...computeStats(samps), color: ac.color };
+      for (const { name, color, samples } of shown) {
+        // Samples are time-sorted: bisect to the lap, don't test every sample.
+        channelStats[name] = { ...computeStats(samplesInRange(samples, startMs, endMs)), color };
       }
 
       laps.push({

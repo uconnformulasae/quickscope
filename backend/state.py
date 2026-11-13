@@ -6,6 +6,8 @@ Used across route modules — import from here instead of duplicating.
 
 import logging
 import math
+
+import numpy as np
 from datetime import datetime as _dt
 from pathlib import Path
 from typing import Optional
@@ -91,6 +93,15 @@ class SessionState:
             session_cache.put(value, log, fn)
         session_cache.set_active(value)
 
+    def activate(self, session_id: str, log, filename: str, local_path: Path | None = None):
+        """Cache ``log`` under ``session_id`` and make it the active session.
+
+        One step, so concurrent uploads never share a placeholder cache slot.
+        """
+        session_cache.put(session_id, log, filename, local_path)
+        session_cache.set_active(session_id)
+        self._filename = filename
+
     def discard_pending(self):
         """Drop a log that was never bound to a session id (e.g. failed upload)."""
         session_cache.evict(_PENDING_ID)
@@ -110,13 +121,6 @@ class SessionState:
 
 state = SessionState()
 
-
-def get_log(session_id: Optional[str] = None):
-    """Resolve session_id to a parsed log without changing the active session."""
-    if not session_id:
-        return state.log
-    entry = session_cache.get(session_id)
-    return entry[0] if entry else None
 
 # ─── Utility functions ───────────────────────────────────────────────────────
 
@@ -138,17 +142,34 @@ def channel_data(name: str, table, *, drop_gaps: bool = False) -> dict:
     alignment with sibling channels; ``drop_gaps=True`` removes those samples
     (timestamp and value together) for callers that need plain numeric arrays.
     """
-    df = table.to_pandas()
-    timestamps = df['timecodes'].tolist()
-    values = [
-        float(v) if isinstance(v, (int, float)) and math.isfinite(v) else None
-        for v in df[name].tolist()
-    ]
+    ts, vals = channel_arrays(name, table)
+    finite = np.isfinite(vals)
     if drop_gaps:
-        kept = [(t, v) for t, v in zip(timestamps, values) if v is not None]
-        timestamps = [t for t, _ in kept]
-        values = [v for _, v in kept]
-    return {"timestamps": timestamps, "values": values}
+        return {"timestamps": ts[finite].tolist(), "values": vals[finite].tolist()}
+    values = vals.tolist()
+    for i in np.flatnonzero(~finite).tolist():
+        values[i] = None
+    return {"timestamps": ts.tolist(), "values": values}
+
+
+def channel_arrays(name: str, table) -> tuple[np.ndarray, np.ndarray]:
+    """``(timecodes, values)`` as numpy arrays, straight from Arrow.
+
+    Values are float64 with NaN for anything that is not a finite number;
+    timecodes keep their stored dtype (int64 ms).
+    """
+    ts = table.column("timecodes").to_numpy()
+    raw = table.column(name).to_numpy()
+    try:
+        vals = np.asarray(raw, dtype=np.float64)
+    except (TypeError, ValueError):
+        # Non-numeric column (e.g. strings): keep the numbers, gap the rest.
+        vals = np.array(
+            [float(v) if isinstance(v, (int, float)) else np.nan for v in raw.tolist()],
+            dtype=np.float64,
+        )
+    vals = np.where(np.isfinite(vals), vals, np.nan)
+    return ts, vals
 
 
 def parse_file(file_path: str | Path, priority: int | None = None):
@@ -184,12 +205,13 @@ def extract_session_info(log, filename: str) -> dict:
 
         sample_rate_hz = 0
         if n_rows > 0 and not name.lower().startswith("gps"):
-            df = table.to_pandas()
-            last_tc = float(df['timecodes'].iloc[-1])
+            timecodes = table.column("timecodes")
+            first_tc = float(timecodes[0].as_py())
+            last_tc = float(timecodes[n_rows - 1].as_py())
             if last_tc < 36_000_000 and last_tc > duration_ms:
                 duration_ms = last_tc
             if n_rows >= 2:
-                dt = float(df['timecodes'].iloc[-1] - df['timecodes'].iloc[0])
+                dt = last_tc - first_tc
                 if dt > 0:
                     sample_rate_hz = round((n_rows - 1) / (dt / 1000), 1)
 

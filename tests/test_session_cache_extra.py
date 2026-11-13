@@ -5,13 +5,15 @@ from __future__ import annotations
 from services.session_cache import SessionCache
 
 
-def test_active_id_cleared_when_active_entry_evicted_by_lru(tmp_path):
-    cache = SessionCache(max_entries=1)
+def test_active_entry_is_never_evicted_by_lru(tmp_path):
+    """Pulling or exporting other sessions must not unload the one on screen."""
+    cache = SessionCache(max_entries=2)
     cache.put("a", object(), "a.xrk")
     cache.set_active("a")
-    cache.put("b", object(), "b.xrk")
-    assert cache.active_id is None
-    assert cache.keys() == ["b"]
+    for other in ("b", "c", "d"):
+        cache.put(other, object(), f"{other}.xrk")
+    assert cache.active_id == "a"
+    assert cache.keys() == ["a", "d"]
 
 
 def test_get_or_load_parses_once_per_file_version(tmp_path):

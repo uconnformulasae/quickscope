@@ -1,3 +1,28 @@
+type SaveFilePicker = (options: {
+  suggestedName?: string;
+  types?: { description: string; accept: Record<string, string[]> }[];
+}) => Promise<{ createWritable(): Promise<{ write(data: Blob): Promise<void>; close(): Promise<void> }> }>;
+
+/** Download a blob straight to the browser's downloads folder. */
+export function downloadBlob(blob: Blob, fileName: string): void {
+  const url = URL.createObjectURL(blob);
+  try {
+    downloadUrl(url, fileName);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** Download something that already has a URL (e.g. an object URL also shown in an <img>). */
+export function downloadUrl(url: string, fileName: string): void {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+}
+
 /**
  * Save a blob with the system save dialog when available, otherwise trigger a download.
  */
@@ -10,7 +35,8 @@ export async function saveBlob(blob: Blob, suggestedName: string): Promise<void>
 
   if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
     try {
-      const handle = await window.showSaveFilePicker({
+      const showSaveFilePicker = (window as unknown as { showSaveFilePicker: SaveFilePicker }).showSaveFilePicker;
+      const handle = await showSaveFilePicker({
         suggestedName,
         ...(ext
           ? {
@@ -34,12 +60,5 @@ export async function saveBlob(blob: Blob, suggestedName: string): Promise<void>
     }
   }
 
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = suggestedName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, suggestedName);
 }

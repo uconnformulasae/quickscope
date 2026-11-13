@@ -58,7 +58,6 @@ function makeDc(overrides: Partial<DrawContext> = {}) {
     chartMode: 'separate',
     sharedYRanges: new Map(),
     timeToX: (t: number, xr: [number, number], plotW: number) => lm + ((t - xr[0]) / (xr[1] - xr[0])) * plotW,
-    getVisibleSamples: () => [],
     overlayAxisLayout: { unitAxes: new Map(), axisCount: 0 },
     session,
     smoothedYRanges: new Map([['ch:1', [0, 4000] as [number, number]]]),
@@ -71,7 +70,7 @@ function makeDc(overrides: Partial<DrawContext> = {}) {
   return { dc, calls };
 }
 
-const texts = (calls: Call[]) => calls.filter((c) => c.op === 'fillText').map((c) => c.args[0]);
+const texts = (calls: Call[]) => calls.filter((c) => c.op === 'fillText').map((c) => String(c.args[0]));
 
 describe('drawCursors', () => {
   it('draws nothing when no cursor or hover is set', () => {

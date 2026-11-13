@@ -2,16 +2,13 @@
 Settings persistence backed by ./data/settings.json.
 """
 
-import json
-import os
 import threading
-import time
 from pathlib import Path
 
+from config import DATA_DIR
+from services.json_store import load_json, save_json
 from sanitize import InvalidInput, validate_device_ip, validate_device_port, validate_wifi_ssid
 
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
 DEFAULTS = {
@@ -49,21 +46,9 @@ def load() -> dict:
 
 def _load_unlocked() -> dict:
     _ensure_dir()
-    if not SETTINGS_FILE.exists():
-        _save_unlocked(DEFAULTS)
-        return dict(DEFAULTS)
-    try:
-        with open(SETTINGS_FILE, "r") as f:
-            stored = json.load(f)
-        if not isinstance(stored, dict):
-            raise ValueError("settings file is not a JSON object")
-    except (ValueError, UnicodeDecodeError):  # JSONDecodeError is a ValueError
-        # Keep the unreadable file for recovery and fall back to defaults.
-        try:
-            ts = int(time.time())
-            os.replace(SETTINGS_FILE, SETTINGS_FILE.with_name(f"{SETTINGS_FILE.name}.{ts}.corrupt"))
-        except OSError:
-            pass
+    # Missing or unreadable (kept aside for recovery): fall back to defaults.
+    stored = load_json(SETTINGS_FILE, lambda data: isinstance(data, dict))
+    if stored is None:
         _save_unlocked(DEFAULTS)
         return dict(DEFAULTS)
     known = {}
@@ -83,17 +68,7 @@ def _load_unlocked() -> dict:
 
 def _save_unlocked(settings: dict):
     _ensure_dir()
-    tmp = SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + f".{os.getpid()}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(settings, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, SETTINGS_FILE)  # atomic: a crash mid-write can't leave a truncated file
-
-
-def save(settings: dict):
-    with _lock:
-        _save_unlocked(settings)
+    save_json(SETTINGS_FILE, settings)
 
 
 def validate(partial: dict) -> dict:

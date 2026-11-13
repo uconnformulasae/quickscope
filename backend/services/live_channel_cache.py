@@ -8,16 +8,14 @@ the IC ECU block while the ECU is unpowered) is still a valid pick. The
 file is written only when a session sees a channel the cache didn't have.
 """
 
-import json
-import os
 import re
 import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
+from config import DATA_DIR
+from services.json_store import load_json, save_json
+
 CHANNELS_FILE = DATA_DIR / "live_channels.json"
 
 VEHICLES = ("ev", "ic")
@@ -33,18 +31,8 @@ def vehicle_kind(vehicle: str | None) -> str:
 
 
 def _load_unlocked() -> dict:
-    if not CHANNELS_FILE.exists():
-        return {}
-    try:
-        with open(CHANNELS_FILE, "r") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            raise ValueError("live channels file is not a JSON object")
-    except (ValueError, UnicodeDecodeError):
-        try:
-            os.replace(CHANNELS_FILE, CHANNELS_FILE.with_name(f"{CHANNELS_FILE.name}.{int(time.time())}.corrupt"))
-        except OSError:
-            pass
+    data = load_json(CHANNELS_FILE, lambda d: isinstance(d, dict))
+    if data is None:
         return {}
     return {
         k: v for k, v in data.items()
@@ -53,13 +41,7 @@ def _load_unlocked() -> dict:
 
 
 def _save_unlocked(data: dict) -> None:
-    CHANNELS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CHANNELS_FILE.with_suffix(CHANNELS_FILE.suffix + f".{os.getpid()}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, CHANNELS_FILE)
+    save_json(CHANNELS_FILE, data)
 
 
 def get(kind: str) -> dict:

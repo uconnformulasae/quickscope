@@ -66,9 +66,6 @@ class AimLiveTrace:
             # swallow it, this log is best-effort.
             self._closed = True
 
-    def log_frame(self, direction: str, summary: str, **fields: Any) -> None:
-        self.log("frame", direction=direction, summary=summary, **fields)
-
     def close(self, **summary: Any) -> None:
         if self._closed:
             return

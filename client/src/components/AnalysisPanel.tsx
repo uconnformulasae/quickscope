@@ -8,6 +8,8 @@ import { StatsTab } from './analysis/StatsTab';
 import { LapAnalysisTab } from './analysis/LapAnalysisTab';
 import { HistogramTab } from './analysis/HistogramTab';
 import { XYPlotTab } from './analysis/XYPlotTab';
+import { useCursorTime, type CursorStore } from '../lib/cursorStore';
+import type { ComponentProps } from 'react';
 
 interface AnalysisPanelProps {
   session: XRKSession;
@@ -24,10 +26,18 @@ interface AnalysisPanelProps {
   derivedSamplesMap?: Map<number, ChannelSample[]>;
   onNavigateToTime?: (timestampMs: number) => void;
   cursorTime?: number | null;
+  /** Live chart cursor; only the GPS marker subscribes to it. */
+  cursorStore?: CursorStore;
   theme?: 'dark' | 'light';
   selectedLaps?: number[];
   onToggleLap?: (index: number) => void;
   onSetSelectedLaps?: (indices: number[]) => void;
+}
+
+/** GPS map that follows the live cursor. Subscribing here, and not in the
+ *  panel, keeps a mouse move over the chart from re-rendering the other tabs. */
+function LiveCursorGPSMap({ cursorStore, ...rest }: { cursorStore: CursorStore } & Omit<ComponentProps<typeof GPSMapView>, 'cursorTime'>) {
+  return <GPSMapView {...rest} cursorTime={useCursorTime(cursorStore)} />;
 }
 
 const TABS: { id: AnalysisTab; label: string; icon: any }[] = [
@@ -53,6 +63,7 @@ export function AnalysisPanel({
   derivedSamplesMap,
   onNavigateToTime,
   cursorTime,
+  cursorStore,
   theme,
   selectedLaps,
   onToggleLap,
@@ -149,7 +160,11 @@ export function AnalysisPanel({
           />
         )}
         {analysisTab === 'gps' && (
-          <GPSMapView cursorTime={cursorTime} lapMarkers={session.lapMarkers} selectedLaps={selectedLaps} />
+          cursorStore ? (
+            <LiveCursorGPSMap cursorStore={cursorStore} sessionKey={session.metadata} lapMarkers={session.lapMarkers} selectedLaps={selectedLaps} />
+          ) : (
+            <GPSMapView sessionKey={session.metadata} cursorTime={cursorTime} lapMarkers={session.lapMarkers} selectedLaps={selectedLaps} />
+          )
         )}
         </div>
       </div>

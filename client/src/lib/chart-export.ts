@@ -18,6 +18,7 @@ import {
   niceAxisTicks, formatValue, formatTimeSec, brightenColor, minMaxTrace, clamp, interpolateValue,
   visibleMinMax, placeLabelBox, contrastText,
 } from './chart-utils';
+import { sampleLowerBound as lowerBound, sampleUpperBound as upperBound } from './binary-search';
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
@@ -124,24 +125,6 @@ const TRACE_INSET = 8;
 
 const isKnown = (v: string | undefined | null): v is string =>
   !!v && v.trim() !== '' && v.trim().toLowerCase() !== 'unknown';
-
-function lowerBound(arr: ChannelSample[], tMs: number): number {
-  let a = 0, b = arr.length;
-  while (a < b) {
-    const m = (a + b) >> 1;
-    if (arr[m].timestamp < tMs) a = m + 1; else b = m;
-  }
-  return a;
-}
-
-function upperBound(arr: ChannelSample[], tMs: number): number {
-  let a = 0, b = arr.length;
-  while (a < b) {
-    const m = (a + b) >> 1;
-    if (arr[m].timestamp <= tMs) a = m + 1; else b = m;
-  }
-  return a;
-}
 
 /** Samples within [loMs, hiMs], plus `extra` neighbours on each side. */
 function sliceWindow(samples: ChannelSample[], loMs: number, hiMs: number, extra = 0): ChannelSample[] {

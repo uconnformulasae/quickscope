@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import zlib
 from pathlib import Path
+from urllib.parse import quote
 
 
 def is_zlib_xrz_payload(raw: bytes) -> bool:
@@ -27,6 +28,19 @@ def quickscope_export_basename(
         label = Path(label).stem
     safe = re.sub(r"[^\w\-.]", "_", label)
     return safe or "export"
+
+
+def content_disposition(filename: str) -> str:
+    """``Content-Disposition`` for a download named ``filename``.
+
+    HTTP headers are Latin-1 only, so a non-ASCII name goes in the RFC 5987
+    ``filename*`` parameter with an ASCII fallback beside it.
+    """
+    fallback = "".join(c if c.isascii() and c.isprintable() and c not in '"\\' else "_" for c in filename)
+    header = f'attachment; filename="{fallback}"'
+    if fallback != filename:
+        header += f"; filename*=UTF-8''{quote(filename, safe='')}"
+    return header
 
 
 def export_xrk_filename(

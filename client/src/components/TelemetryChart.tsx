@@ -3,7 +3,7 @@ import { formatChartElapsed } from '../lib/time-format';
 import type { ChannelSample } from '../lib/xrk-parser';
 import { RotateCcw, ImageDown, X } from 'lucide-react';
 import {
-  type TelemetryChartProps, type StripLayout, type DrawContext,
+  type TelemetryChartProps, type StripLayout, type DrawContext, type ChartFrameCache,
   LEFT_MARGIN, RIGHT_MARGIN, BOTTOM_AXIS_HEIGHT, MIN_STRIP_HEIGHT, AXIS_WIDTH,
   DEBOUNCE_MS,
   clamp, niceAxisTicks, getChartColors, toDarkChartColor,
@@ -20,11 +20,39 @@ import { ChartUnitMenu } from './ChartUnitMenu';
 import { useDisplaySamples } from '../lib/useDisplaySamples';
 import { buildLapWindows, selectedWindows, shiftToLap, lapColor } from '../lib/lap-compare';
 import { formatLapTime } from '../lib/xrk-parser';
+import { createValueStore, useStoreValue, type ValueStore } from '../lib/cursorStore';
 
 /** Grab distance (px) for dragging a delta cursor. */
 const CURSOR_HIT_PX = 6;
 
 // ─── Main Component ─────────────────────────────────────────────────────────
+
+function sessionMinMax(samples: ChannelSample[]): { minSample: ChannelSample; maxSample: ChannelSample } | null {
+  if (samples.length === 0) return null;
+  let minSample = samples[0];
+  let maxSample = samples[0];
+  for (const s of samples) {
+    if (s.value < minSample.value) minSample = s;
+    if (s.value > maxSample.value) maxSample = s;
+  }
+  return { minSample, maxSample };
+}
+
+interface DeltaCursors { a: number; b: number }
+
+/** The docked Δ readout. It subscribes to the cursor pair itself, so dragging
+ *  a cursor re-renders this panel and nothing else. */
+function DeltaPanel({ store, channels, channelDataMap, onClose }: {
+  store: ValueStore<DeltaCursors | null>;
+  channels: Parameters<typeof computeDelta>[0];
+  channelDataMap: Parameters<typeof computeDelta>[1];
+  onClose: () => void;
+}) {
+  const cursors = useStoreValue(store);
+  if (!cursors) return null;
+  const { deltaT, rows } = computeDelta(channels, channelDataMap, cursors.a, cursors.b);
+  return <DeltaReadout deltaT={deltaT} rows={rows} onClose={onClose} />;
+}
 
 export function TelemetryChart({
   session,
@@ -34,6 +62,7 @@ export function TelemetryChart({
   derivedChannels,
   derivedSamplesMap,
   cursorTime,
+  cursorStore,
   onCursorTimeChange,
   chartMode = 'separate',
   fileName = null,
@@ -48,8 +77,9 @@ export function TelemetryChart({
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [deltaMode, setDeltaMode] = useState(false);
   // Both delta cursors (seconds), mirrored from the refs for the docked readout.
-  const [deltaCursors, setDeltaCursors] = useState<{ a: number; b: number } | null>(null);
-  const [cursorStyle, setCursorStyle] = useState<string>('crosshair');
+  // Placed delta cursors (seconds), for the Δ readout. Not React state: they
+  // change on every mouse move while a cursor is dragged.
+  const deltaStore = useMemo(() => createValueStore<DeltaCursors | null>(null), []);
   const [imageExportSpec, setImageExportSpec] = useState<ChartExportSpec | null>(null);
   // Unit menu opened from a strip label / overlay axis: channels + position (canvas px).
   const [unitMenu, setUnitMenu] = useState<{ channelIds: number[]; x: number; y: number } | null>(null);
@@ -87,7 +117,8 @@ export function TelemetryChart({
   }, [frame]);
 
   // Cache for global min/max per channel (recomputed when channelDataMap changes)
-  const globalMinMaxCache = useRef<Map<number, { minSample: ChannelSample; maxSample: ChannelSample }>>(new Map());
+  // Traces, y-ranges and min/max per series, reused while the zoom is unchanged.
+  const frameCache = useRef<ChartFrameCache>(new WeakMap());
   // Smoothed Y-ranges: lerp toward target to avoid jumps. Key is channelId or "overlay:units".
   const smoothedYRanges = useRef<Map<string, [number, number]>>(new Map());
 
@@ -189,36 +220,40 @@ export function TelemetryChart({
     };
   }, [chartMode, overlayAxisLayout, fontScale]);
 
-  // ─── Rebuild global min/max cache when channel data changes ─────────────
+  // ─── New channel data: restart y-range smoothing and redraw ─────────────
   useEffect(() => {
-    const newCache = new Map<number, { minSample: ChannelSample; maxSample: ChannelSample }>();
-    for (const [channelId, { allSamples }] of channelDataMap) {
-      if (allSamples.length === 0) continue;
-      let minSample = allSamples[0];
-      let maxSample = allSamples[0];
-      for (const s of allSamples) {
-        if (s.value < minSample.value) minSample = s;
-        if (s.value > maxSample.value) maxSample = s;
-      }
-      newCache.set(channelId, { minSample, maxSample });
-    }
-    globalMinMaxCache.current = newCache;
     // Reset smoothed Y-ranges so new channels start without stale lerp state
     smoothedYRanges.current.clear();
     requestDraw();
   }, [channelDataMap]);
 
-  // ─── Sync external cursorTime prop → internal cursorXRef ──────────────
+  // ─── Sync external cursor (prop or shared store) → internal cursorXRef ──
+  const applyExternalCursor = useCallback((t: number | null | undefined) => {
+    if (t === undefined || t === cursorXRef.current) return;
+    cursorXRef.current = t;
+    if (t === null) clickedXRef.current = null;
+    requestDraw();
+  }, []);
+
   useEffect(() => {
-    if (cursorTime !== undefined && cursorTime !== null) {
-      cursorXRef.current = cursorTime;
-      requestDraw();
-    } else if (cursorTime === null) {
-      cursorXRef.current = null;
-      clickedXRef.current = null;
-      requestDraw();
-    }
-  }, [cursorTime]);
+    applyExternalCursor(cursorTime);
+  }, [cursorTime, applyExternalCursor]);
+
+  // The store is read by subscription, not as a prop, so a cursor move set
+  // from elsewhere (jump to a lap, a cleared session) redraws the canvas
+  // without re-rendering this component.
+  useEffect(() => {
+    if (!cursorStore) return;
+    applyExternalCursor(cursorStore.get());
+    return cursorStore.subscribe(() => applyExternalCursor(cursorStore.get()));
+  }, [cursorStore, applyExternalCursor]);
+
+  /** Mouse handlers must not call setState (it re-renders the chart on every
+   *  move), so the pointer shape is written straight to the DOM. */
+  const setCursorStyle = useCallback((style: string) => {
+    const el = containerRef.current;
+    if (el && el.style.cursor !== style) el.style.cursor = style;
+  }, []);
 
   // ─── Sync external viewRange → internal xRange ─────────────────────────
   // (Compare mode keeps its own lap-relative zoom; on entering/leaving it the
@@ -244,7 +279,7 @@ export function TelemetryChart({
       delete canvasRef.current.dataset.cursorA;
       delete canvasRef.current.dataset.cursorB;
     }
-    setDeltaCursors(null);
+    deltaStore.set(null);
     requestDraw();
   }, [inCompare]);
 
@@ -256,7 +291,7 @@ export function TelemetryChart({
       cursor2XRef.current = null;
       dragCursorRef.current = null;
       if (canvasRef.current) delete canvasRef.current.dataset.cursorB;
-      setDeltaCursors(null);
+      deltaStore.set(null);
       requestDraw();
     }
   }, [deltaMode]);
@@ -274,44 +309,6 @@ export function TelemetryChart({
       }
     }, DEBOUNCE_MS);
   }, [onViewRangeChange]);
-
-  // ─── Visible-range filter ─────────────────────────────────────────────
-  const getVisibleSamples = useCallback((
-    _channelId: number,
-    allSamples: ChannelSample[],
-    xRange: [number, number],
-    _canvasWidth: number,
-  ): ChannelSample[] => {
-    // Filter to visible range with small padding for context
-    const rangePad = (xRange[1] - xRange[0]) * 0.02;
-    const lo = (xRange[0] - rangePad) * 1000;
-    const hi = (xRange[1] + rangePad) * 1000;
-
-    // Binary search for start
-    let startIdx = 0;
-    {
-      let a = 0, b = allSamples.length - 1;
-      while (a < b) {
-        const m = (a + b) >> 1;
-        if (allSamples[m].timestamp < lo) a = m + 1;
-        else b = m;
-      }
-      startIdx = Math.max(0, a - 1);
-    }
-    // Binary search for end
-    let endIdx = allSamples.length - 1;
-    {
-      let a = startIdx, b = allSamples.length - 1;
-      while (a < b) {
-        const m = (a + b + 1) >> 1;
-        if (allSamples[m].timestamp > hi) b = m - 1;
-        else a = m;
-      }
-      endIdx = Math.min(allSamples.length - 1, a + 1);
-    }
-
-    return allSamples.slice(startIdx, endIdx + 1);
-  }, []);
 
   // ─── Compute strip layout ─────────────────────────────────────────────
   const computeStripLayouts = useCallback((canvasH: number): StripLayout[] => {
@@ -384,11 +381,12 @@ export function TelemetryChart({
     const dc: DrawContext = {
       ctx, w, h, lm, rm, plotW, xRange, xTicks, strips,
       channelDataMap, chartMode, sharedYRanges,
-      timeToX, getVisibleSamples, overlayAxisLayout, session,
+      timeToX, overlayAxisLayout, session,
       smoothedYRanges: smoothedYRanges.current,
       needsDrawRef,
       colors,
       fontScale,
+      cache: frameCache.current,
       compare: compareLaps && compareSeries ? { laps: compareLaps, series: compareSeries } : null,
     };
     if (compareLaps) dc.session = { ...session, logStartMs: null, lapMarkers: [] };
@@ -416,7 +414,7 @@ export function TelemetryChart({
     }, axisY);
 
     ctx.restore();
-  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, getVisibleSamples, leftMargin, rightMargin, chartMode, overlayAxisLayout, fontScale, compareLaps, compareSeries]);
+  }, [session, sessionDuration, channelDataMap, visibleChannels, computeStripLayouts, timeToX, leftMargin, rightMargin, chartMode, overlayAxisLayout, fontScale, compareLaps, compareSeries]);
 
 
   // ─── On-demand drawing ─────────────────────────────────────────────────
@@ -492,11 +490,14 @@ export function TelemetryChart({
     };
     set('cursorA', cursorXRef.current);
     set('cursorB', cursor2XRef.current);
+    // The Δ readout subscribes to this store, so it follows the cursors
+    // without the chart itself re-rendering.
     const a = cursorXRef.current;
     const b = cursor2XRef.current;
-    setDeltaCursors(prev => (a === null || b === null ? null
-      : prev && prev.a === a && prev.b === b ? prev : { a, b }));
-  }, []);
+    const prev = deltaStore.get();
+    if (a === null || b === null) deltaStore.set(null);
+    else if (!prev || prev.a !== a || prev.b !== b) deltaStore.set({ a, b });
+  }, [deltaStore]);
 
   /** Delta cursor under the given canvas x, if any. */
   const cursorAtX = useCallback((mouseX: number): 'A' | 'B' | null => {
@@ -899,6 +900,8 @@ export function TelemetryChart({
     requestDraw();
   }, [emitViewRange, syncCursorAttrs]);
 
+  const closeDelta = useCallback(() => setDeltaMode(false), []);
+
   // ─── Toggle delta mode ────────────────────────────────────────────────
   const toggleDelta = useCallback(() => {
     setDeltaMode(prev => !prev);
@@ -912,7 +915,9 @@ export function TelemetryChart({
       channels: visibleChannels.flatMap(ac => {
         const data = channelDataMap.get(ac.channelId);
         if (!data) return [];
-        const mm = globalMinMaxCache.current.get(ac.channelId);
+        // Whole-session extremes are only needed by the export, so they are
+        // found here on demand, not on every data change.
+        const mm = sessionMinMax(data.allSamples);
         return [{
           channelId: ac.channelId,
           name: data.def.shortName,
@@ -1024,7 +1029,7 @@ export function TelemetryChart({
       <div
         ref={containerRef}
         className="flex-1 min-h-0 relative overflow-y-auto overflow-x-hidden"
-        style={{ cursor: cursorStyle }}
+        style={{ cursor: 'crosshair' }}
       >
         <canvas
           ref={canvasRef}
@@ -1041,10 +1046,9 @@ export function TelemetryChart({
         />
       </div>
 
-      {deltaMode && deltaCursors && (() => {
-        const { deltaT, rows } = computeDelta(visibleChannels, channelDataMap, deltaCursors.a, deltaCursors.b);
-        return <DeltaReadout deltaT={deltaT} rows={rows} onClose={() => setDeltaMode(false)} />;
-      })()}
+      {deltaMode && (
+        <DeltaPanel store={deltaStore} channels={visibleChannels} channelDataMap={channelDataMap} onClose={closeDelta} />
+      )}
 
       {unitMenu && (() => {
         const chans = unitMenu.channelIds.flatMap(id => {

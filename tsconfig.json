@@ -1,6 +1,6 @@
 {
   "include": ["client/src/**/*"],
-  "exclude": ["node_modules", "build", "dist", "**/*.test.ts", "**/*.test.tsx"],
+  "exclude": ["node_modules", "build", "dist"],
   "compilerOptions": {
     "incremental": true,
     "tsBuildInfoFile": "./node_modules/typescript/tsbuildinfo",

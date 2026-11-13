@@ -3,6 +3,7 @@ import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import type { ActiveChannel, DerivedChannel } from '../../lib/useXRKStore';
 import { resolveChannel, resolveSamples, ensurePlotly, getPlotlyColors } from './analysis-helpers';
 import { useDisplaySamples } from '../../lib/useDisplaySamples';
+import { sampleLowerBound } from '../../lib/binary-search';
 
 export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onChannelChange, derivedChannels, derivedSamplesMap, theme }: {
   session: XRKSession;
@@ -59,16 +60,7 @@ export function XYPlotTab({ session, activeChannels, xChannelId, yChannelId, onC
 
       for (const xs_sample of xSamples) {
         const ts = xs_sample.timestamp;
-        let lo = 0;
-        let hi = ySamples.length - 1;
-        while (lo <= hi) {
-          const mid = (lo + hi) >> 1;
-          if (ySamples[mid].timestamp < ts) {
-            lo = mid + 1;
-          } else {
-            hi = mid - 1;
-          }
-        }
+        const lo = sampleLowerBound(ySamples, ts);
 
         let bestIdx = -1;
         let minDiff = Infinity;

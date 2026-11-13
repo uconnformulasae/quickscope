@@ -11,6 +11,7 @@ import { getConverter, resolveDisplayUnit } from '../lib/units';
 import { fixedRangeIn, gradientStops, sampleGradient, speedToT } from '../lib/gradients';
 import type { LapMarker } from '../lib/xrk-parser';
 import { buildLapWindows, lapColor, segmentInLaps, selectedWindows, toSessionMs } from '../lib/lap-compare';
+import { nearestIndex } from '../lib/binary-search';
 
 /** Min/max without spreading — large GPS traces exceed the argument stack limit. */
 function rangeOf(values: number[]): [number, number] {
@@ -25,6 +26,12 @@ function rangeOf(values: number[]): [number, number] {
 }
 
 const NO_SPEED_COLOR = '#4361ee';
+/**
+ * Own pane for cursor markers: the trail is redrawn after the cursor exists, and
+ * vectors in one pane stack in insertion order. 450 sits above overlayPane (400)
+ * and below Leaflet's marker/tooltip/popup panes.
+ */
+const CURSOR_PANE = 'qs-cursor';
 
 interface TrackData {
   coords: [number, number][];
@@ -33,27 +40,17 @@ interface TrackData {
 }
 
 interface GPSMapViewProps {
+  /** Changes identity only when a different session is loaded (pass `session.metadata`); triggers a refetch. */
+  sessionKey: object;
   cursorTime?: number | null; // seconds (lap-relative in lap compare mode)
   lapMarkers?: LapMarker[];
   selectedLaps?: number[];
 }
 
-/** Nearest track index to time tMs (times sorted). */
-function nearestIndex(times: number[], tMs: number): number {
-  let lo = 0, hi = times.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (times[mid] < tMs) lo = mid + 1;
-    else hi = mid;
-  }
-  if (lo > 0 && Math.abs(times[lo - 1] - tMs) < Math.abs(times[lo] - tMs)) lo = lo - 1;
-  return lo;
-}
-
 const NO_LAPS: LapMarker[] = [];
 const NO_SELECTION: number[] = [];
 
-export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO_SELECTION }: GPSMapViewProps) {
+export function GPSMapView({ sessionKey, cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO_SELECTION }: GPSMapViewProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.CircleMarker | null>(null);
@@ -93,13 +90,14 @@ export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO
       });
 
     return () => { cancelled = true; };
-  }, []);
+  }, [sessionKey]);
 
   // Initialize map when data is ready
   useEffect(() => {
     if (!gpsData || !mapContainerRef.current) return;
 
     const container = mapContainerRef.current;
+    let refitFrame = 0;
     const buildMap = () => {
       if (mapRef.current) {
         mapRef.current.remove();
@@ -135,18 +133,20 @@ export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO
       }).addTo(map);
 
       const trail = L.layerGroup().addTo(map);
+      map.createPane(CURSOR_PANE).style.zIndex = '450';
 
       // Fit bounds
       const bounds = L.latLngBounds(coords);
       map.fitBounds(bounds, { padding: [20, 20] });
       // Tab panel may mount before layout settles; tiles stay blank without this.
-      requestAnimationFrame(() => {
+      refitFrame = requestAnimationFrame(() => {
         map.invalidateSize();
         map.fitBounds(bounds, { padding: [20, 20] });
       });
 
       // Cursor position marker
       const marker = L.circleMarker(coords[0], {
+        pane: CURSOR_PANE,
         radius: 6,
         fillColor: '#ffffff',
         fillOpacity: 1,
@@ -165,6 +165,7 @@ export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO
     buildMap();
 
     return () => {
+      cancelAnimationFrame(refitFrame);
       trackRef.current = null;
       markerRef.current = null;
       trailRef.current = null;
@@ -229,7 +230,7 @@ export function GPSMapView({ cursorTime, lapMarkers = NO_LAPS, selectedLaps = NO
       if (cursorTime == null) return;
       lapMarkersRef.current = lapSel.map((lap, i) => L.circleMarker(
         coords[Math.min(nearestIndex(times, Math.min(toSessionMs(cursorTime, lap), lap.endMs)), coords.length - 1)],
-        { radius: 6, fillColor: lapColor(i), fillOpacity: 1, color: '#ffffff', weight: 2 },
+        { pane: CURSOR_PANE, radius: 6, fillColor: lapColor(i), fillOpacity: 1, color: '#ffffff', weight: 2 },
       ).addTo(map));
       return;
     }

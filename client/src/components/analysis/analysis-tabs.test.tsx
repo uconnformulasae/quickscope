@@ -25,7 +25,7 @@ describe('StatsTab', () => {
 
   it('shows min/max with timestamps, mean and std dev for the whole session', () => {
     render(
-      <StatsTab session={session()} activeChannels={[{ channelId: 1, color: '#f00', visible: true }]} viewRange={null} />,
+      <StatsTab session={session()} activeChannels={[{ channelId: 1, color: '#f00' }]} viewRange={null} />,
     );
     expect(screen.getByText('RPM')).toBeTruthy();
     expect(screen.getByText('(rpm)')).toBeTruthy();
@@ -41,7 +41,7 @@ describe('StatsTab', () => {
     render(
       <StatsTab
         session={session()}
-        activeChannels={[{ channelId: 1, color: '#f00', visible: true }]}
+        activeChannels={[{ channelId: 1, color: '#f00' }]}
         viewRange={{ startMs: 1000, endMs: 2000 }}
       />,
     );
@@ -55,7 +55,7 @@ describe('StatsTab', () => {
     render(
       <StatsTab
         session={session()}
-        activeChannels={[{ channelId: 1, color: '#f00', visible: true }]}
+        activeChannels={[{ channelId: 1, color: '#f00' }]}
         viewRange={null}
         onNavigateToTime={onNavigateToTime}
       />,
@@ -67,7 +67,7 @@ describe('StatsTab', () => {
 
   it('labels channels without data', () => {
     render(
-      <StatsTab session={session()} activeChannels={[{ channelId: 2, color: '#0f0', visible: true }]} viewRange={null} />,
+      <StatsTab session={session()} activeChannels={[{ channelId: 2, color: '#0f0' }]} viewRange={null} />,
     );
     expect(screen.getByText('No data')).toBeTruthy();
     expect(screen.getByText('No data recorded for this channel in this session')).toBeTruthy();
@@ -77,7 +77,7 @@ describe('StatsTab', () => {
     render(
       <StatsTab
         session={session()}
-        activeChannels={[{ channelId: 10000, color: '#00f', visible: true }]}
+        activeChannels={[{ channelId: 10000, color: '#00f' }]}
         viewRange={null}
         derivedChannels={[{ id: 10000, name: 'Power', units: 'kW', mode: 'formula', expression: 'x', color: '#00f' }]}
         derivedSamplesMap={new Map([[10000, makeSamples([5, 7])]])}
@@ -143,7 +143,7 @@ describe('LapAnalysisTab', () => {
 
   it('shows the per-lap mean of active channels', () => {
     render(
-      <LapAnalysisTab session={lapSession()} activeChannels={[{ channelId: 1, color: '#f00', visible: true }]} />,
+      <LapAnalysisTab session={lapSession()} activeChannels={[{ channelId: 1, color: '#f00' }]} />,
     );
     // Lap 1 (0-60 s): one sample, 50. Lap 2 (60-115 s): 70 and 90 → 80.
     expect(screen.getByText('50.00')).toBeTruthy();
@@ -178,7 +178,7 @@ describe('LapAnalysisTab', () => {
     const long = 'LF_BRKTempCH1_VeryLongName';
     const sess = lapSession();
     sess.channels.set(1, { ...sess.channels.get(1)!, shortName: long });
-    render(<LapAnalysisTab session={sess} activeChannels={[{ channelId: 1, color: '#f00', visible: true }]} />);
+    render(<LapAnalysisTab session={sess} activeChannels={[{ channelId: 1, color: '#f00' }]} />);
     const names = screen.getAllByTitle(long);
     expect(names.length).toBeGreaterThan(0);
     expect(names[0].className).toContain('truncate');

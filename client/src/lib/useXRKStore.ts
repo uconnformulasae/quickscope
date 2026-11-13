@@ -2,10 +2,11 @@
  * QuickScope Global State Store
  * Manages parsed XRK session data and UI state
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import type { XRKSession, ChannelSample, ParseProgress } from './xrk-parser';
 import { evaluateFormula, extractChannelNames } from './formula-engine';
-import { fetchChannelData } from './api';
+import { API_BASE, fetchChannelData } from './api';
+import { createCursorStore } from './cursorStore';
 
 export interface ActiveChannel {
   channelId: number;
@@ -55,9 +56,6 @@ export interface AppState {
   xyXChannelId: number | null;
   xyYChannelId: number | null;
 
-  // Cursor navigation
-  cursorTime: number | null; // seconds
-
   // Chart display mode
   chartMode: ChartMode;
 
@@ -81,13 +79,14 @@ const DERIVED_CHART_COLORS = [
 
 let derivedIdCounter = 10000;
 
+const SESSION_CHANGED = 'Session changed during evaluation';
+
 /** State that refers to the loaded session's channels or timeline, and so
  *  must not survive a switch to another session. */
 const SESSION_SCOPED_RESET = {
   activeChannels: [],
   derivedChannels: [],
   viewRange: null,
-  cursorTime: null,
   histogramChannelId: null,
   xyXChannelId: null,
   xyYChannelId: null,
@@ -191,10 +190,6 @@ function computeFormulaSamples(
   return result.timestamps.map((t, i) => ({ timestamp: t, value: result.values[i] }));
 }
 
-const BACKEND_URL =
-  (typeof window !== 'undefined' && window.__QUICKSCOPE_BACKEND__) ||
-  `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
-
 /** Channel names a Python script refers to. Scripts read channels as
  *  `channels['Name']` (see DerivedChannelDialog), so a name counts as used
  *  when it appears as a quoted string literal. */
@@ -219,7 +214,7 @@ async function computePythonSamples(
     if (data) payload[name] = data;
   }
   try {
-    const resp = await fetch(`${BACKEND_URL}/api/derived/evaluate`, {
+    const resp = await fetch(`${API_BASE}/api/derived/evaluate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ expression, channels: payload }),
@@ -264,7 +259,6 @@ export function useAppState() {
     histogramChannelId: null,
     xyXChannelId: null,
     xyYChannelId: null,
-    cursorTime: null,
     chartMode: 'separate',
     selectedLaps: [],
     viewMode: 'chart' as ViewMode,
@@ -277,7 +271,30 @@ export function useAppState() {
   // Separate map for derived channel samples (not in state to keep it fast)
   const [derivedSamplesMap, setDerivedSamplesMap] = useState<Map<number, ChannelSample[]>>(new Map());
 
+  // One counter for "which session is this work for". It moves on every
+  // session change (a load starting, a session being set or cleared), so async
+  // work captures it up front and checks it after each await. Channel indices
+  // are reused between sessions, so a result that lands late would otherwise
+  // be written into whichever session is on screen by then.
+  const sessionGenRef = useRef(0);
+  const sessionMetadataRef = useRef<XRKSession['metadata'] | null>(null);
+
+  const getSessionGeneration = useCallback(() => sessionGenRef.current, []);
+  const isCurrentSession = useCallback((generation: number) => sessionGenRef.current === generation, []);
+  /** Call when a session load starts: everything in flight is now stale. */
+  const beginSessionChange = useCallback(() => ++sessionGenRef.current, []);
+
+  // The chart cursor (seconds) lives outside `state`: it tracks the mouse, and
+  // as a state field every move re-rendered the whole app. See cursorStore.
+  const cursorStore = useMemo(createCursorStore, []);
+
   const setSession = useCallback((session: XRKSession, fileName: string) => {
+    cursorStore.set(null);
+    // Re-setting the same session (a rename) keeps in-flight work valid.
+    if (sessionMetadataRef.current !== session.metadata) {
+      sessionMetadataRef.current = session.metadata;
+      sessionGenRef.current++;
+    }
     setState(prev => ({
       ...prev,
       session,
@@ -288,7 +305,7 @@ export function useAppState() {
       ...SESSION_SCOPED_RESET,
     }));
     setDerivedSamplesMap(new Map());
-  }, []);
+  }, [cursorStore]);
 
   const setLoading = useCallback((loading: boolean, progress?: ParseProgress) => {
     setState(prev => ({
@@ -333,9 +350,7 @@ export function useAppState() {
     setState(prev => ({ ...prev, viewRange: range }));
   }, []);
 
-  const setCursorTime = useCallback((t: number | null) => {
-    setState(prev => ({ ...prev, cursorTime: t }));
-  }, []);
+  const setCursorTime = cursorStore.set;
 
   const setAnalysisTab = useCallback((tab: AnalysisTab) => {
     setState(prev => ({ ...prev, analysisTab: tab }));
@@ -353,7 +368,8 @@ export function useAppState() {
   // (2+ laps), so it is cleared whenever the selection crosses that line.
   const withLaps = (prev: AppState, selectedLaps: number[]): AppState => {
     const crossed = (prev.selectedLaps.length >= 2) !== (selectedLaps.length >= 2);
-    return { ...prev, selectedLaps, cursorTime: crossed ? null : prev.cursorTime };
+    if (crossed) cursorStore.set(null); // idempotent, so safe inside an updater
+    return { ...prev, selectedLaps };
   };
 
   /** Restore a saved per-session view (see sessionViewState). Derived channels
@@ -381,13 +397,17 @@ export function useAppState() {
     setState(prev => ({ ...prev, viewMode: mode }));
   }, []);
 
-  const setChannelSamples = useCallback((channelId: number, samples: ChannelSample[]) => {
+  /** Store fetched samples. Pass the generation captured before the fetch so
+   *  data that arrives after a session switch is dropped; returns false then. */
+  const setChannelSamples = useCallback((channelId: number, samples: ChannelSample[], generation?: number) => {
+    if (generation !== undefined && generation !== sessionGenRef.current) return false;
     setState(prev => {
       if (!prev.session) return prev;
       const newSamples = new Map(prev.session.samples);
       newSamples.set(channelId, samples);
       return { ...prev, session: { ...prev.session, samples: newSamples } };
     });
+    return true;
   }, []);
 
   const toggleLeftSidebar = useCallback(() => {
@@ -407,6 +427,9 @@ export function useAppState() {
   }, []);
 
   const clearSession = useCallback(() => {
+    cursorStore.set(null);
+    sessionMetadataRef.current = null;
+    sessionGenRef.current++;
     setState(prev => ({
       ...prev,
       session: null,
@@ -416,7 +439,7 @@ export function useAppState() {
     }));
     setDerivedSamplesMap(new Map());
     derivedIdCounter = 10000; // reset to avoid unbounded growth
-  }, []);
+  }, [cursorStore]);
 
   // ─── Derived channel actions ──────────────────────────────────────────────
 
@@ -432,10 +455,11 @@ export function useAppState() {
       ? extractChannelNames(def.expression)
       : pythonReferencedNames(def.expression, Array.from(session.channels.values(), c => c.shortName));
     if (referenced.length === 0) return new Map();
+    const generation = sessionGenRef.current;
     const fetched = await fetchMissingChannels(session, referenced);
-    if (fetched.size > 0) {
+    if (fetched.size > 0 && generation === sessionGenRef.current) {
       setState(prev => {
-        if (!prev.session || prev.session.metadata !== session.metadata) return prev;
+        if (!prev.session) return prev;
         const newSamples = new Map(prev.session.samples);
         for (const [id, samps] of fetched) newSamples.set(id, samps);
         return { ...prev, session: { ...prev.session, samples: newSamples } };
@@ -454,11 +478,13 @@ export function useAppState() {
     const color = DERIVED_CHART_COLORS[id % DERIVED_CHART_COLORS.length];
     const newDef: DerivedChannel = { ...def, id, color };
 
+    // `state.session` here is this render's value and can never differ from
+    // `session`; only the generation ref sees a switch that happened meanwhile.
+    const generation = sessionGenRef.current;
     const extraSamples = await ensureExpressionChannelsLoaded(session, def);
-    if (state.session?.metadata !== session.metadata) {
-      return { error: 'Session changed during evaluation' };
-    }
+    if (generation !== sessionGenRef.current) return { error: SESSION_CHANGED };
     const result = await computeDerivedSamples(newDef, session, state.derivedChannels, derivedSamplesMap, extraSamples);
+    if (generation !== sessionGenRef.current) return { error: SESSION_CHANGED };
     if (typeof result === 'string') return { error: result };
 
     setState(prev => ({
@@ -500,11 +526,11 @@ export function useAppState() {
     if (!existing) return { error: 'Channel not found' };
 
     const updated: DerivedChannel = { ...existing, ...def };
+    const generation = sessionGenRef.current;
     const extraSamples = await ensureExpressionChannelsLoaded(session, def);
-    if (state.session?.metadata !== session.metadata) {
-      return { error: 'Session changed during evaluation' };
-    }
+    if (generation !== sessionGenRef.current) return { error: SESSION_CHANGED };
     const result = await computeDerivedSamples(updated, session, state.derivedChannels, derivedSamplesMap, extraSamples);
+    if (generation !== sessionGenRef.current) return { error: SESSION_CHANGED };
     if (typeof result === 'string') return { error: result };
 
     setState(prev => ({
@@ -532,8 +558,11 @@ export function useAppState() {
     if (!session) return 'No session loaded';
 
     const tempDef: DerivedChannel = { ...def, id: existingId ?? -1, color: '#ffffff' };
+    const generation = sessionGenRef.current;
     const extraSamples = await ensureExpressionChannelsLoaded(session, def);
+    if (generation !== sessionGenRef.current) return SESSION_CHANGED;
     const result = await computeDerivedSamples(tempDef, session, state.derivedChannels, derivedSamplesMap, extraSamples);
+    if (generation !== sessionGenRef.current) return SESSION_CHANGED;
     if (typeof result === 'string') return result;
 
     return {
@@ -545,6 +574,7 @@ export function useAppState() {
   return {
     state,
     derivedSamplesMap,
+    cursorStore,
     setSession,
     setLoading,
     setError,
@@ -567,6 +597,9 @@ export function useAppState() {
     setXYChannels,
     clearSession,
     setChannelSamples,
+    getSessionGeneration,
+    isCurrentSession,
+    beginSessionChange,
     addDerivedChannel,
     removeDerivedChannel,
     updateDerivedChannel,

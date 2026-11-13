@@ -129,8 +129,8 @@ describe('basic state', () => {
       result.current.toggleLeftSidebar();
       result.current.toggleRightSidebar();
     });
+    expect(result.current.cursorStore.get()).toBe(1.5);
     expect(result.current.state).toMatchObject({
-      cursorTime: 1.5,
       analysisTab: 'histogram',
       channelSearch: 'rpm',
       showOnlyWithData: true,
@@ -350,15 +350,15 @@ describe('derived channels (python mode)', () => {
     act(() => result.current.setSession(makeSession(), 'a.xrk'));
     act(() => result.current.setCursorTime(600));
     act(() => result.current.toggleLapSelected(1));
-    expect(result.current.state.cursorTime).toBe(600); // one lap: still session time
+    expect(result.current.cursorStore.get()).toBe(600); // one lap: still session time
     act(() => result.current.toggleLapSelected(2));
-    expect(result.current.state.cursorTime).toBeNull(); // entered compare
+    expect(result.current.cursorStore.get()).toBeNull(); // entered compare
     act(() => result.current.setCursorTime(40));
     act(() => result.current.setSelectedLaps([]));
-    expect(result.current.state.cursorTime).toBeNull(); // left compare
+    expect(result.current.cursorStore.get()).toBeNull(); // left compare
     act(() => result.current.setSelectedLaps([]));
     act(() => result.current.setCursorTime(5));
-    expect(result.current.state.cursorTime).toBe(5);
+    expect(result.current.cursorStore.get()).toBe(5);
   });
 
   it('applySessionView restores channels, modes, tab, zoom and laps in one step', () => {
@@ -376,5 +376,71 @@ describe('derived channels (python mode)', () => {
     expect(st.analysisTab).toBe('gps');
     expect(st.viewRange).toEqual({ startMs: 100, endMs: 900 });
     expect(st.selectedLaps).toEqual([0, 1]);
+  });
+});
+
+describe('session switch while work is in flight', () => {
+  // Channel indices are reused between sessions, so a late result must not be
+  // written into whichever session is on screen when it arrives.
+  const other = () => makeSession({
+    metadata: { vehicle: 'CT17', driver: '', date: '', time: '', venue: '', championship: '', sessionType: '' },
+  });
+
+  it('drops channel samples fetched for the previous session', () => {
+    const { result } = setup();
+    act(() => result.current.setSession(makeSession(), 'a.xrk'));
+    const generation = result.current.getSessionGeneration();
+
+    act(() => result.current.setSession(other(), 'b.xrk'));
+    let stored = true;
+    act(() => { stored = result.current.setChannelSamples(3, samples([7, 8, 9]), generation); });
+
+    expect(stored).toBe(false);
+    expect(result.current.state.session?.samples.get(3)).toBeUndefined();
+    expect(result.current.isCurrentSession(generation)).toBe(false);
+  });
+
+  it('keeps the generation when the same session is set again (rename)', () => {
+    const { result } = setup();
+    const session = makeSession();
+    act(() => result.current.setSession(session, 'a.xrk'));
+    const generation = result.current.getSessionGeneration();
+
+    act(() => result.current.setSession(session, 'renamed.xrk'));
+
+    expect(result.current.isCurrentSession(generation)).toBe(true);
+  });
+
+  it('invalidates in-flight work when a load starts or the session is cleared', () => {
+    const { result } = setup();
+    act(() => result.current.setSession(makeSession(), 'a.xrk'));
+    const first = result.current.getSessionGeneration();
+    act(() => { result.current.beginSessionChange(); });
+    expect(result.current.isCurrentSession(first)).toBe(false);
+
+    const second = result.current.getSessionGeneration();
+    act(() => result.current.clearSession());
+    expect(result.current.isCurrentSession(second)).toBe(false);
+  });
+
+  it('does not add a derived channel whose inputs arrive after a switch', async () => {
+    const { result } = setup();
+    act(() => result.current.setSession(makeSession(), 'a.xrk'));
+    let release!: (r: unknown) => void;
+    fetchMock.mockReturnValue(new Promise(resolve => { release = resolve; }));
+
+    let pending!: Promise<{ error: string } | { id: number }>;
+    act(() => {
+      pending = result.current.addDerivedChannel({ name: 'D', units: '', mode: 'formula', expression: 'Lazy * 2' });
+    });
+    act(() => result.current.setSession(other(), 'b.xrk'));
+    release({ ok: true, json: async () => ({ Lazy: { timestamps: [0, 1000, 2000], values: [1, 2, 3] } }) });
+
+    let outcome!: { error: string } | { id: number };
+    await act(async () => { outcome = await pending; });
+
+    expect(outcome).toEqual({ error: 'Session changed during evaluation' });
+    expect(result.current.state.derivedChannels).toEqual([]);
+    expect(result.current.state.session?.samples.get(3)).toBeUndefined();
   });
 });

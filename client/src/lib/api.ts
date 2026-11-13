@@ -14,9 +14,30 @@ declare global {
 }
 
 const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-const API_BASE =
+/** Backend origin. The one place this is worked out; import it, don't rebuild it. */
+export const API_BASE =
   (typeof window !== 'undefined' && window.__QUICKSCOPE_BACKEND__) ||
   `${isHttps ? 'https' : 'http'}://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+
+/** The server's own explanation (`detail`) when it sent one, else `<fallback>: <status>`. */
+async function detailError(res: Response, fallback: string): Promise<Error> {
+  const err = await res.json().catch(() => ({ detail: res.statusText }));
+  return new Error(err.detail || `${fallback}: ${res.status}`);
+}
+
+// The session this window is showing. Sent with every data request so the
+// backend answers for it, not for whichever session was loaded last (which
+// may have been loaded by another window).
+let dataSessionId: string | null = null;
+
+/** Name the session the data routes should read; `null` means "the active one". */
+export function setDataSession(sessionId: string | null): void {
+  dataSessionId = sessionId;
+}
+
+function dataSessionParam(prefix: '?' | '&'): string {
+  return dataSessionId ? `${prefix}session_id=${encodeURIComponent(dataSessionId)}` : '';
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -119,10 +140,7 @@ export async function listSessions(): Promise<LocalSession[]> {
 
 export async function loadSession(sessionId: string): Promise<SessionInfo> {
   const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/load`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Load failed: ${res.status}`);
-  }
+  if (!res.ok) throw await detailError(res, 'Load failed');
   return res.json();
 }
 
@@ -132,10 +150,7 @@ export async function renameSession(sessionId: string, filename: string): Promis
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ filename }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Rename failed: ${res.status}`);
-  }
+  if (!res.ok) throw await detailError(res, 'Rename failed');
   return res.json();
 }
 
@@ -185,10 +200,7 @@ export async function pullFromAim(filenames: string[]): Promise<AimPullResponse>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ filenames }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `AiM pull failed: ${res.status}`);
-  }
+  if (!res.ok) throw await detailError(res, 'AiM pull failed');
   return res.json();
 }
 
@@ -357,7 +369,7 @@ export async function fetchChannelData(
   if (channels.length === 0) return new Map();
 
   const res = await fetch(
-    `${API_BASE}/api/data?channels=${encodeURIComponent(channels.join(','))}`,
+    `${API_BASE}/api/data?channels=${encodeURIComponent(channels.join(','))}${dataSessionParam('&')}`,
   );
 
   if (!res.ok) {
@@ -373,7 +385,7 @@ export async function fetchChannelData(
 }
 
 export async function fetchGPS(): Promise<GPSData | null> {
-  const res = await fetch(`${API_BASE}/api/gps`);
+  const res = await fetch(`${API_BASE}/api/gps${dataSessionParam('?')}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch GPS: ${res.status}`);
   }
@@ -394,7 +406,7 @@ export interface LapsResponse {
 }
 
 export async function fetchLaps(): Promise<LapsResponse> {
-  const res = await fetch(`${API_BASE}/api/laps`);
+  const res = await fetch(`${API_BASE}/api/laps${dataSessionParam('?')}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch laps: ${res.status}`);
   }
@@ -486,11 +498,6 @@ export interface LiveChannelCache {
   channels: string[];
   /** Unit the logger declared for each channel. */
   units?: Record<string, string>;
-}
-
-async function detailError(res: Response, fallback: string): Promise<Error> {
-  const err = await res.json().catch(() => ({ detail: res.statusText }));
-  return new Error(err.detail || `${fallback}: ${res.status}`);
 }
 
 export async function fetchLiveLayouts(): Promise<LiveLayoutsResponse> {

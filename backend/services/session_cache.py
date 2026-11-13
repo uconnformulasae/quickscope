@@ -84,18 +84,35 @@ class SessionCache:
         log: object,
         filename: str,
         local_path: Path | None = None,
+        *,
+        background: bool = False,
     ) -> None:
+        """Store a parsed log.
+
+        ``background=True`` is for logs nobody asked to see (the pull indexer):
+        the entry goes in as the *least* recently used, so the next background
+        parse replaces it instead of pushing out sessions the user opened.
+        """
         if local_path is not None and local_path.is_file():
             fp = _fingerprint(local_path)
         else:
             fp = ("", 0, 0)
         with self._lock:
+            known = session_id in self._entries
             self._entries[session_id] = (log, filename, fp)
-            self._entries.move_to_end(session_id)
+            if not background:
+                self._entries.move_to_end(session_id)
+            elif not known:
+                self._entries.move_to_end(session_id, last=False)
+            # Evict least-recently-used entries, but never the active session
+            # (the UI is still showing it, whatever was pulled or exported
+            # since) and never the entry just stored.
+            keep = (self._active_id, session_id)
             while len(self._entries) > self._max:
-                evicted_id, _ = self._entries.popitem(last=False)
-                if evicted_id == self._active_id:
-                    self._active_id = None
+                victim = next((k for k in self._entries if k not in keep), None)
+                if victim is None:
+                    break
+                del self._entries[victim]
 
     def rename(self, session_id: str, filename: str) -> None:
         """Change an entry's filename, keeping its log and on-disk fingerprint."""
@@ -141,7 +158,9 @@ class SessionCache:
             self._entries.clear()
             self._active_id = None
 
+
     def keys(self) -> list[str]:
+        """Cached session ids, least recently used first."""
         with self._lock:
             return list(self._entries.keys())
 

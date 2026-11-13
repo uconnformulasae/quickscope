@@ -9,6 +9,8 @@
  *   - Channel names (resolved to sample arrays)
  *   - Scalar constants (pi, e)
  */
+import { upperBound } from './binary-search';
+
 
 export interface ChannelData {
   timestamps: number[];
@@ -24,14 +26,9 @@ function interpolateAt(ch: ChannelData, t: number): number {
   if (t <= ch.timestamps[0]) return ch.values[0];
   if (t >= ch.timestamps[ch.timestamps.length - 1]) return ch.values[ch.timestamps.length - 1];
 
-  // Binary search
-  let lo = 0;
-  let hi = ch.timestamps.length - 1;
-  while (lo < hi - 1) {
-    const mid = (lo + hi) >> 1;
-    if (ch.timestamps[mid] <= t) lo = mid;
-    else hi = mid;
-  }
+  // The guards above put t strictly inside the range, so 1 <= hi <= length - 1.
+  const hi = upperBound(ch.timestamps, t);
+  const lo = hi - 1;
   const t0 = ch.timestamps[lo];
   const t1 = ch.timestamps[hi];
   const frac = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
@@ -291,26 +288,16 @@ class Parser {
   }
 
   private parseMulDiv(): ASTNode {
-    let left = this.parsePow();
+    let left = this.parseUnary();
     while (this.peek().type === 'op' && (this.peek().value === '*' || this.peek().value === '/')) {
       const op = this.consume().value;
-      const right = this.parsePow();
+      const right = this.parseUnary();
       left = { kind: 'binop', op, left, right };
     }
     return left;
   }
 
-  /** Parse ^ as right-associative: a^b^c = a^(b^c) */
-  private parsePow(): ASTNode {
-    const base = this.parseUnary();
-    if (this.peek().type === 'op' && this.peek().value === '^') {
-      this.consume();
-      const exponent = this.parsePow(); // right-recursive for right-associativity
-      return { kind: 'binop', op: '^', left: base, right: exponent };
-    }
-    return base;
-  }
-
+  /** Unary +/- binds looser than ^, as in math and Python: -2^2 = -(2^2). */
   private parseUnary(): ASTNode {
     if (this.peek().type === 'op' && this.peek().value === '-') {
       this.consume();
@@ -320,7 +307,18 @@ class Parser {
       this.consume();
       return this.parseUnary();
     }
-    return this.parseAtom();
+    return this.parsePow();
+  }
+
+  /** Parse ^ as right-associative: a^b^c = a^(b^c). The exponent may carry a sign: 2^-1. */
+  private parsePow(): ASTNode {
+    const base = this.parseAtom();
+    if (this.peek().type === 'op' && this.peek().value === '^') {
+      this.consume();
+      const exponent = this.parseUnary();
+      return { kind: 'binop', op: '^', left: base, right: exponent };
+    }
+    return base;
   }
 
   private parseAtom(): ASTNode {
@@ -676,6 +674,29 @@ export function checkFormula(expr: string, isKnown: (name: string) => boolean): 
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+// Parsed formulas by source text. A live widget evaluates the same formula on
+// every snapshot (several times a second); parsing it once is enough. Evaluation
+// never changes the tree, and a formula that fails to parse fails the same way
+// each time, so the error is remembered too.
+const PARSE_CACHE_MAX = 500;
+const parseCache = new Map<string, { ast: ASTNode } | { error: Error }>();
+
+function parseCached(expression: string): ASTNode {
+  const key = expression.trim();
+  let entry = parseCache.get(key);
+  if (!entry) {
+    try {
+      entry = { ast: new Parser(tokenize(key)).parse() };
+    } catch (err) {
+      entry = { error: err instanceof Error ? err : new Error(String(err)) };
+    }
+    if (parseCache.size >= PARSE_CACHE_MAX) parseCache.clear();
+    parseCache.set(key, entry);
+  }
+  if ('error' in entry) throw entry.error;
+  return entry.ast;
+}
+
 /**
  * Evaluate a math formula expression.
  * Returns { timestamps, values } on success, or an error string.
@@ -685,9 +706,7 @@ export function evaluateFormula(
   channels: ChannelMap,
 ): { timestamps: number[]; values: number[] } | string {
   try {
-    const tokens = tokenize(expression.trim());
-    const ast = new Parser(tokens).parse();
-    const result = evalNode(ast, channels);
+    const result = evalNode(parseCached(expression), channels);
     if (typeof result === 'number') {
       if (!Number.isFinite(result)) {
         return 'Expression evaluated to non-finite result (division by zero)';

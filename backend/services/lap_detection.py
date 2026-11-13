@@ -125,8 +125,8 @@ def from_gps(
 ) -> list[dict]:
     """Detect laps by close-the-loop on GPS coordinates.
 
-    `timestamps_ms` should be session-relative milliseconds (i.e. already
-    offset so the first sample is ~0). Lats/lons are in degrees.
+    `timestamps_ms` are session milliseconds, the same clock as every other
+    channel; lap times come back on that clock. Lats/lons are in degrees.
     Invalid fixes (lat≈0 and lon≈0, missing, or non-finite) are dropped before
     detection.
     """
@@ -270,10 +270,11 @@ def detect_laps(log, channel_data_fn) -> tuple[list[dict], str]:
                 len(lon_data["values"]),
             )
             if n >= 10:
-                ts = lat_data["timestamps"][:n]
-                ts_offset = min(ts)
-                ts_rel = [t - ts_offset for t in ts]
-                gps_laps = from_gps(ts_rel, lat_data["values"][:n], lon_data["values"][:n])
+                # Session time as-is: rebasing to the first GPS sample would
+                # shift every lap whenever GPS starts after t=0.
+                gps_laps = from_gps(
+                    lat_data["timestamps"][:n], lat_data["values"][:n], lon_data["values"][:n],
+                )
                 if gps_laps:
                     return gps_laps, "gps_auto"
 

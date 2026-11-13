@@ -11,11 +11,20 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.aim_live import decode_frame
+from services.aim_live import decode_frame, resync_offset
 from services.settings_store import DATA_DIR
 from services.trace_file import open_unique
 
 _LOG_DIR = DATA_DIR / "logs" / "aim_download"
+
+
+def log_dir() -> Path:
+    """Directory the download traces are written to."""
+    return _LOG_DIR
+
+
+# How much of the end of a failed stream goes into the trace.
+STREAM_TAIL_BYTES = 256
 
 
 class AimDownloadTrace:
@@ -65,10 +74,7 @@ class AimDownloadTrace:
                 frame, consumed = decode_frame(raw, offset)
             except ValueError as exc:
                 self.log("decode_error", offset=offset, error=str(exc))
-                next_h = raw.find(b"<h", offset + 1)
-                if next_h == -1:
-                    break
-                offset = next_h
+                offset = resync_offset(raw, offset)
                 continue
             if frame is None or consumed == 0:
                 break
@@ -76,14 +82,22 @@ class AimDownloadTrace:
             counts[key] = counts.get(key, 0) + 1
             offset += consumed
 
-        tail = raw[-256:] if len(raw) > 256 else raw
+        self.log_stream_summary(
+            raw_bytes=len(raw), extracted=extracted, expected=expected,
+            frame_counts=counts, tail=raw[-STREAM_TAIL_BYTES:],
+        )
+
+    def log_stream_summary(
+        self, *, raw_bytes: int, extracted: int, expected: int, frame_counts: dict[str, int], tail: bytes,
+    ) -> None:
+        """What a failed download's byte stream looked like: frame mix and its last bytes."""
         self.log(
             "stream_analysis",
-            raw_bytes=len(raw),
+            raw_bytes=raw_bytes,
             extracted_bytes=extracted,
             expected_bytes=expected,
-            frame_counts=counts,
-            tail_hex=tail.hex(),
+            frame_counts=frame_counts,
+            tail_hex=bytes(tail[-STREAM_TAIL_BYTES:]).hex(),
         )
 
     def close(self, *, status: str, **fields) -> None:

@@ -18,7 +18,7 @@ type AppApi = ReturnType<typeof useAppState>;
 type FetchData = (names: string[]) => Promise<Map<string, { timestamps: number[]; values: number[] }>>;
 
 export function useSessionViewPersistence(app: AppApi, fetchData: FetchData = fetchChannelData) {
-  const { state, applySessionView, setChannelSamples, addDerivedChannel } = app;
+  const { state, applySessionView, setChannelSamples, addDerivedChannel, getSessionGeneration, isCurrentSession } = app;
   // Key of the session currently shown; set together with setSession so a
   // save never files the old session's view under the new key.
   const [viewKey, setViewKey] = useState<string | null>(null);
@@ -28,9 +28,6 @@ export function useSessionViewPersistence(app: AppApi, fetchData: FetchData = fe
   const restoringRef = useRef(false);
   const pendingDerivedRef = useRef<Omit<DerivedChannel, 'id' | 'color'>[]>([]);
   const [derivedTick, setDerivedTick] = useState(0);
-  const metadataRef = useRef(state.session?.metadata);
-  metadataRef.current = state.session?.metadata;
-
   const beginSession = useCallback((key: string) => {
     const saved = loadSessionView(key);
     pendingRestoreRef.current = saved;
@@ -55,6 +52,7 @@ export function useSessionViewPersistence(app: AppApi, fetchData: FetchData = fe
     const active = resolveSavedChannels(saved, session);
     const lapCount = Math.max(0, session.lapMarkers.length - 1);
 
+    const generation = getSessionGeneration();
     void (async () => {
       const missing = active
         .map(a => session.channels.get(a.channelId)!)
@@ -62,18 +60,18 @@ export function useSessionViewPersistence(app: AppApi, fetchData: FetchData = fe
       if (missing.length > 0) {
         try {
           const dataMap = await fetchData(missing.map(ch => ch.shortName));
-          if (metadataRef.current !== session.metadata) return; // another session took over
+          if (!isCurrentSession(generation)) return; // another session took over
           for (const ch of missing) {
             const d = dataMap.get(ch.shortName);
             if (!d) continue;
             const samples: ChannelSample[] = d.timestamps.map((t, i) => ({ timestamp: t, value: d.values[i] }));
-            setChannelSamples(ch.index, samples);
+            setChannelSamples(ch.index, samples, generation);
           }
         } catch (err) {
           console.error('Failed to restore channel data:', err);
         }
       }
-      if (metadataRef.current !== session.metadata) return;
+      if (!isCurrentSession(generation)) return;
       applySessionView({
         activeChannels: active,
         chartMode: saved.chartMode,
@@ -85,7 +83,7 @@ export function useSessionViewPersistence(app: AppApi, fetchData: FetchData = fe
       pendingDerivedRef.current = [...saved.derived];
       setDerivedTick(t => t + 1);
     })();
-  }, [state.session, fetchData, applySessionView, setChannelSamples]);
+  }, [state.session, fetchData, applySessionView, setChannelSamples, getSessionGeneration, isCurrentSession]);
 
   // Re-add saved derived channels one per render, so each sees the ones
   // before it (formulas may reference earlier derived channels).
