@@ -43,7 +43,7 @@ describe('TableView', () => {
     render(
       <TableView
         session={session()}
-        activeChannels={[{ channelId: 1, color: '#f00', visible: true }, { channelId: 2, color: '#0f0', visible: true }]}
+        activeChannels={[{ channelId: 1, color: '#f00' }, { channelId: 2, color: '#0f0' }]}
       />,
     );
     expect(screen.getByText('Time (s)')).toBeTruthy();
@@ -56,7 +56,7 @@ describe('TableView', () => {
     render(
       <TableView
         session={session()}
-        activeChannels={[{ channelId: 1, color: '#f00', visible: true }, { channelId: 2, color: '#0f0', visible: true }]}
+        activeChannels={[{ channelId: 1, color: '#f00' }, { channelId: 2, color: '#0f0' }]}
       />,
     );
     expect(screen.getByText('0.000')).toBeTruthy();
@@ -69,7 +69,7 @@ describe('TableView', () => {
     render(
       <TableView
         session={session()}
-        activeChannels={[{ channelId: 10000, color: '#00f', visible: true }]}
+        activeChannels={[{ channelId: 10000, color: '#00f' }]}
         derivedChannels={[{ id: 10000, name: 'Power', units: 'kW', mode: 'formula', expression: 'x', color: '#00f' }]}
         derivedSamplesMap={new Map([[10000, makeSamples([5])]])}
       />,
@@ -80,7 +80,7 @@ describe('TableView', () => {
 
   it('highlights the row nearest a searched time', () => {
     render(
-      <TableView session={session()} activeChannels={[{ channelId: 1, color: '#f00', visible: true }]} />,
+      <TableView session={session()} activeChannels={[{ channelId: 1, color: '#f00' }]} />,
     );
     const search = screen.getByPlaceholderText('Go to time (s)...');
     fireEvent.change(search, { target: { value: '1' } });
@@ -90,7 +90,7 @@ describe('TableView', () => {
 
   it('ignores a non-numeric search', () => {
     render(
-      <TableView session={session()} activeChannels={[{ channelId: 1, color: '#f00', visible: true }]} />,
+      <TableView session={session()} activeChannels={[{ channelId: 1, color: '#f00' }]} />,
     );
     const search = screen.getByPlaceholderText('Go to time (s)...');
     fireEvent.change(search, { target: { value: 'abc' } });
@@ -100,7 +100,7 @@ describe('TableView', () => {
 
   it('focuses the time search on Ctrl+G', () => {
     render(
-      <TableView session={session()} activeChannels={[{ channelId: 1, color: '#f00', visible: true }]} />,
+      <TableView session={session()} activeChannels={[{ channelId: 1, color: '#f00' }]} />,
     );
     fireEvent.keyDown(document, { key: 'g', ctrlKey: true });
     expect(document.activeElement).toBe(screen.getByPlaceholderText('Go to time (s)...'));
@@ -109,7 +109,7 @@ describe('TableView', () => {
 
 describe('AnalysisPanel', () => {
   const baseProps = {
-    activeChannels: [{ channelId: 1, color: '#f00', visible: true }],
+    activeChannels: [{ channelId: 1, color: '#f00' }],
     viewRange: null,
     histogramChannelId: null,
     onHistogramChannelChange: () => {},

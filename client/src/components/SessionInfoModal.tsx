@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { X } from 'lucide-react';
 import { renameSession } from '../lib/api';
 import type { LocalSession } from '../lib/api';
+import { Modal } from './Modal';
 
 const SOURCE_LABELS: Record<LocalSession['source'], string> = {
   manual_upload: 'Manual upload',
@@ -55,23 +56,10 @@ export function SessionInfoModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editFilename, setEditFilename] = useState(fileName);
-  const backdropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setEditFilename(fileName);
   }, [fileName]);
-
-  const handleBackdropClick = (e: React.MouseEvent) => {
-    if (e.target === backdropRef.current) onClose();
-  };
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
 
   const handleCancel = () => {
     setEditFilename(fileName);
@@ -111,74 +99,68 @@ export function SessionInfoModal({
   ];
 
   return (
-    <div
-      ref={backdropRef}
-      onClick={handleBackdropClick}
-      className="fixed inset-0 z-50 flex items-center justify-center qs-scrim"
-    >
-      <div className="qs-dialog w-[520px] bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border">
-          <span className="text-[15px] font-semibold text-foreground">Session Info</span>
-          <div className="flex items-center gap-2">
-            {!editing && (
-              <button
-                onClick={() => setEditing(true)}
-                className="px-3.5 py-1 rounded-md bg-primary/10 text-primary-text text-xs font-medium hover:bg-primary/20 transition-colors"
-              >
-                Rename
-              </button>
-            )}
+    <Modal onClose={onClose} className="w-[520px] overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border">
+        <span className="text-[15px] font-semibold text-foreground">Session Info</span>
+        <div className="flex items-center gap-2">
+          {!editing && (
             <button
-              onClick={onClose}
-              className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setEditing(true)}
+              className="px-3.5 py-1 rounded-md bg-primary/10 text-primary-text text-xs font-medium hover:bg-primary/20 transition-colors"
             >
-              <X className="w-4 h-4" />
+              Rename
             </button>
-          </div>
+          )}
+          <button
+            onClick={onClose}
+            className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
-
-        {/* Body */}
-        <div className="px-6 py-2">
-          {fields.map((field) => (
-            <EditableRow
-              key={field.key}
-              label={field.label}
-              value={field.value}
-              editable={editing && field.editable}
-              onChange={field.editable ? setEditFilename : () => {}}
-            />
-          ))}
-        </div>
-
-        {/* Error */}
-        {error && (
-          <div className="mx-6 mb-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20">
-            {error}
-          </div>
-        )}
-
-        {/* Footer (edit mode only) */}
-        {editing && (
-          <div className="flex justify-end gap-2 px-6 pb-5 pt-3 border-t border-border">
-            <button
-              onClick={handleCancel}
-              disabled={saving}
-              className="px-3.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground border border-border hover:text-foreground hover:bg-muted/50 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="px-3.5 py-1.5 rounded-md text-xs font-medium bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-          </div>
-        )}
       </div>
-    </div>
+
+      {/* Body */}
+      <div className="px-6 py-2">
+        {fields.map((field) => (
+          <EditableRow
+            key={field.key}
+            label={field.label}
+            value={field.value}
+            editable={editing && field.editable}
+            onChange={field.editable ? setEditFilename : () => {}}
+          />
+        ))}
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="mx-6 mb-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20">
+          {error}
+        </div>
+      )}
+
+      {/* Footer (edit mode only) */}
+      {editing && (
+        <div className="flex justify-end gap-2 px-6 pb-5 pt-3 border-t border-border">
+          <button
+            onClick={handleCancel}
+            disabled={saving}
+            className="px-3.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground border border-border hover:text-foreground hover:bg-muted/50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-3.5 py-1.5 rounded-md text-xs font-medium bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      )}
+    </Modal>
   );
 }
 

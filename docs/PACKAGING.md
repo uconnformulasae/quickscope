@@ -45,7 +45,7 @@ QuickScope.app / QuickScope.exe
 
 The Electron main process (`electron/main.js`) picks a free port, starts the
 backend with `QUICKSCOPE_DATA_DIR` and `QUICKSCOPE_PORT` env vars, waits for
-`/docs` to respond, then loads the built Vite bundle in a `BrowserWindow`.
+`/api/health` to answer as QuickScope, then loads the built Vite bundle in a `BrowserWindow`.
 A preload script injects `window.__QUICKSCOPE_BACKEND__` so the renderer's
 `api.ts` knows where to send requests.
 

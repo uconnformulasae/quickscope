@@ -60,7 +60,7 @@ def test_failed_write_keeps_previous_index_intact(monkeypatch):
         raise OSError("disk full")
 
     with monkeypatch.context() as m:
-        m.setattr(session_store.json, "dump", explode)
+        m.setattr("services.json_store.json.dump", explode)
         with pytest.raises(OSError):
             session_store.add_session("new.xrk", source="manual_upload")
 
@@ -191,7 +191,7 @@ def test_failed_settings_write_keeps_previous_file(monkeypatch):
         raise OSError("full")
 
     with monkeypatch.context() as m:
-        m.setattr(settings_store.json, "dump", explode)
+        m.setattr("services.json_store.json.dump", explode)
         with pytest.raises(OSError):
             settings_store.update({"aim_device_ip": "2.2.2.2"})
     assert settings_store.SETTINGS_FILE.read_text() == before

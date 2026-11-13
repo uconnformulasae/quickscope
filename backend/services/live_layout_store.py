@@ -8,15 +8,13 @@ Built-in layouts live in the client and are never written here.
 """
 
 import json
-import os
 import threading
-import time
 from pathlib import Path
 
+from config import DATA_DIR
+from services.json_store import load_json, save_json
 from sanitize import MAX_LAYOUT_NAME_LEN, InvalidInput, clean_text, is_valid_layout_id, validate_layout_id
 
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
 LAYOUTS_FILE = DATA_DIR / "live_layouts.json"
 
 MAX_LAYOUT_BYTES = 256 * 1024
@@ -38,20 +36,12 @@ def _empty() -> dict:
 
 
 def _load_unlocked() -> dict:
-    path = LAYOUTS_FILE
-    if not path.exists():
-        return _empty()
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-        if not isinstance(data, dict) or not isinstance(data.get("layouts"), list):
-            raise ValueError("live layouts file has the wrong shape")
-    except (ValueError, UnicodeDecodeError):
-        # Keep the unreadable file for recovery and start fresh.
-        try:
-            os.replace(path, path.with_name(f"{path.name}.{int(time.time())}.corrupt"))
-        except OSError:
-            pass
+    # Missing or unreadable (kept aside for recovery): start fresh.
+    data = load_json(
+        LAYOUTS_FILE,
+        lambda d: isinstance(d, dict) and isinstance(d.get("layouts"), list),
+    )
+    if data is None:
         return _empty()
     sel = data.get("selection") if isinstance(data.get("selection"), dict) else {}
     active = sel.get("active") if isinstance(sel.get("active"), dict) else {}
@@ -66,14 +56,7 @@ def _load_unlocked() -> dict:
 
 
 def _save_unlocked(data: dict) -> None:
-    path = LAYOUTS_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)  # atomic: a crash mid-write can't leave a truncated file
+    save_json(LAYOUTS_FILE, data)
 
 
 def load() -> dict:

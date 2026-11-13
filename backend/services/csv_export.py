@@ -12,8 +12,8 @@ import numpy as np
 from fastapi.responses import StreamingResponse
 
 from sanitize import MAX_UNIT_LEN, clean_text, csv_safe_cell
-from state import channel_data, channel_meta
-from services.xrk_export import quickscope_export_basename
+from state import channel_arrays, channel_meta
+from services.xrk_export import content_disposition, quickscope_export_basename
 
 _EXPORT_CHUNK_ROWS = 5000
 
@@ -78,7 +78,9 @@ def streaming_csv_response(
     ch_data = {}
     for name in names:
         if name in log.channels:
-            ch_data[name] = channel_data(name, log.channels[name], drop_gaps=True)
+            ts, vals = channel_arrays(name, log.channels[name])
+            finite = np.isfinite(vals)  # sensor dropouts are not exported
+            ch_data[name] = {"timestamps": ts[finite], "values": vals[finite]}
 
     if not ch_data:
         raise ValueError("None of the specified channels found")
@@ -114,14 +116,14 @@ def streaming_csv_response(
         # leading "=" would run as a formula when the CSV is opened in Excel.
         writer.writerow([csv_safe_cell(h) for h in headers])
 
+        # Format a whole chunk per column, then zip into rows: indexing numpy
+        # scalars one cell at a time costs millions of calls on a long session.
         for start in range(0, len(timebase), _EXPORT_CHUNK_ROWS):
             stop = start + _EXPORT_CHUNK_ROWS
-            for i, ts in enumerate(timebase[start:stop].tolist(), start):
-                row = [f"{ts / 1000:.6f}"]
-                for col in columns:
-                    val = col[i]
-                    row.append(f"{val:.5f}" if val == val else "")
-                writer.writerow(row)
+            cells = [[f"{ts / 1000:.6f}" for ts in timebase[start:stop].tolist()]]
+            for col in columns:
+                cells.append([f"{v:.5f}" if v == v else "" for v in col[start:stop].tolist()])
+            writer.writerows(zip(*cells))
             yield output.getvalue().encode("utf-8")
             output.seek(0)
             output.truncate(0)
@@ -134,5 +136,5 @@ def streaming_csv_response(
     return StreamingResponse(
         _csv_chunks(),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{basename}_export.csv"'},
+        headers={"Content-Disposition": content_disposition(f"{basename}_export.csv")},
     )

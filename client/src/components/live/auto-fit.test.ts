@@ -43,9 +43,9 @@ describe('tile sizing', () => {
 
 describe('Panel content measuring', () => {
   it('marks normal panels for measuring and leaves fill-the-panel widgets out', () => {
-    const { container, rerender } = render(createElement(Panel, { title: 'T' }, 'x'));
+    const { container, rerender } = render(createElement(Panel, { title: 'T', children: 'x' }));
     expect(container.querySelector('[data-panel-content]')).not.toBeNull();
-    rerender(createElement(Panel, { title: 'T', fill: true }, 'x'));
+    rerender(createElement(Panel, { title: 'T', fill: true, children: 'x' }));
     expect(container.querySelector('[data-panel-content]')).toBeNull();
   });
 });

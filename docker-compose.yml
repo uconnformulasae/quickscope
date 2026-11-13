@@ -3,10 +3,13 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
+    # Published on this machine only. To reach QuickScope from another device,
+    # set QUICKSCOPE_BIND=0.0.0.0 and QUICKSCOPE_ALLOWED_HOSTS=<this machine's IP>.
     ports:
-      - "8000:8000"
+      - "${QUICKSCOPE_BIND:-127.0.0.1}:8000:8000"
     environment:
       QUICKSCOPE_DATA_DIR: /data
+      QUICKSCOPE_ALLOWED_HOSTS: ${QUICKSCOPE_ALLOWED_HOSTS:-}
       QUICKSCOPE_PARSER: libxrk
     volumes:
       - ./backend/data:/data
@@ -28,7 +31,9 @@ services:
       context: .
       dockerfile: docker/frontend.Dockerfile
     ports:
-      - "5173:5173"
+      - "${QUICKSCOPE_BIND:-127.0.0.1}:5173:5173"
+    environment:
+      QUICKSCOPE_ALLOWED_HOSTS: ${QUICKSCOPE_ALLOWED_HOSTS:-}
     depends_on:
       backend:
         condition: service_healthy

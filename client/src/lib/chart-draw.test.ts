@@ -47,7 +47,6 @@ function makeDc(chartMode: 'separate' | 'overlay') {
     channelDataMap: new Map([[1, { def: { shortName: 'RPM', units: 'rpm', color: '#ff0000' }, allSamples: lapA }]]),
     chartMode, sharedYRanges: new Map(),
     timeToX: (t: number, xr: [number, number], pw: number) => 60 + ((t - xr[0]) / (xr[1] - xr[0])) * pw,
-    getVisibleSamples: (_id: number, all: ChannelSample[]) => all,
     overlayAxisLayout: { unitAxes: new Map([['rpm', { side: 'left' as const, sideIndex: 0 }]]), axisCount: 1 },
     session: { lapMarkers: [], logStartMs: null } as unknown as XRKSession,
     smoothedYRanges: new Map(), needsDrawRef: { current: false }, colors, fontScale: 1,
@@ -137,5 +136,57 @@ describe('trace bounds and label order', () => {
     const lastTrace = ops.map(o => o.op === 'stroke' && o.args[0] === '#00ff00').lastIndexOf(true);
     const firstBox = ops.findIndex(o => o.op === 'roundRect');
     expect(firstBox).toBeGreaterThan(lastTrace);
+  });
+});
+
+describe('frame cache', () => {
+  // A redraw that only moves the cursor must not walk the samples again.
+  function cachedDc() {
+    const made = makeDc('separate');
+    made.dc.compare = null;
+    made.dc.cache = new WeakMap();
+    const samples = () => made.dc.channelDataMap.get(1)!.allSamples;
+    return { ...made, entry: () => made.dc.cache!.get(samples()) };
+  }
+
+  it('reuses one scan across frames at the same zoom', () => {
+    const { dc, entry } = cachedDc();
+    drawStrips(dc);
+    const first = entry();
+    drawStrips(dc);
+    expect(first).toBeDefined();
+    expect(entry()).toBe(first);
+  });
+
+  it('rescans when the zoom changes', () => {
+    const { dc, entry } = cachedDc();
+    drawStrips(dc);
+    const first = entry();
+    dc.xRange = [1, 4];
+    drawStrips(dc);
+    expect(entry()).not.toBe(first);
+    expect(entry()).toMatchObject({ x0: 1, x1: 4 });
+  });
+
+  it('scans a channel again when it gets new data', () => {
+    const { dc, entry } = cachedDc();
+    drawStrips(dc);
+    const first = entry();
+    dc.channelDataMap.get(1)!.allSamples = lap(5);
+    drawStrips(dc);
+    expect(entry()).toBeDefined();
+    expect(entry()).not.toBe(first);
+  });
+
+  it('draws the same thing with and without the cache', () => {
+    const cached = makeDc('overlay');
+    cached.dc.cache = new WeakMap();
+    const plain = makeDc('overlay');
+    drawStrips(cached.dc);
+    drawStrips(cached.dc);
+    drawStrips(plain.dc);
+    drawStrips(plain.dc);
+    expect(cached.ops).toEqual(plain.ops);
+    expect(cached.texts).toEqual(plain.texts);
   });
 });

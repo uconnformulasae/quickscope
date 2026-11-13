@@ -470,15 +470,18 @@ def test_fetch_session_list_after_handshake():
     assert rows[0]["lap_count"] == 3
 
 
-def test_fetch_session_list_returns_empty_without_csv():
+def test_fetch_session_list_raises_without_csv():
+    """No CSV is a failed list, not an empty logger -- ``[]`` would hide it."""
     async def scenario():
         async with FakeAimDevice(sessions_csv="no listing here") as device:
             client = await connected_client(device)
-            rows = await client.fetch_session_list(timeout=0.5)
-            await client.close()
-            return rows
+            try:
+                with pytest.raises(ConnectionError, match="session list"):
+                    await client.fetch_session_list(timeout=0.5)
+            finally:
+                await client.close()
 
-    assert run(scenario()) == []
+    run(scenario())
 
 
 def test_fetch_session_list_requires_handshake():

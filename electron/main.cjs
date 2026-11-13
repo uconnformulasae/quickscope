@@ -73,34 +73,51 @@ function resolveBackendExecutable() {
   return path.join(process.resourcesPath, 'backend', exeName);
 }
 
-/** Poll the backend /docs endpoint until it responds or timeout elapses. */
+/** Poll the backend's health route until it answers as QuickScope, or the timeout elapses.
+ *
+ *  The port was picked a moment before the backend bound it, so another
+ *  program can get there first. Any reply at all used to count as "ready";
+ *  now only the backend's own answer does. */
 function waitForBackend(port, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const attempt = () => {
+      // One request can report failure twice (timeout, then the error from
+      // destroying it); only the first may schedule the next try.
+      let finished = false;
+      const next = () => {
+        if (finished) return;
+        finished = true;
+        if (Date.now() > deadline) reject(new Error('Backend did not start within timeout'));
+        else setTimeout(attempt, 250);
+      };
       const req = http.get(
-        { host: BACKEND_HOST, port, path: '/docs', timeout: 1000 },
+        { host: BACKEND_HOST, port, path: '/api/health', timeout: 1000 },
         (res) => {
-          res.destroy();
-          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 500) {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => {
+            if (body.length < 4096) body += chunk;
+          });
+          res.on('end', () => {
+            let isBackend = false;
+            try {
+              isBackend = res.statusCode === 200 && JSON.parse(body).app === 'quickscope';
+            } catch {
+              // not JSON: not ours
+            }
+            if (!isBackend) return next();
+            finished = true;
             resolve();
-          } else {
-            retryOrFail();
-          }
+          });
+          res.on('error', next);
         },
       );
-      req.on('error', retryOrFail);
+      req.on('error', next);
       req.on('timeout', () => {
         req.destroy();
-        retryOrFail();
+        next();
       });
-    };
-    const retryOrFail = () => {
-      if (Date.now() > deadline) {
-        reject(new Error('Backend did not start within timeout'));
-      } else {
-        setTimeout(attempt, 250);
-      }
     };
     attempt();
   });
@@ -130,6 +147,10 @@ async function startBackend() {
     QUICKSCOPE_HOST: BACKEND_HOST,
     QUICKSCOPE_PORT: String(backendPort),
     QUICKSCOPE_DATA_DIR: dataDir,
+    // The backend exits when its stdin closes (see backend/entry.py). That is
+    // the only signal it gets if this process dies without running any quit
+    // handler: a crash, a force-kill, or a Windows logoff.
+    QUICKSCOPE_EXIT_WITH_PARENT: '1',
   };
 
   if (!isDev) {
@@ -139,7 +160,7 @@ async function startBackend() {
 
   backendProcess = spawn(exe, [], {
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   });
 
@@ -151,7 +172,8 @@ async function startBackend() {
   backendProcess.on('exit', (code, signal) => {
     logStream.end();
     backendProcess = null;
-    if (code !== 0 && code !== null && !app.isQuitting) {
+    // `code` is null when a signal killed it; that is just as unexpected.
+    if (code !== 0 && !app.isQuitting) {
       dialog.showErrorBox(
         'QuickScope backend stopped',
         `The backend exited unexpectedly (code ${code}, signal ${signal}). See ${logFile} for details.`,
@@ -283,6 +305,17 @@ app.on('before-quit', () => {
   stopBackend();
 });
 
+// `before-quit` only fires for a normal quit. Cover the other ways out so the
+// backend is never left running on its port.
+app.on('will-quit', stopBackend);
+process.on('exit', stopBackend);
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    app.isQuitting = true;
+    stopBackend();
+    app.quit();
+  });
+}
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });

@@ -7,6 +7,8 @@ import {
   formatValue,
   interpolateValue,
   minMaxTrace,
+  scanSeries,
+  visibleSampleRange,
   nearestSample,
   niceAxisTicks,
   placeLabelBox,
@@ -235,5 +237,49 @@ describe('chooseLabelBox', () => {
     expect(p.x).toBeGreaterThanOrEqual(0);
     expect(p.x + 60).toBeLessThanOrEqual(1000);
     expect(p.y + 16).toBeLessThanOrEqual(200);
+  });
+});
+
+
+describe('visibleSampleRange', () => {
+  const ramp = Array.from({ length: 101 }, (_, i) => ({ timestamp: i * 100, value: i })); // 0..10 s
+
+  it('covers the window plus one neighbour on each side, without copying', () => {
+    const [start, end] = visibleSampleRange(ramp, [2, 3]);
+    expect(ramp[start].timestamp).toBeLessThan(2000);
+    expect(ramp[end - 1].timestamp).toBeGreaterThan(3000);
+    expect(end - start).toBeLessThan(20);
+  });
+
+  it('is the whole array when zoomed all the way out, and empty for no samples', () => {
+    expect(visibleSampleRange(ramp, [0, 10])).toEqual([0, ramp.length]);
+    expect(visibleSampleRange([], [0, 10])).toEqual([0, 0]);
+  });
+});
+
+describe('scanSeries', () => {
+  const wave = Array.from({ length: 20_000 }, (_, i) => ({ timestamp: i, value: Math.sin(i / 50) * (i % 7 === 0 ? NaN : 1) }));
+  const timeToX = (t: number) => (t / 20) * 500;
+
+  it('gives the same trace and min/max as the separate helpers, in one walk', () => {
+    const scan = scanSeries(wave, 0, wave.length, timeToX, 500, 2000, 9000);
+    expect(scan.trace).toEqual(minMaxTrace(wave, timeToX, 500));
+    expect(scan.minMax).toEqual(visibleMinMax(wave, 2000, 9000));
+    const finite = wave.map(s => s.value).filter(Number.isFinite);
+    expect(scan.valueRange).toEqual([Math.min(...finite), Math.max(...finite)]);
+  });
+
+  it('only looks at the index range it is given', () => {
+    const sparse = wave.slice(0, 50);
+    const scan = scanSeries(sparse, 10, 20, timeToX, 500, 0, 1e9);
+    expect(scan.trace).toEqual(sparse.slice(10, 20));
+    expect(scan.minMax!.min.timestamp).toBeGreaterThanOrEqual(10);
+    expect(scan.minMax!.max.timestamp).toBeLessThan(20);
+  });
+
+  it('hands back the array itself when nothing needs reducing', () => {
+    const few = wave.slice(0, 10);
+    expect(scanSeries(few, 0, few.length, timeToX, 500, 0, 1e9).trace).toBe(few);
+    expect(scanSeries([], 0, 0, timeToX, 500, 0, 1e9)).toEqual({ trace: [], valueRange: [Infinity, -Infinity], minMax: null });
   });
 });

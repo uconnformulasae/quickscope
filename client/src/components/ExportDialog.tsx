@@ -5,6 +5,8 @@ import { exportCSV, exportSessionCSV, type ExportConversions } from '../lib/api'
 import { sanitizeExportFilePart } from '../lib/sessionDisplayName';
 import { useDisplaySamples } from '../lib/useDisplaySamples';
 import { getConverter, linearCoefficients } from '../lib/units';
+import { Modal } from './Modal';
+import { downloadBlob } from '../lib/saveBlob';
 
 interface ExportDialogProps {
   fileName: string | null;
@@ -144,19 +146,12 @@ export function ExportDialog({
       const blob = sessionId
         ? await exportSessionCSV(sessionId, channelNames, convert)
         : await exportCSV(channelNames, convert);
-      const url = URL.createObjectURL(blob);
       const baseName = exportBaseName
         ? sanitizeExportFilePart(exportBaseName)
         : fileName
           ? sanitizeExportFilePart(fileName.replace(/\.(xrk|xrz)$/i, ''))
           : 'export';
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${baseName}_export.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${baseName}_export.csv`);
 
       onClose();
     } catch (err) {
@@ -168,127 +163,126 @@ export function ExportDialog({
   }, [selectedIds, allChannels, fileName, exportBaseName, onClose, sessionId, useDisplayUnits, display]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onClick={onClose}>
-      <div
-        className="qs-dialog bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col overflow-hidden"
-        style={{ maxHeight: '80vh' }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Download className="w-4 h-4 text-primary-text" />
-            <span className="text-sm font-semibold text-foreground">Export CSV</span>
-          </div>
+    <Modal
+      onClose={onClose}
+      closeOnEscape={false}
+      className="w-full max-w-md mx-4 flex flex-col overflow-hidden"
+      style={{ maxHeight: '80vh' }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <Download className="w-4 h-4 text-primary-text" />
+          <span className="text-sm font-semibold text-foreground">Export CSV</span>
+        </div>
+        <button
+          onClick={onClose}
+          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Search + Select All/None */}
+      <div className="px-4 pt-3 pb-2 flex-shrink-0 space-y-2">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Filter channels..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full pl-8 pr-3 py-1.5 bg-muted/50 border border-border rounded-md text-xs text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+        </div>
+        <div className="flex items-center justify-between">
           <button
-            onClick={onClose}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            onClick={selectedCount === allChannels.length ? deselectAll : selectAll}
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Search + Select All/None */}
-        <div className="px-4 pt-3 pb-2 flex-shrink-0 space-y-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-            <input
-              type="text"
-              placeholder="Filter channels..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 bg-muted/50 border border-border rounded-md text-xs text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <button
-              onClick={selectedCount === allChannels.length ? deselectAll : selectAll}
-              className="flex items-center gap-1 px-2 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
-            >
-              {selectedCount === allChannels.length ? (
-                <><Square className="w-3 h-3" /> Deselect All</>
-              ) : (
-                <><CheckSquare className="w-3 h-3" /> Select All</>
-              )}
-            </button>
-            <span className="text-xs text-muted-foreground">
-              {selectedCount} / {allChannels.length} selected
-            </span>
-          </div>
-        </div>
-
-        {/* Channel list */}
-        <div className="flex-1 overflow-y-auto px-4 pb-2 space-y-0.5 min-h-0">
-          {filteredChannels.map(ch => {
-            const isSelected = selectedIds.has(ch.id);
-            return (
-              <button
-                key={ch.id}
-                onClick={() => toggleChannel(ch.id)}
-                className={`no-press flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-left transition-colors hover:bg-muted/30 ${isSelected ? 'bg-muted/20' : ''}`}
-              >
-                <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-border'}`}>
-                  {isSelected && (
-                    <svg viewBox="0 0 10 8" fill="none" className="w-2.5 h-2 text-white">
-                      <path d="M1 4L3.5 6.5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <span className={`text-xs font-medium ${isSelected ? 'text-foreground' : 'text-muted-foreground'}`}>
-                    {ch.name}
-                    {ch.units && <span className="ml-1 text-muted-foreground">{useDisplayUnits ? display.unitOf(ch.name, ch.units) : ch.units}</span>}
-                  </span>
-                </div>
-                <span className="text-xs text-muted-foreground tabular flex-shrink-0">
-                  {ch.sampleCount >= 1000 ? `${(ch.sampleCount / 1000).toFixed(0)}K` : ch.sampleCount}
-                </span>
-              </button>
-            );
-          })}
-          {filteredChannels.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground text-xs">No channels match your filter</div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-border flex-shrink-0 bg-muted/10">
-          <div className="text-xs text-muted-foreground">
-            {exportError ? (
-              <span className="text-red-500" role="alert">Export failed: {exportError}</span>
-            ) : totalRows > 0 ? (
-              <>~{totalRows.toLocaleString()} rows</>
+            {selectedCount === allChannels.length ? (
+              <><Square className="w-3 h-3" /> Deselect All</>
             ) : (
-              'Select channels to export'
+              <><CheckSquare className="w-3 h-3" /> Select All</>
             )}
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground mr-1 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useDisplayUnits}
-                onChange={e => setUseDisplayUnits(e.target.checked)}
-                className="accent-primary"
-              />
-              Display units
-            </label>
-            <button
-              onClick={onClose}
-              className="px-3 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors border border-border"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={selectedIds.size === 0 || isExporting}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" />
-              {isExporting ? 'Exporting...' : `Export ${selectedCount > 0 ? selectedCount : ''} channels`}
-            </button>
-          </div>
+          </button>
+          <span className="text-xs text-muted-foreground">
+            {selectedCount} / {allChannels.length} selected
+          </span>
         </div>
       </div>
-    </div>
+
+      {/* Channel list */}
+      <div className="flex-1 overflow-y-auto px-4 pb-2 space-y-0.5 min-h-0">
+        {filteredChannels.map(ch => {
+          const isSelected = selectedIds.has(ch.id);
+          return (
+            <button
+              key={ch.id}
+              onClick={() => toggleChannel(ch.id)}
+              className={`no-press flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-left transition-colors hover:bg-muted/30 ${isSelected ? 'bg-muted/20' : ''}`}
+            >
+              <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-border'}`}>
+                {isSelected && (
+                  <svg viewBox="0 0 10 8" fill="none" className="w-2.5 h-2 text-white">
+                    <path d="M1 4L3.5 6.5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className={`text-xs font-medium ${isSelected ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  {ch.name}
+                  {ch.units && <span className="ml-1 text-muted-foreground">{useDisplayUnits ? display.unitOf(ch.name, ch.units) : ch.units}</span>}
+                </span>
+              </div>
+              <span className="text-xs text-muted-foreground tabular flex-shrink-0">
+                {ch.sampleCount >= 1000 ? `${(ch.sampleCount / 1000).toFixed(0)}K` : ch.sampleCount}
+              </span>
+            </button>
+          );
+        })}
+        {filteredChannels.length === 0 && (
+          <div className="text-center py-8 text-muted-foreground text-xs">No channels match your filter</div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between px-4 py-3 border-t border-border flex-shrink-0 bg-muted/10">
+        <div className="text-xs text-muted-foreground">
+          {exportError ? (
+            <span className="text-red-500" role="alert">Export failed: {exportError}</span>
+          ) : totalRows > 0 ? (
+            <>~{totalRows.toLocaleString()} rows</>
+          ) : (
+            'Select channels to export'
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground mr-1 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={useDisplayUnits}
+              onChange={e => setUseDisplayUnits(e.target.checked)}
+              className="accent-primary"
+            />
+            Display units
+          </label>
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors border border-border"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={selectedIds.size === 0 || isExporting}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            {isExporting ? 'Exporting...' : `Export ${selectedCount > 0 ? selectedCount : ''} channels`}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }

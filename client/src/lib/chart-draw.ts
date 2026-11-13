@@ -3,12 +3,12 @@
  * Separated from TelemetryChart.tsx for readability.
  */
 import type { ChannelSample } from './xrk-parser';
-import type { DrawContext, StripLayout } from './chart-utils';
+import type { ChartSeriesCacheEntry, DrawContext, StripLayout } from './chart-utils';
 import {
   MONO_FONT, AXIS_WIDTH, scaledFont,
   BOTTOM_AXIS_HEIGHT,
-  niceAxisTicks, formatValue, clamp, minMaxTrace,
-  visibleMinMax, contrastText, layoutLegendRows, thinLabels, chooseLabelBox,
+  niceAxisTicks, formatValue, clamp, scanSeries, visibleSampleRange,
+  contrastText, layoutLegendRows, thinLabels, chooseLabelBox,
   type LabelRect, type TracePoints,
 } from './chart-utils';
 import { formatChartAxisTime } from './time-format';
@@ -18,13 +18,40 @@ import { formatLapTime } from './xrk-parser';
 
 const LERP_RATE = 0.18;
 
-/** Visible samples feeding a y-range: every compared lap in compare mode. */
-function visibleForRange(dc: DrawContext, channelId: number, allSamples: ChannelSample[]): ChannelSample[] {
-  const series = dc.compare?.series.get(channelId);
-  if (!series) {
-    return allSamples.length > 0 ? dc.getVisibleSamples(channelId, allSamples, dc.xRange, dc.plotW) : [];
+/**
+ * One series at the current zoom: its visible index range, the trace to draw,
+ * its value range and its min/max, all from a single walk over the samples.
+ * With a frame cache the walk happens once per zoom, not once per frame.
+ */
+function seriesOf(dc: DrawContext, samples: ChannelSample[]): ChartSeriesCacheEntry {
+  const { xRange, plotW } = dc;
+  const cached = dc.cache?.get(samples);
+  if (cached && cached.x0 === xRange[0] && cached.x1 === xRange[1] && cached.plotW === plotW && cached.lm === dc.lm) {
+    return cached;
   }
-  return series.flatMap(s => (s.length > 0 ? dc.getVisibleSamples(channelId, s, dc.xRange, dc.plotW) : []));
+  const [start, end] = visibleSampleRange(samples, xRange);
+  const entry: ChartSeriesCacheEntry = {
+    x0: xRange[0], x1: xRange[1], plotW, lm: dc.lm, start, end,
+    ...scanSeries(
+      samples, start, end, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW,
+      xRange[0] * 1000, xRange[1] * 1000,
+    ),
+  };
+  dc.cache?.set(samples, entry);
+  return entry;
+}
+
+/** Value range feeding a channel's y-axis: every compared lap in compare mode. */
+function channelValueRange(dc: DrawContext, channelId: number, allSamples: ChannelSample[]): [number, number] {
+  const series = dc.compare?.series.get(channelId);
+  if (!series) return seriesOf(dc, allSamples).valueRange;
+  let mn = Infinity, mx = -Infinity;
+  for (const lap of series) {
+    const [lo, hi] = seriesOf(dc, lap).valueRange;
+    if (lo < mn) mn = lo;
+    if (hi > mx) mx = hi;
+  }
+  return [mn, mx];
 }
 
 /** Stroke one trace (already min-max reduced). */
@@ -50,12 +77,7 @@ export function computeOverlayYRanges(dc: DrawContext): void {
     const data = dc.channelDataMap.get(strip.channelId);
     if (!data) continue;
     const units = data.def.units || '';
-    const visible = visibleForRange(dc, strip.channelId, data.allSamples);
-    let mn = Infinity, mx = -Infinity;
-    for (const s of visible) {
-      if (s.value < mn) mn = s.value;
-      if (s.value > mx) mx = s.value;
-    }
+    let [mn, mx] = channelValueRange(dc, strip.channelId, data.allSamples);
     if (!isFinite(mn)) { mn = 0; mx = 1; }
     const existing = unitMinMax.get(units);
     if (existing) {
@@ -90,16 +112,12 @@ export function computeOverlayYRanges(dc: DrawContext): void {
 
 /** Compute Y-range for a single strip (separate mode), with lerp smoothing */
 function computeStripYRange(
-  dc: DrawContext, strip: StripLayout, ds: ChannelSample[], defUnits: string,
+  dc: DrawContext, strip: StripLayout, allSamples: ChannelSample[], defUnits: string,
 ): [number, number] {
   const sharedRange = dc.chartMode === 'overlay' ? dc.sharedYRanges.get(defUnits) : undefined;
   if (sharedRange) return sharedRange;
 
-  let tMin = Infinity, tMax = -Infinity;
-  for (const s of ds) {
-    if (s.value < tMin) tMin = s.value;
-    if (s.value > tMax) tMax = s.value;
-  }
+  let [tMin, tMax] = channelValueRange(dc, strip.channelId, allSamples);
   if (!isFinite(tMin)) { tMin = 0; tMax = 1; }
   const yPad = (tMax - tMin) * 0.08 || 0.5;
   const targetMin = tMin - yPad;
@@ -133,15 +151,11 @@ export function drawStrips(dc: DrawContext): void {
     const data = channelDataMap.get(strip.channelId);
     if (!data) continue;
     const { allSamples, def } = data;
-    const visible = allSamples.length > 0
-      ? dc.getVisibleSamples(strip.channelId, allSamples, xRange, plotW)
-      : [];
+    const series = seriesOf(dc, allSamples);
 
-    const [yMin, yMax] = computeStripYRange(
-      dc, strip, dc.compare ? visibleForRange(dc, strip.channelId, allSamples) : visible, def.units || '',
-    );
+    const [yMin, yMax] = computeStripYRange(dc, strip, allSamples, def.units || '');
     // Min-max per-pixel optimization for rendering (pixel-identical output)
-    const ds = minMaxTrace(visible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
+    const ds = series.trace;
     const ySpan = yMax - yMin || 1;
     const valToY = (v: number) =>
       strip.top + strip.height - 4 - ((v - yMin) / ySpan) * (strip.height - 8);
@@ -216,9 +230,7 @@ export function drawStrips(dc: DrawContext): void {
       // Compare: one trace per lap. Separate strips colour by lap; overlay
       // keeps the channel colour and tells laps apart by dash + fade.
       for (let i = lapSeries.length - 1; i >= 0; i--) {
-        const lapVisible = lapSeries[i].length > 0
-          ? dc.getVisibleSamples(strip.channelId, lapSeries[i], xRange, plotW) : [];
-        const lapDs = minMaxTrace(lapVisible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
+        const lapDs = seriesOf(dc, lapSeries[i]).trace;
         if (i === 0) labelTrace = lapDs;
         ctx.save();
         if (chartMode === 'overlay') {
@@ -239,10 +251,12 @@ export function drawStrips(dc: DrawContext): void {
     }
 
     // Data point markers — visible when zoomed in tight (>8px between points)
-    if (visible.length > 1 && visible.length <= plotW / 4) {
+    const visibleCount = series.end - series.start;
+    if (visibleCount > 1 && visibleCount <= plotW / 4) {
       ctx.fillStyle = strip.color;
       ctx.beginPath();
-      for (const s of visible) {
+      for (let k = series.start; k < series.end; k++) {
+        const s = allSamples[k];
         const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
         const y = valToY(s.value);
         if (x >= lm && x <= w - rm) {
@@ -256,7 +270,7 @@ export function drawStrips(dc: DrawContext): void {
 
     // Min/Max markers (visible window) are drawn after every trace (below),
     // so no later channel's line paints over a box.
-    const mm = visibleMinMax(allSamples, xRange[0] * 1000, xRange[1] * 1000);
+    const mm = series.minMax;
     pendingMarkers.push({
       strip, mm, valToY, units: def.units || '',
       trace: {
@@ -310,7 +324,7 @@ export function drawStrips(dc: DrawContext): void {
   }
 }
 
-export type VisibleMinMax = ReturnType<typeof visibleMinMax>;
+export type VisibleMinMax = ChartSeriesCacheEntry['minMax'];
 
 function minMaxText(mm: NonNullable<VisibleMinMax>, units: string): string {
   return `min ${formatValue(mm.min.value)} · max ${formatValue(mm.max.value)}${units ? ` ${units}` : ''}`;
@@ -476,7 +490,7 @@ function overlayLegendEntries(dc: DrawContext): LegendEntry[] {
   for (const strip of dc.strips) {
     const data = dc.channelDataMap.get(strip.channelId);
     if (!data) continue;
-    const mm = visibleMinMax(data.allSamples, dc.xRange[0] * 1000, dc.xRange[1] * 1000);
+    const mm = seriesOf(dc, data.allSamples).minMax;
     const label = mm ? `${data.def.shortName} (${minMaxText(mm, data.def.units || '')})` : data.def.shortName;
     entries.push({ label, color: strip.color, dash: [] });
   }

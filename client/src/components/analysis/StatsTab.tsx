@@ -5,6 +5,7 @@ import type { ActiveChannel, TimeRange, DerivedChannel } from '../../lib/useXRKS
 import { TrendingUp, Crosshair } from 'lucide-react';
 import { resolveChannel, resolveSamples, formatNum } from './analysis-helpers';
 import { useDisplaySamples } from '../../lib/useDisplaySamples';
+import { samplesInRange } from '../../lib/binary-search';
 
 export function StatsTab({ session, activeChannels, viewRange, derivedChannels, derivedSamplesMap, onNavigateToTime }: {
   session: XRKSession;
@@ -23,7 +24,7 @@ export function StatsTab({ session, activeChannels, viewRange, derivedChannels, 
       const globalStats = computeStats(allSamps);
       let viewSamps = allSamps;
       if (viewRange) {
-        viewSamps = allSamps.filter(s => s.timestamp >= viewRange.startMs && s.timestamp <= viewRange.endMs);
+        viewSamps = samplesInRange(allSamps, viewRange.startMs, viewRange.endMs);
       }
       const viewStats = computeStats(viewSamps);
       const totalSamples = allSamps.length;

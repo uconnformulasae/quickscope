@@ -5,6 +5,8 @@ import type { ChannelSample } from './xrk-parser';
 import type { ActiveChannel, TimeRange, DerivedChannel, ChartMode } from './useXRKStore';
 import type { XRKSession } from './xrk-parser';
 import type { LapWindow } from './lap-compare';
+import type { CursorStore } from './cursorStore';
+import { lowerBound, nearestSampleIndex, sampleLowerBound, sampleUpperBound } from './binary-search';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -16,6 +18,9 @@ export interface TelemetryChartProps {
   derivedChannels?: DerivedChannel[];
   derivedSamplesMap?: Map<number, ChannelSample[]>;
   cursorTime?: number | null;
+  /** Live cursor shared with the rest of the app; takes the place of
+   *  `cursorTime` and lets the chart follow it without a React re-render. */
+  cursorStore?: CursorStore;
   onCursorTimeChange?: (t: number | null) => void;
   chartMode?: ChartMode;
   /** Loaded session file name, used by Save image */
@@ -57,7 +62,6 @@ export interface DrawContext {
   chartMode: ChartMode;
   sharedYRanges: Map<string, [number, number]>;
   timeToX: (t: number, xRange: [number, number], plotW: number) => number;
-  getVisibleSamples: (channelId: number, allSamples: ChannelSample[], xRange: [number, number], canvasWidth: number) => ChannelSample[];
   overlayAxisLayout: { unitAxes: Map<string, { side: 'left' | 'right'; sideIndex: number }>; axisCount: number };
   session: XRKSession;
   smoothedYRanges: Map<string, [number, number]>;
@@ -69,7 +73,25 @@ export interface DrawContext {
   compare: CompareContext | null;
   /** Height of the band above the strips (overlay legend); 0 when none. */
   topInset?: number;
+  /** Per-series results kept between frames (see ChartFrameCache). Optional:
+   *  without it every frame recomputes, which is what the tests rely on. */
+  cache?: ChartFrameCache;
 }
+
+/** What one frame worked out for one sample array at one zoom. */
+export interface ChartSeriesCacheEntry extends SeriesScan {
+  x0: number; x1: number; plotW: number; lm: number;
+  /** Visible index range [start, end) into the sample array. */
+  start: number; end: number;
+}
+
+/**
+ * Most redraws change nothing about the traces: the cursor moved, or a
+ * y-range is easing towards its target. Keyed by the sample array itself, so
+ * a channel whose data changes (a new array) misses, and unloaded channels
+ * are collected with their arrays.
+ */
+export type ChartFrameCache = WeakMap<ChannelSample[], ChartSeriesCacheEntry>;
 
 // ─── Light-mode color overrides ─────────────────────────────────────────────
 // Dark-mode channel colors that lack contrast on #f0f1f5 (light bg).
@@ -169,14 +191,8 @@ export function interpolateValue(samples: ChannelSample[], tMs: number): number 
   if (samples.length === 0) return null;
   if (tMs <= samples[0].timestamp) return samples[0].value;
   if (tMs >= samples[samples.length - 1].timestamp) return samples[samples.length - 1].value;
-  // Binary search for the first index where timestamp >= tMs
-  let lo = 0, hi = samples.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (samples[mid].timestamp < tMs) lo = mid + 1;
-    else hi = mid;
-  }
-  // lo is now the first index >= tMs; interpolate between lo-1 and lo
+  const lo = sampleLowerBound(samples, tMs);
+  // lo is the first index >= tMs; interpolate between lo-1 and lo
   if (lo <= 0) return samples[0].value;
   const a = samples[lo - 1];
   const b = samples[lo];
@@ -188,17 +204,7 @@ export function interpolateValue(samples: ChannelSample[], tMs: number): number 
 /** Snap to nearest real sample and return its value + timestamp. */
 export function nearestSample(samples: ChannelSample[], tMs: number): ChannelSample | null {
   if (samples.length === 0) return null;
-  let lo = 0, hi = samples.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (samples[mid].timestamp < tMs) lo = mid + 1;
-    else hi = mid;
-  }
-  // lo is the first index >= tMs; check lo-1 in case it's closer
-  if (lo > 0 && Math.abs(samples[lo - 1].timestamp - tMs) < Math.abs(samples[lo].timestamp - tMs)) {
-    return samples[lo - 1];
-  }
-  return samples[lo];
+  return samples[nearestSampleIndex(samples, tMs)];
 }
 
 export function brightenColor(hex: string, amount: number): string {
@@ -287,19 +293,83 @@ export function minMaxTrace(
   timeToX: (tSec: number) => number,
   plotW: number,
 ): ChannelSample[] {
-  const n = samples.length;
-  if (n <= plotW * 4) return samples;
+  return scanSeries(samples, 0, samples.length, timeToX, plotW, 0, -1).trace;
+}
+
+/** Index range [start, end) of the samples a window shows: the samples inside
+ *  it, a little padding, and one neighbour each side so the line runs to the
+ *  plot edge. A range, not a copy -- callers index into `samples`. */
+export function visibleSampleRange(samples: ChannelSample[], xRange: [number, number]): [number, number] {
+  if (samples.length === 0) return [0, 0];
+  const rangePad = (xRange[1] - xRange[0]) * 0.02;
+  const lo = (xRange[0] - rangePad) * 1000;
+  const hi = (xRange[1] + rangePad) * 1000;
+  const start = Math.max(0, sampleLowerBound(samples, lo) - 1);
+  const end = Math.min(samples.length, sampleUpperBound(samples, hi) + 1);
+  return [start, end];
+}
+
+/** Everything a frame needs from one series, from one walk over it. */
+export interface SeriesScan {
+  /** Min-max reduced samples to stroke (see minMaxTrace). */
+  trace: ChannelSample[];
+  /** Lowest and highest value in [start, end); [Infinity, -Infinity] when empty. */
+  valueRange: [number, number];
+  /** Extreme finite samples with startMs <= timestamp <= endMs, or null. */
+  minMax: { min: ChannelSample; max: ChannelSample } | null;
+}
+
+/**
+ * Walk samples[start, end) once and produce the trace to draw, the value
+ * range for the y-axis and the min/max markers. These used to be three
+ * separate walks over the same samples on every frame.
+ *
+ * The trace is the samples themselves when there are fewer than 4 per pixel;
+ * otherwise each pixel column keeps its first, min, max and last sample, which
+ * draws identically.
+ */
+export function scanSeries(
+  samples: ChannelSample[],
+  start: number,
+  end: number,
+  timeToX: (tSec: number) => number,
+  plotW: number,
+  startMs: number,
+  endMs: number,
+): SeriesScan {
+  let mn = Infinity, mx = -Infinity;
+  let min: ChannelSample | null = null;
+  let max: ChannelSample | null = null;
+  const note = (s: ChannelSample) => {
+    const v = s.value;
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+    if (s.timestamp >= startMs && s.timestamp <= endMs && Number.isFinite(v)) {
+      if (!min || v < min.value) min = s;
+      if (!max || v > max.value) max = s;
+    }
+  };
+  const done = (trace: ChannelSample[]): SeriesScan => ({
+    trace, valueRange: [mn, mx], minMax: min && max ? { min, max } : null,
+  });
+
+  if (end - start <= plotW * 4) {
+    for (let k = start; k < end; k++) note(samples[k]);
+    return done(start === 0 && end === samples.length ? samples : samples.slice(start, end));
+  }
 
   const trace: ChannelSample[] = [];
-  let i = 0;
+  let i = start;
 
-  while (i < n) {
+  while (i < end) {
     const px = Math.round(timeToX(samples[i].timestamp / 1000));
     let minIdx = i, maxIdx = i;
     let j = i + 1;
+    note(samples[i]);
 
-    while (j < n && Math.round(timeToX(samples[j].timestamp / 1000)) === px) {
+    while (j < end && Math.round(timeToX(samples[j].timestamp / 1000)) === px) {
       const val = samples[j].value;
+      note(samples[j]);
       if (Number.isFinite(val)) {
         if (!Number.isFinite(samples[minIdx].value) || val < samples[minIdx].value) minIdx = j;
         if (!Number.isFinite(samples[maxIdx].value) || val > samples[maxIdx].value) maxIdx = j;
@@ -324,7 +394,7 @@ export function minMaxTrace(
     i = j;
   }
 
-  return trace;
+  return done(trace);
 }
 
 // ─── Min/max markers ────────────────────────────────────────────────────────
@@ -334,11 +404,7 @@ export function minMaxTrace(
 export function visibleMinMax(
   samples: ChannelSample[], startMs: number, endMs: number,
 ): { min: ChannelSample; max: ChannelSample } | null {
-  let lo = 0, hi = samples.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (samples[mid].timestamp < startMs) lo = mid + 1; else hi = mid;
-  }
+  const lo = sampleLowerBound(samples, startMs);
   let min: ChannelSample | null = null;
   let max: ChannelSample | null = null;
   for (let i = lo; i < samples.length && samples[i].timestamp <= endMs; i++) {
@@ -406,17 +472,11 @@ export interface LabelRect { x: number; y: number; w: number; h: number }
 /** Trace pixels, xs ascending (as produced by minMaxTrace). */
 export interface TracePoints { xs: number[]; ys: number[] }
 
-function lowerBoundNum(arr: number[], v: number): number {
-  let lo = 0, hi = arr.length;
-  while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < v) lo = m + 1; else hi = m; }
-  return lo;
-}
-
 /** Trace points falling inside a rect (cheap: binary search on x). */
 function pointsInside(r: LabelRect, traces: TracePoints[]): number {
   let n = 0;
   for (const t of traces) {
-    for (let i = lowerBoundNum(t.xs, r.x); i < t.xs.length && t.xs[i] <= r.x + r.w; i++) {
+    for (let i = lowerBound(t.xs, r.x); i < t.xs.length && t.xs[i] <= r.x + r.w; i++) {
       if (t.ys[i] >= r.y && t.ys[i] <= r.y + r.h) n++;
     }
   }

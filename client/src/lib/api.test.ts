@@ -8,6 +8,7 @@ import {
   fetchChannelData,
   fetchGPS,
   fetchGPSPreview,
+  fetchLaps,
   fetchUploadLog,
   getSettings,
   listSessions,
@@ -15,6 +16,7 @@ import {
   loadSession,
   pullFromAim,
   renameSession,
+  setDataSession,
   updateSettings,
 } from './api';
 
@@ -222,5 +224,35 @@ describe('analysis endpoints', () => {
 describe('liveWebSocketUrl', () => {
   it('swaps http for ws', () => {
     expect(liveWebSocketUrl()).toBe('ws://localhost:8000/api/live/ws');
+  });
+});
+
+describe('data session', () => {
+  afterEach(() => setDataSession(null));
+
+  it('names the shown session on every data request', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ gps: null, laps: [], source: 'none' }));
+    setDataSession('sid 1');
+
+    await fetchChannelData(['RPM']);
+    await fetchGPS();
+    await fetchLaps();
+
+    expect(fetchMock.mock.calls.map(c => c[0])).toEqual([
+      `${BASE}/api/data?channels=RPM&session_id=sid%201`,
+      `${BASE}/api/gps?session_id=sid%201`,
+      `${BASE}/api/laps?session_id=sid%201`,
+    ]);
+  });
+
+  it('sends no session id once the session is closed', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ gps: null, laps: [], source: 'none' }));
+    setDataSession('sid-1');
+    setDataSession(null);
+
+    await fetchGPS();
+    await fetchLaps();
+
+    expect(fetchMock.mock.calls.map(c => c[0])).toEqual([`${BASE}/api/gps`, `${BASE}/api/laps`]);
   });
 });

@@ -7,6 +7,7 @@
  */
 import type { ChannelInfo } from './channel-dictionary';
 import { formatChannelRef } from './formula-engine';
+import { unitCoefficients } from './units';
 
 export type RecipeSlot = { key: string; label: string } & (
   /** `role` may list alternatives in preference order: 'wheel_speed|gps_speed'. */
@@ -34,20 +35,36 @@ export interface Recipe {
 
 interface Conversion { value: string; label: string; factor: number; offset?: number; units: string }
 
+/** Factors are written into the formula the user sees, so keep them short:
+ *  the exact value when it is short already (1.609344, 9.80665), otherwise
+ *  six significant figures of it. */
+function shown(factor: number): number {
+  const exact = Number(factor.toPrecision(12));
+  return String(exact).length <= 8 ? exact : Number(factor.toPrecision(6));
+}
+
+/** A recipe conversion whose numbers come from the unit table in units.ts. */
+function conversion(value: string, label: string, from: string, to: string, units = to): Conversion {
+  const c = unitCoefficients(from, to);
+  if (!c) throw new Error(`No conversion from ${from} to ${to}`);
+  const offset = shown(c.offset);
+  return { value, label, factor: shown(c.scale), ...(offset ? { offset } : {}), units };
+}
+
 const UNIT_CONVERSIONS: Conversion[] = [
-  { value: 'kmh_mph', label: 'km/h → mph', factor: 0.621371, units: 'mph' },
-  { value: 'mph_kmh', label: 'mph → km/h', factor: 1.609344, units: 'km/h' },
-  { value: 'bar_psi', label: 'bar → psi', factor: 14.5038, units: 'psi' },
-  { value: 'psi_bar', label: 'psi → bar', factor: 0.0689476, units: 'bar' },
-  { value: 'c_f', label: '°C → °F', factor: 1.8, offset: 32, units: '°F' },
-  { value: 'ms2_g', label: 'm/s² → g', factor: 0.101972, units: 'g' },
-  { value: 'g_ms2', label: 'g → m/s²', factor: 9.80665, units: 'm/s²' },
-  { value: 'nm_lbft', label: 'N·m → lb·ft', factor: 0.737562, units: 'lb·ft' },
-  { value: 'kw_hp', label: 'kW → hp', factor: 1.34102, units: 'hp' },
+  conversion('kmh_mph', 'km/h → mph', 'km/h', 'mph'),
+  conversion('mph_kmh', 'mph → km/h', 'mph', 'km/h'),
+  conversion('bar_psi', 'bar → psi', 'bar', 'psi'),
+  conversion('psi_bar', 'psi → bar', 'psi', 'bar'),
+  conversion('c_f', '°C → °F', '°C', '°F'),
+  conversion('ms2_g', 'm/s² → g', 'm/s²', 'g'),
+  conversion('g_ms2', 'g → m/s²', 'g', 'm/s²'),
+  conversion('nm_lbft', 'N·m → lb·ft', 'Nm', 'lb·ft'),
+  conversion('kw_hp', 'kW → hp', 'kW', 'hp'),
 ];
 
 const FUEL_CONVERSIONS: Conversion[] = [
-  { value: 'lh_galh', label: 'L/h → US gal/h', factor: 0.264172, units: 'gal/h' },
+  conversion('lh_galh', 'L/h → US gal/h', 'L', 'gal', 'gal/h'),
   { value: 'ccmin_lh', label: 'cc/min → L/h', factor: 0.06, units: 'L/h' },
   { value: 'lh_ccmin', label: 'L/h → cc/min', factor: 16.6667, units: 'cc/min' },
 ];

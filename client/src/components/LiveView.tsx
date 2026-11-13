@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { fetchLiveChannels, type AimStatus } from '../lib/api';
 import {
   Activity, AlertCircle, ArrowLeft, Copy, Download, Loader2, MoreHorizontal, Pause, Pencil, Pin, PinOff,
@@ -13,6 +13,7 @@ import { WidgetConfigDialog } from './live/WidgetConfigDialog';
 import { Presence } from '../lib/motion';
 import { type ChannelSources } from './live/ChannelPicker';
 import { BUILTIN_ID, GRID_COLS, cloneLayout, newId, type LiveLayout, type WidgetConfig } from './live/layout-schema';
+import { downloadBlob } from '../lib/saveBlob';
 
 interface Props {
   onBack: () => void;
@@ -42,14 +43,7 @@ function useNow(active: boolean): number {
 function downloadLayout(layout: LiveLayout) {
   const { builtIn: _builtIn, ...data } = layout;
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${layout.name.replace(/[^\w.-]+/g, '_') || 'layout'}.qslayout.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${layout.name.replace(/[^\w.-]+/g, '_') || 'layout'}.qslayout.json`);
 }
 
 const BTN = 'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors disabled:opacity-50';
@@ -78,7 +72,9 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
   const layouts = useLiveLayouts(connectedKind, draft !== null);
   const units = useUnitOverrides();
   const shown = draft ?? layouts.current;
-  const dirty = draft !== null && JSON.stringify(draft) !== draftOrigin.current;
+  // This component re-renders on every snapshot; serialise the draft only when
+  // it actually changes (draftOrigin is set in the same step as a new draft).
+  const dirty = useMemo(() => draft !== null && JSON.stringify(draft) !== draftOrigin.current, [draft]);
   const mismatch = connectedKind !== null && shown.vehicle !== connectedKind;
   const now = useNow(!isLive && receivedAt !== null);
 

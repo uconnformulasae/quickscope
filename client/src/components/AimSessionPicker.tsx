@@ -9,17 +9,17 @@ import {
   type AimIndexStatus,
 } from '../lib/api';
 import { formatAimDeviceListDate } from '../lib/time-format';
+import { Modal } from './Modal';
+import { formatBytes } from '../lib/format-bytes';
 
 interface AimSessionPickerProps {
   onClose: () => void;
   onDownloaded: () => void;
 }
 
+/** The logger reports 0 for a session whose size it doesn't know. */
 function formatSize(bytes: number): string {
-  if (!bytes || bytes <= 0) return '--';
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(0)} KB`;
-  return `${bytes} B`;
+  return bytes > 0 ? formatBytes(bytes) : '--';
 }
 
 function mergePullProgress(queue: string[], server: AimPullProgress): Record<string, number> {
@@ -73,13 +73,6 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
   const pullPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Polling outlives the pull request: indexing runs after the device is released.
   const isPullingRef = useRef(false);
-
-  // Dismiss on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
 
   useEffect(() => {
     setLoading(true);
@@ -198,154 +191,149 @@ export function AimSessionPicker({ onClose, onDownloaded }: AimSessionPickerProp
   const newCount = sessions.filter(s => !s.already_downloaded).length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" onClick={onClose}>
-      <div
-        className="qs-dialog bg-card border border-border rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Radio className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
-            <h2 className="text-sm font-semibold text-foreground">AiM Device Sessions</h2>
-          </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-muted/50 text-muted-foreground">
-            <X className="w-4 h-4" />
-          </button>
+    <Modal onClose={onClose} className="w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <Radio className="w-4 h-4 text-emerald-500 dark:text-emerald-400" />
+          <h2 className="text-sm font-semibold text-foreground">AiM Device Sessions</h2>
         </div>
+        <button onClick={onClose} className="p-1 rounded hover:bg-muted/50 text-muted-foreground">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto min-h-0">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-3">
-              <Loader2 className="w-5 h-5 text-primary-text animate-spin" />
-              <p className="text-xs text-muted-foreground">Listing sessions on device...</p>
-            </div>
-          ) : sessions.length === 0 && !error ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-2 px-5 text-center">
-              <HardDrive className="w-6 h-6 text-muted-foreground/40" />
-              <p className="text-sm text-muted-foreground">No sessions found on device</p>
-              <p className="text-xs text-muted-foreground">
-                Connect to the AiM WiFi hotspot and verify the device IP in Settings (default 10.0.0.1).
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border/30">
-              {sessions.map(session => {
-                const isSelected = selected.has(session.filename);
-                const isDownloaded = session.already_downloaded;
-                const pullFill = pullPercent[session.filename];
-                const indexStatus = indexing[session.filename];
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-12 gap-3">
+            <Loader2 className="w-5 h-5 text-primary-text animate-spin" />
+            <p className="text-xs text-muted-foreground">Listing sessions on device...</p>
+          </div>
+        ) : sessions.length === 0 && !error ? (
+          <div className="flex flex-col items-center justify-center py-12 gap-2 px-5 text-center">
+            <HardDrive className="w-6 h-6 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">No sessions found on device</p>
+            <p className="text-xs text-muted-foreground">
+              Connect to the AiM WiFi hotspot and verify the device IP in Settings (default 10.0.0.1).
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border/30">
+            {sessions.map(session => {
+              const isSelected = selected.has(session.filename);
+              const isDownloaded = session.already_downloaded;
+              const pullFill = pullPercent[session.filename];
+              const indexStatus = indexing[session.filename];
 
-                return (
-                  <button
-                    key={session.filename}
-                    onClick={() => !isDownloaded && toggleSelect(session.filename)}
-                    disabled={isDownloaded || downloading}
-                    className={`relative w-full overflow-hidden text-left transition-colors
-                      ${isDownloaded ? 'opacity-50' : 'hover:bg-muted/20'}
-                      ${isSelected && !isDownloaded && pullFill === undefined ? 'bg-primary/5' : ''}
-                    `}
-                  >
-                    {pullFill !== undefined && (
-                      <div
-                        className="absolute inset-y-0 left-0 bg-primary/25 dark:bg-primary/30 transition-[width] duration-200 ease-out pointer-events-none"
-                        style={{ width: `${pullFill}%` }}
-                        aria-hidden
-                      />
+              return (
+                <button
+                  key={session.filename}
+                  onClick={() => !isDownloaded && toggleSelect(session.filename)}
+                  disabled={isDownloaded || downloading}
+                  className={`relative w-full overflow-hidden text-left transition-colors
+                    ${isDownloaded ? 'opacity-50' : 'hover:bg-muted/20'}
+                    ${isSelected && !isDownloaded && pullFill === undefined ? 'bg-primary/5' : ''}
+                  `}
+                >
+                  {pullFill !== undefined && (
+                    <div
+                      className="absolute inset-y-0 left-0 bg-primary/25 dark:bg-primary/30 transition-[width] duration-200 ease-out pointer-events-none"
+                      style={{ width: `${pullFill}%` }}
+                      aria-hidden
+                    />
+                  )}
+                  <div className="relative flex w-full items-center gap-3 px-5 py-2.5">
+                  {/* Checkbox */}
+                  <div className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors
+                    ${isDownloaded
+                      ? 'border-emerald-500/50 bg-emerald-500/20'
+                      : isSelected
+                        ? 'border-primary bg-primary'
+                        : 'border-border'
+                    }
+                  `}>
+                    {(isSelected || isDownloaded) && (
+                      <CheckCircle className={`w-3 h-3 ${isDownloaded ? 'text-emerald-500 dark:text-emerald-400' : 'text-primary-foreground'}`} />
                     )}
-                    <div className="relative flex w-full items-center gap-3 px-5 py-2.5">
-                    {/* Checkbox */}
-                    <div className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors
-                      ${isDownloaded
-                        ? 'border-emerald-500/50 bg-emerald-500/20'
-                        : isSelected
-                          ? 'border-primary bg-primary'
-                          : 'border-border'
-                      }
-                    `}>
-                      {(isSelected || isDownloaded) && (
-                        <CheckCircle className={`w-3 h-3 ${isDownloaded ? 'text-emerald-500 dark:text-emerald-400' : 'text-primary-foreground'}`} />
-                      )}
-                    </div>
+                  </div>
 
-                    {/* Session info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-foreground truncate">
-                          {session.filename}
+                  {/* Session info */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-foreground truncate">
+                        {session.filename}
+                      </span>
+                      {isDownloaded && !indexStatus && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 flex-shrink-0">
+                          downloaded
                         </span>
-                        {isDownloaded && !indexStatus && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 flex-shrink-0">
-                            downloaded
-                          </span>
-                        )}
-                        {indexStatus && (
-                          <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${INDEX_BADGE[indexStatus].className}`}>
-                            {isIndexingInFlight(indexStatus) && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
-                            {INDEX_BADGE[indexStatus].label}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                        {session.date && <span>{formatAimDeviceListDate(session.date)}</span>}
-                        {session.hour && <span>{session.hour}</span>}
-                        {session.vehicle && <span>{session.vehicle}</span>}
-                      </div>
-                    </div>
-
-                    {/* Meta */}
-                    <div className="flex items-center gap-3 flex-shrink-0 text-xs text-muted-foreground tabular">
-                      {session.lap_count > 0 && (
-                        <span>{session.lap_count} laps</span>
                       )}
-                      <span>{formatSize(session.size)}</span>
+                      {indexStatus && (
+                        <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${INDEX_BADGE[indexStatus].className}`}>
+                          {isIndexingInFlight(indexStatus) && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+                          {INDEX_BADGE[indexStatus].label}
+                        </span>
+                      )}
                     </div>
+                    <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
+                      {session.date && <span>{formatAimDeviceListDate(session.date)}</span>}
+                      {session.hour && <span>{session.hour}</span>}
+                      {session.vehicle && <span>{session.vehicle}</span>}
                     </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
+                  </div>
 
-        {/* Error / Success */}
-        {error && (
-          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20">
-            {error}
-          </div>
-        )}
-        {downloadResult && (
-          <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20 whitespace-pre-line">
-            {downloadResult}
-          </div>
-        )}
-
-        {/* Footer */}
-        {sessions.length > 0 && (
-          <div className="flex items-center justify-between px-5 py-3 border-t border-border flex-shrink-0">
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span>{sessions.length} on device</span>
-              {newCount > 0 && <span>{newCount} new</span>}
-              <span>{selected.size} selected</span>
-              <button onClick={selectAll} className="text-primary-text hover:underline">Select all</button>
-              <button onClick={selectNone} className="hover:underline">Deselect all</button>
-            </div>
-            <button
-              onClick={handleDownload}
-              disabled={selected.size === 0 || downloading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
-              {downloading ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Download className="w-3.5 h-3.5" />
-              )}
-              {downloading ? 'Downloading...' : `Download ${selected.size}`}
-            </button>
+                  {/* Meta */}
+                  <div className="flex items-center gap-3 flex-shrink-0 text-xs text-muted-foreground tabular">
+                    {session.lap_count > 0 && (
+                      <span>{session.lap_count} laps</span>
+                    )}
+                    <span>{formatSize(session.size)}</span>
+                  </div>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
-    </div>
+
+      {/* Error / Success */}
+      {error && (
+        <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-red-500/10 text-red-500 dark:text-red-400 border border-red-500/20">
+          {error}
+        </div>
+      )}
+      {downloadResult && (
+        <div className="mx-5 mb-2 px-3 py-2 rounded-md text-xs bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 border border-emerald-500/20 whitespace-pre-line">
+          {downloadResult}
+        </div>
+      )}
+
+      {/* Footer */}
+      {sessions.length > 0 && (
+        <div className="flex items-center justify-between px-5 py-3 border-t border-border flex-shrink-0">
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span>{sessions.length} on device</span>
+            {newCount > 0 && <span>{newCount} new</span>}
+            <span>{selected.size} selected</span>
+            <button onClick={selectAll} className="text-primary-text hover:underline">Select all</button>
+            <button onClick={selectNone} className="hover:underline">Deselect all</button>
+          </div>
+          <button
+            onClick={handleDownload}
+            disabled={selected.size === 0 || downloading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {downloading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            {downloading ? 'Downloading...' : `Download ${selected.size}`}
+          </button>
+        </div>
+      )}
+    </Modal>
   );
 }

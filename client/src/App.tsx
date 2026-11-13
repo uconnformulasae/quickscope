@@ -3,7 +3,7 @@ import { buildLapWindows } from './lib/lap-compare';
 import { useSessionViewPersistence } from './lib/useSessionViewPersistence';
 import { applyChannelColors } from './lib/channelColors';
 import { usePreferences } from './lib/usePreferences';
-import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
+import { uploadFile, fetchChannelData, fetchLaps, setDataSession, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
 import { pathStem, quickscopeSessionExportBaseName, sanitizeExportFilePart } from './lib/sessionDisplayName';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
@@ -26,6 +26,7 @@ import { LiveView } from './components/LiveView';
 import { Presence } from './lib/motion';
 import { ResizeHandle } from './components/ResizeHandle';
 import { Upload } from 'lucide-react';
+import { formatRate } from './lib/format-bytes';
 
 type View = 'browser' | 'analysis' | 'live';
 
@@ -36,6 +37,7 @@ export default function App() {
   const {
     state,
     derivedSamplesMap,
+    cursorStore,
     setSession,
     setLoading,
     setError,
@@ -53,6 +55,9 @@ export default function App() {
     setXYChannels,
     clearSession,
     setChannelSamples,
+    getSessionGeneration,
+    isCurrentSession,
+    beginSessionChange,
     addDerivedChannel,
     removeDerivedChannel,
     updateDerivedChannel,
@@ -100,8 +105,12 @@ export default function App() {
   // Drag over state for chart area
   const [isDragOver, setIsDragOver] = useState(false);
 
-  /** Build XRKSession from backend SessionInfo and switch to analysis view */
-  const buildAndSetSession = useCallback(async (info: SessionInfo, fileName: string, viewKey: string) => {
+  /** Build XRKSession from backend SessionInfo and switch to analysis view.
+   *  `generation` comes from beginSessionChange(); if another load starts
+   *  while this one is fetching, this one stops and leaves the screen alone. */
+  const buildAndSetSession = useCallback(async (
+    info: SessionInfo, fileName: string, viewKey: string, generation: number,
+  ) => {
     const nameMap = new Map<string, number>();
     for (const ch of info.channels) {
       nameMap.set(ch.name, ch.index);
@@ -132,6 +141,7 @@ export default function App() {
     if (firstFive.length > 0) {
       setProgress({ stage: 'Loading channel data...', percent: 70 });
       const dataMap = await fetchChannelData(firstFive);
+      if (!isCurrentSession(generation)) return;
       dataMap.forEach((data, name) => {
         const idx = nameMap.get(name);
         if (idx !== undefined) {
@@ -164,6 +174,7 @@ export default function App() {
     } catch {
       // Non-fatal: leave laps empty. The Lap tab will show "no markers".
     }
+    if (!isCurrentSession(generation)) return;
 
     const session: XRKSession = {
       metadata: {
@@ -188,7 +199,7 @@ export default function App() {
     persistView.beginSession(viewKey);
     setSession(session, fileName);
     setView('analysis');
-  }, [setSession, setProgress, persistView]);
+  }, [setSession, setProgress, persistView, isCurrentSession]);
 
   /** Called when session browser loads a session */
   const handleSessionLoaded = useCallback(async (
@@ -198,6 +209,8 @@ export default function App() {
     source: LocalSession['source'],
     displayName: string,
   ) => {
+    const generation = beginSessionChange();
+    setDataSession(sessionId);
     setLoadedSessionId(sessionId);
     setLoadedSessionSource(source);
     setLoadedSessionExportBase(
@@ -206,25 +219,25 @@ export default function App() {
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
-      await buildAndSetSession(info, fileName, sessionId);
+      await buildAndSetSession(info, fileName, sessionId, generation);
     } catch (err) {
-      setError(`Failed to load session: ${err instanceof Error ? err.message : String(err)}`);
+      const message = `Failed to load session: ${err instanceof Error ? err.message : String(err)}`;
+      if (isCurrentSession(generation)) setError(message);
+      // The browser view doesn't render the store's loadError; hand the
+      // failure back so the session browser can show it.
+      throw new Error(message);
     }
-  }, [buildAndSetSession, setLoading, setProgress, setError]);
+  }, [buildAndSetSession, setLoading, setProgress, setError, beginSessionChange, isCurrentSession]);
 
   /** Called when user uploads a file from the analysis view header */
   const handleFileSelected = useCallback(async (file: File) => {
+    const generation = beginSessionChange();
     setLoading(true);
     setProgress({ stage: 'Uploading to backend...', percent: 1 });
 
-    const formatRate = (bytesPerSec: number): string => {
-      if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
-      if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-      return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
-    };
-
     try {
       const info = await uploadFile(file, (p) => {
+        if (!isCurrentSession(generation)) return;
         // Map upload bytes to 1..40% of overall progress; the rest is parsing.
         const uploadPct = p.total > 0 ? (p.loaded / p.total) * 40 : 0;
         const eta = p.etaSec >= 0 && p.etaSec < 600 ? `, ${p.etaSec.toFixed(0)}s left` : '';
@@ -233,17 +246,21 @@ export default function App() {
           percent: Math.max(1, Math.min(40, uploadPct)),
         });
       });
+      if (!isCurrentSession(generation)) return;
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
+      setDataSession(info.sessionId ?? null);
       setLoadedSessionId(info.sessionId ?? null);
       setLoadedSessionSource('manual_upload');
       setLoadedSessionExportBase(sanitizeExportFilePart(pathStem(file.name)));
-      await buildAndSetSession(info, file.name, info.sessionId ?? file.name);
+      await buildAndSetSession(info, file.name, info.sessionId ?? file.name, generation);
     } catch (err) {
+      if (!isCurrentSession(generation)) return;
       setError(`Failed to upload XRK file: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [setLoading, setProgress, buildAndSetSession, setError]);
+  }, [setLoading, setProgress, buildAndSetSession, setError, beginSessionChange, isCurrentSession]);
 
   const handleBackToBrowser = useCallback(() => {
+    setDataSession(null);
     setLoadedSessionId(null);
     setLoadedSessionExportBase(null);
     clearSession();
@@ -271,22 +288,27 @@ export default function App() {
       return;
     }
 
+    // Channel indices are reused between sessions: if another session is
+    // loaded while this fetch is out, the result belongs to neither.
+    const generation = getSessionGeneration();
     try {
       const dataMap = await fetchChannelData([channelDef.shortName]);
+      if (!isCurrentSession(generation)) return;
       const data = dataMap.get(channelDef.shortName);
       if (data) {
         const channelSamples: ChannelSample[] = data.timestamps.map((t: number, i: number) => ({
           timestamp: t,
           value: data.values[i],
         }));
-        setChannelSamples(channelId, channelSamples);
+        setChannelSamples(channelId, channelSamples, generation);
       }
     } catch (err) {
       console.error('Failed to fetch channel data:', err);
     }
+    if (!isCurrentSession(generation)) return;
 
     toggleChannel(channelId, color);
-  }, [state.activeChannels, state.session, toggleChannel, setChannelSamples]);
+  }, [state.activeChannels, state.session, toggleChannel, setChannelSamples, getSessionGeneration, isCurrentSession]);
 
   const handleOpenCreateDerived = useCallback(() => {
     setEditingDerived(undefined);
@@ -497,7 +519,7 @@ export default function App() {
                 onViewRangeChange={setViewRange}
                 derivedChannels={state.derivedChannels}
                 derivedSamplesMap={derivedSamplesMap}
-                cursorTime={state.cursorTime}
+                cursorStore={cursorStore}
                 onCursorTimeChange={setCursorTime}
                 chartMode={state.chartMode}
                 fileName={state.fileName}
@@ -583,7 +605,7 @@ export default function App() {
               derivedChannels={state.derivedChannels}
               derivedSamplesMap={derivedSamplesMap}
               onNavigateToTime={handleNavigateToTime}
-              cursorTime={state.cursorTime}
+              cursorStore={cursorStore}
               theme={theme}
               selectedLaps={state.selectedLaps}
               onToggleLap={toggleLapSelected}

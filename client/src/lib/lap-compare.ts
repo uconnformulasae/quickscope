@@ -1,5 +1,6 @@
 /** Lap windows and lap-relative time for lap selection / compare. */
 import type { ChannelSample, LapMarker } from './xrk-parser';
+import { sampleLowerBound } from './binary-search';
 
 export interface LapWindow {
   index: number;
@@ -44,11 +45,7 @@ export function toSessionMs(lapRelSec: number, lap: LapWindow): number {
 
 /** The lap's samples (startMs..endMs inclusive), re-timed so the lap starts at 0. */
 export function shiftToLap(samples: ChannelSample[], lap: LapWindow): ChannelSample[] {
-  let lo = 0, hi = samples.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (samples[mid].timestamp < lap.startMs) lo = mid + 1; else hi = mid;
-  }
+  const lo = sampleLowerBound(samples, lap.startMs);
   const out: ChannelSample[] = [];
   for (let i = lo; i < samples.length && samples[i].timestamp <= lap.endMs; i++) {
     out.push({ timestamp: samples[i].timestamp - lap.startMs, value: samples[i].value });

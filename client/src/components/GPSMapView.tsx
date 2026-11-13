@@ -11,6 +11,7 @@ import { getConverter, resolveDisplayUnit } from '../lib/units';
 import { fixedRangeIn, gradientStops, sampleGradient, speedToT } from '../lib/gradients';
 import type { LapMarker } from '../lib/xrk-parser';
 import { buildLapWindows, lapColor, segmentInLaps, selectedWindows, toSessionMs } from '../lib/lap-compare';
+import { nearestIndex } from '../lib/binary-search';
 
 /** Min/max without spreading — large GPS traces exceed the argument stack limit. */
 function rangeOf(values: number[]): [number, number] {
@@ -38,18 +39,6 @@ interface GPSMapViewProps {
   cursorTime?: number | null; // seconds (lap-relative in lap compare mode)
   lapMarkers?: LapMarker[];
   selectedLaps?: number[];
-}
-
-/** Nearest track index to time tMs (times sorted). */
-function nearestIndex(times: number[], tMs: number): number {
-  let lo = 0, hi = times.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (times[mid] < tMs) lo = mid + 1;
-    else hi = mid;
-  }
-  if (lo > 0 && Math.abs(times[lo - 1] - tMs) < Math.abs(times[lo] - tMs)) lo = lo - 1;
-  return lo;
 }
 
 const NO_LAPS: LapMarker[] = [];

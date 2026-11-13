@@ -312,3 +312,50 @@ describe('SessionBrowser', () => {
     expect(screen.queryByText(/Uploading/)).toBeNull();
   });
 });
+
+describe('one load at a time', () => {
+  // The backend has a single active session; two loads in flight can pair one
+  // session's metadata with another's channel data.
+  const info = { metadata: {}, channels: [], durationMs: 0, totalSamples: 0, lapCount: 0 };
+
+  it('ignores a second session click until the first load has finished', async () => {
+    let finishFirst!: (v: unknown) => void;
+    const loads: string[] = [];
+    routes['/api/sessions/new/load'] = () => { loads.push('new'); return new Promise(r => { finishFirst = r; }); };
+    routes['/api/sessions/old/load'] = () => { loads.push('old'); return info; };
+    const props = renderBrowser();
+    await screen.findByText('Endurance');
+    const [newest, older] = rows();
+
+    fireEvent.click(newest);
+    fireEvent.click(older);
+    await waitFor(() => expect(loads).toEqual(['new']));
+    expect(older.getAttribute('aria-disabled')).toBe('true');
+
+    finishFirst(info);
+    await waitFor(() => expect(props.onSessionLoaded).toHaveBeenCalledTimes(1));
+    expect(props.onSessionLoaded.mock.calls[0][1]).toBe('new');
+
+    await waitFor(() => expect(older.getAttribute('aria-disabled')).toBe('false'));
+    fireEvent.click(older);
+    await waitFor(() => expect(loads).toEqual(['new', 'old']));
+  });
+
+  it('stays blocked while the app is still building the session, and shows its error', async () => {
+    let failBuild!: (e: Error) => void;
+    routes['/api/sessions/new/load'] = () => info;
+    routes['/api/sessions/old/load'] = () => info;
+    const props = renderBrowser();
+    props.onSessionLoaded.mockReturnValue(new Promise((_, reject) => { failBuild = reject; }));
+    await screen.findByText('Endurance');
+    const [newest, older] = rows();
+
+    fireEvent.click(newest);
+    await waitFor(() => expect(props.onSessionLoaded).toHaveBeenCalledTimes(1));
+    fireEvent.click(older);
+    expect(props.onSessionLoaded).toHaveBeenCalledTimes(1);
+
+    failBuild(new Error('Failed to load session: no channel data'));
+    expect(await screen.findByText(/Failed to load session: no channel data/)).toBeTruthy();
+  });
+});

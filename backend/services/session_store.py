@@ -5,16 +5,15 @@ Manages ./data/sessions.json and the ./data/sessions/ file cache.
 Thread-safe via a simple lock since QuickScope is single-user.
 """
 
-import json
-import os
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
+from config import DATA_DIR
+from services.json_store import load_json, save_json
+
 SESSIONS_FILE = DATA_DIR / "sessions.json"
 SESSIONS_DIR = DATA_DIR / "sessions"
 
@@ -27,36 +26,15 @@ def _ensure_dirs():
 _lock = threading.Lock()
 
 
-def _quarantine(path: Path) -> None:
-    try:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        os.replace(path, path.with_name(f"{path.name}.{ts}.corrupt"))
-    except OSError:
-        pass
-
-
 def _load() -> list[dict]:
     _ensure_dirs()
-    if not SESSIONS_FILE.exists():
-        return []
-    try:
-        with open(SESSIONS_FILE, "r") as f:
-            sessions = json.load(f)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        # Keep the unreadable file for recovery and start with an empty index.
-        _quarantine(SESSIONS_FILE)
-        return []
-    return sessions if isinstance(sessions, list) else []
+    # An unreadable index is kept for recovery; start with an empty one.
+    return load_json(SESSIONS_FILE, lambda data: isinstance(data, list)) or []
 
 
 def _save(sessions: list[dict]):
     _ensure_dirs()
-    tmp = SESSIONS_FILE.with_suffix(SESSIONS_FILE.suffix + f".{uuid.uuid4().hex}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(sessions, f, indent=2, default=str)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, SESSIONS_FILE)  # atomic: a crash mid-write can't leave a truncated file
+    save_json(SESSIONS_FILE, sessions, default=str)
 
 
 def list_sessions() -> list[dict]:
@@ -73,16 +51,26 @@ def get_session(session_id: str) -> Optional[dict]:
 
 
 def find_by_filename(filename: str) -> Optional[dict]:
+    """The session stored under ``filename``.
+
+    Falls back to a case-insensitive match: Windows and default macOS volumes
+    treat ``A.xrk`` and ``a.xrk`` as one file, so they must be one session.
+    """
+    folded = filename.casefold()
+    fallback = None
     with _lock:
         for s in _load():
             if s["filename"] == filename:
                 return s
-    return None
+            if fallback is None and s["filename"].casefold() == folded:
+                fallback = s
+    return fallback
 
 
-def add_session(
+def _new_entry(
     filename: str,
     source: str,
+    now: str,
     aim_session_id: Optional[str] = None,
     track_name: str = "",
     driver_name: str = "",
@@ -93,7 +81,6 @@ def add_session(
     local_path: Optional[str] = None,
     index_status: Optional[str] = None,
 ) -> dict:
-    now = datetime.now(timezone.utc).isoformat()
     entry = {
         "id": str(uuid.uuid4()),
         "aim_session_id": aim_session_id or Path(filename).stem,
@@ -111,11 +98,42 @@ def add_session(
     }
     if index_status is not None:
         entry["index_status"] = index_status
+    return entry
+
+
+def add_session(filename: str, source: str, **fields) -> dict:
+    """Append a new session. ``fields`` are the optional keys of :func:`_new_entry`."""
+    entry = _new_entry(filename, source, datetime.now(timezone.utc).isoformat(), **fields)
     with _lock:
         sessions = _load()
         sessions.append(entry)
         _save(sessions)
     return entry
+
+
+def get_or_add_session(filename: str, source: str, **fields) -> tuple[dict, bool]:
+    """The session stored under ``filename``, added (with ``fields``) if absent.
+
+    Returns ``(entry, created)``. Lookup and insert happen under one lock; an
+    existing entry is returned as it is. Names match as in
+    :func:`find_by_filename`.
+    """
+    folded = filename.casefold()
+    now = datetime.now(timezone.utc).isoformat()
+    with _lock:
+        sessions = _load()
+        fallback = None
+        for s in sessions:
+            if s["filename"] == filename:
+                return s, False
+            if fallback is None and s["filename"].casefold() == folded:
+                fallback = s
+        if fallback is not None:
+            return fallback, False
+        entry = _new_entry(filename, source, now, **fields)
+        sessions.append(entry)
+        _save(sessions)
+    return entry, True
 
 
 def update_session(session_id: str, **fields) -> Optional[dict]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -9,6 +10,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
+
+# Starlette's TestClient addresses the app as "testserver"; the API otherwise
+# only answers requests sent to this machine (see backend/origins.py).
+os.environ.setdefault("QUICKSCOPE_ALLOWED_HOSTS", "testserver")
 
 sys.path.insert(0, str(REPO_ROOT / "backend"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -52,12 +57,15 @@ def isolated_data_dir(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def _reset_session_state(isolated_data_dir):
     """FastAPI routes share a module-level SessionState; isolate tests."""
-    from services import aim_pull_log, upload_log
+    from services import aim_device_cache, aim_pull_log, upload_log
     from services.session_cache import session_cache
     from state import state
 
     state.clear()
     session_cache.clear()
+    # List and pull reuse a remembered logger instead of re-probing; one left
+    # behind by another test would stand in for the device under test.
+    aim_device_cache.clear_cache_for_tests()
     upload_log.clear()
     aim_pull_log.clear()
     yield

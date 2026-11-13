@@ -23,6 +23,7 @@ import { QuickScopeLogo } from './QuickScopeLogo';
 import { ThemeToggle } from './ThemeToggle';
 import { GPSThumbnail } from './GPSThumbnail';
 import { ExportDialog } from './ExportDialog';
+import { formatBytes, formatRate } from '../lib/format-bytes';
 
 interface SessionBrowserProps {
   onSessionLoaded: (
@@ -31,7 +32,7 @@ interface SessionBrowserProps {
     fileName: string,
     source: LocalSession['source'],
     displayName: string,
-  ) => void;
+  ) => void | Promise<void>;
   onOpenSettings: () => void;
   onOpenLive: (device: AimStatus['device']) => void;
   theme: 'dark' | 'light';
@@ -45,20 +46,6 @@ function formatDuration(seconds: number): string {
   const s = Math.floor(seconds % 60);
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   return `${m}:${String(s).padStart(2, '0')}`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function formatRate(bytesPerSec: number): string {
-  if (bytesPerSec < 1) return '0 B/s';
-  if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
-  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-  return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
 }
 
 function formatRelativeTime(iso: string): string {
@@ -164,11 +151,20 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     refreshSessions();
   }, [refreshSessions]);
 
+  // The backend has one active session, and channel data is fetched from
+  // whichever that is. Two loads in flight can pair one session's metadata
+  // with another's data, so a second load waits until the first has finished
+  // (including the app building the session, hence the awaits below).
+  const loadBusyRef = useRef(false);
+
   const handleSessionClick = useCallback(async (session: LocalSession) => {
+    if (loadBusyRef.current) return;
+    loadBusyRef.current = true;
     setLoadingId(session.id);
+    setError(null);
     try {
       const info = await loadSession(session.id);
-      onSessionLoaded(
+      await onSessionLoaded(
         info,
         session.id,
         session.filename,
@@ -178,6 +174,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Load failed');
     } finally {
+      loadBusyRef.current = false;
       setLoadingId(null);
     }
   }, [onSessionLoaded]);
@@ -190,6 +187,9 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
   const handleExportCsv = useCallback(async (e: React.MouseEvent, session: LocalSession) => {
     e.stopPropagation();
     setExportMenuSessionId(null);
+    // Reading the channel list makes this the backend's active session too.
+    if (loadBusyRef.current) return;
+    loadBusyRef.current = true;
     setExportBusyId(session.id);
     setError(null);
     try {
@@ -215,6 +215,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Export failed');
     } finally {
+      loadBusyRef.current = false;
       setExportBusyId(null);
     }
   }, []);
@@ -272,6 +273,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
   const handleFileUpload = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.xrk') && !file.name.toLowerCase().endsWith('.xrz')) return;
+    if (loadBusyRef.current) return;
+    loadBusyRef.current = true;
     setLoadingId('upload');
     setUploadProgress({ loaded: 0, total: file.size, ratePerSec: 0 });
     setError(null);
@@ -289,7 +292,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         ? updated.find(s => s.id === info.sessionId)
         : updated.find(s => s.filename === file.name);
       if (newest) {
-        onSessionLoaded(
+        await onSessionLoaded(
           info,
           newest.id,
           file.name,
@@ -297,11 +300,12 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
           quickscopeSessionDisplayName(newest),
         );
       } else if (info.sessionId) {
-        onSessionLoaded(info, info.sessionId, file.name, 'manual_upload', pathStem(file.name));
+        await onSessionLoaded(info, info.sessionId, file.name, 'manual_upload', pathStem(file.name));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
+      loadBusyRef.current = false;
       setLoadingId(null);
       setUploadProgress(null);
     }
@@ -661,6 +665,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
               <div className="rounded-xl border border-[hsl(225,25%,85%)] dark:border-border/60 bg-[hsl(225,30%,97%)] dark:bg-card overflow-hidden divide-y divide-[hsl(225,25%,88%)] dark:divide-border/50">
             {group.items.map(session => {
               const isLoading = loadingId === session.id;
+              // Any load in flight blocks the other rows too (see loadBusyRef).
+              const isBlocked = loadingId !== null;
               const sourceCfg = SOURCE_CONFIG[session.source];
               const SourceIcon = sourceCfg.icon;
 
@@ -671,10 +677,10 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                   key={session.id}
                   role="button"
                   tabIndex={isLoading ? -1 : 0}
-                  aria-disabled={isLoading}
-                  onClick={() => { if (!isLoading) handleSessionClick(session); }}
+                  aria-disabled={isBlocked}
+                  onClick={() => { if (!isBlocked) handleSessionClick(session); }}
                   onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget || isLoading) return;
+                    if (e.target !== e.currentTarget || isBlocked) return;
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       handleSessionClick(session);

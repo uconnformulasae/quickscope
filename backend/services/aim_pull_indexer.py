@@ -103,7 +103,7 @@ def index_one(job: IndexJob) -> bool:
         return False
 
     meta = info.get("metadata", {})
-    session_store.update_session(
+    updated = session_store.update_session(
         job.session_id,
         track_name=meta.get("venue", ""),
         driver_name=meta.get("driver", ""),
@@ -115,7 +115,12 @@ def index_one(job: IndexJob) -> bool:
         lap_count=info.get("lapCount", 0),
         index_status="ok",
     )
-    session_cache.put(job.session_id, log, job.filename, job.path)
+    if updated is None:
+        # Deleted while it was queued: nothing left to describe or cache.
+        logger.info("AiM index: %s was deleted before indexing finished", job.filename)
+        aim_pull_progress.set_index_status(job.filename, "failed")
+        return False
+    session_cache.put(job.session_id, log, job.path.name, job.path, background=True)
     try:
         gps_preview.warm_from_log(job.session_id, job.path, log)
     except Exception:

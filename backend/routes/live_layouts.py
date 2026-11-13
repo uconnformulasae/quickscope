@@ -9,13 +9,13 @@ router = APIRouter(prefix="/api/live")
 
 
 @router.get("/layouts")
-async def list_layouts():
+def list_layouts():
     """User layouts + selection state. Built-in layouts come from the client."""
     return live_layout_store.load()
 
 
 @router.put("/layouts/{layout_id}")
-async def put_layout(layout_id: str, body: dict):
+def put_layout(layout_id: str, body: dict):
     try:
         return live_layout_store.put_layout(layout_id, body)
     except LayoutError as exc:
@@ -23,7 +23,7 @@ async def put_layout(layout_id: str, body: dict):
 
 
 @router.delete("/layouts/{layout_id}")
-async def delete_layout(layout_id: str):
+def delete_layout(layout_id: str):
     if not live_layout_store.delete_layout(layout_id):
         raise HTTPException(status_code=404, detail="Layout not found")
     return {"ok": True}
@@ -31,11 +31,11 @@ async def delete_layout(layout_id: str):
 
 # Separate path (not /layouts/selection) so it can never collide with a layout id.
 @router.put("/layout-selection")
-async def update_selection(body: dict):
+def update_selection(body: dict):
     return live_layout_store.update_selection(body)
 
 
 @router.get("/channels")
-async def device_channels(vehicle: str = Query(..., pattern="^(ev|ic)$")):
+def device_channels(vehicle: str = Query(..., pattern="^(ev|ic)$")):
     """Channels this car has sent on any previous live session (for the offline editor)."""
     return live_channel_cache.get(vehicle)

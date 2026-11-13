@@ -17,6 +17,7 @@ import { buildLabelIndex } from '../lib/formula-text';
 import { availableRecipes, prefillSlots, type Recipe } from '../lib/formula-recipes';
 import { usePreferences } from '../lib/usePreferences';
 import { FormulaInput, type FormulaInputHandle } from './formula/FormulaInput';
+import { Modal } from './Modal';
 
 interface DerivedChannelDialogProps {
   session: XRKSession;
@@ -311,10 +312,6 @@ export function DerivedChannelDialog({
     }
   };
 
-  // Backdrop click closes
-  const handleBackdrop = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).dataset.backdrop) onClose();
-  };
 
   // ── Channel browser (grouped, searchable) ───────────────────────────────
   const q = channelSearch.trim().toLowerCase();
@@ -326,349 +323,344 @@ export function DerivedChannelDialog({
     .filter(g => g.items.length > 0);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center qs-scrim"
-      data-backdrop="1"
-      onClick={handleBackdrop}
+    <Modal
+      onClose={onClose}
+      closeOnEscape={false}
+      className="relative w-[520px] max-w-[calc(100vw-32px)] max-h-[90vh] flex flex-col overflow-hidden"
     >
-      <div
-        className="qs-dialog relative w-[520px] max-w-[calc(100vw-32px)] max-h-[90vh] flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <FlaskConical className="w-4 h-4 text-primary-text" />
-            <h2 className="text-sm font-semibold text-foreground">
-              {editing ? 'Edit Derived Channel' : 'Create Derived Channel'}
-            </h2>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded"
-          >
-            <X className="w-4 h-4" />
-          </button>
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <FlaskConical className="w-4 h-4 text-primary-text" />
+          <h2 className="text-sm font-semibold text-foreground">
+            {editing ? 'Edit Derived Channel' : 'Create Derived Channel'}
+          </h2>
         </div>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
 
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {mode === 'formula' ? (
-            <>
-              {/* Recipes */}
-              <div>
-                <p className="text-xs text-muted-foreground mb-1.5">Start from a recipe</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {recipes.map(r => (
-                    <button
-                      key={r.id}
-                      onClick={() => chooseRecipe(r)}
-                      title={r.blurb}
-                      className={`px-2 py-1 rounded border text-xs transition-colors ${
-                        recipe?.id === r.id
-                          ? 'border-primary bg-primary/15 text-foreground'
-                          : 'bg-muted/40 border-border/60 text-muted-foreground hover:text-foreground hover:border-muted-foreground/40'
-                      }`}
-                    >
-                      {r.title}
-                    </button>
-                  ))}
-                </div>
+      {/* Scrollable body */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {mode === 'formula' ? (
+          <>
+            {/* Recipes */}
+            <div>
+              <p className="text-xs text-muted-foreground mb-1.5">Start from a recipe</p>
+              <div className="flex flex-wrap gap-1.5">
+                {recipes.map(r => (
+                  <button
+                    key={r.id}
+                    onClick={() => chooseRecipe(r)}
+                    title={r.blurb}
+                    className={`px-2 py-1 rounded border text-xs transition-colors ${
+                      recipe?.id === r.id
+                        ? 'border-primary bg-primary/15 text-foreground'
+                        : 'bg-muted/40 border-border/60 text-muted-foreground hover:text-foreground hover:border-muted-foreground/40'
+                    }`}
+                  >
+                    {r.title}
+                  </button>
+                ))}
               </div>
+            </div>
 
-              {/* Recipe slots */}
-              {recipe && (
-                <div className="space-y-2 p-2.5 rounded border border-border/60 bg-muted/20">
-                  <p className="text-xs text-muted-foreground">{recipe.blurb}</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {recipe.slots.map(slot => {
-                      const id = `recipe-slot-${slot.key}`;
-                      return (
-                        <div key={slot.key}>
-                          <label htmlFor={id} className="block text-[11px] text-muted-foreground mb-0.5">{slot.label}</label>
-                          {slot.kind === 'channel' && (
-                            <select id={id} value={slots[slot.key] ?? ''} disabled={detached}
-                              onChange={e => setSlot(slot.key, e.target.value)} className={`${FIELD} disabled:opacity-50`}>
-                              <option value="">Choose a channel…</option>
-                              {sortedChannels.map(c => (
-                                <option key={c.code} value={c.code}>{labelIndex.labelOf(c.code)}</option>
-                              ))}
-                            </select>
-                          )}
-                          {slot.kind === 'choice' && (
-                            <select id={id} value={slots[slot.key] ?? slot.default} disabled={detached}
-                              onChange={e => setSlot(slot.key, e.target.value)} className={`${FIELD} disabled:opacity-50`}>
-                              {slot.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                            </select>
-                          )}
-                          {slot.kind === 'number' && (
-                            <div className="flex items-center gap-1">
-                              <input id={id} type="number" min={1} value={slots[slot.key] ?? String(slot.default)} disabled={detached}
-                                onChange={e => setSlot(slot.key, e.target.value)} className={`${FIELD} disabled:opacity-50`} />
-                              <span className="text-xs text-muted-foreground">{slot.unit}</span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {detached && (
-                    <p className="text-xs text-muted-foreground">
-                      You've edited the formula by hand.{' '}
-                      <button onClick={() => applyRecipe(recipe, slots)} className="text-primary-text hover:underline">
-                        Start over from recipe
-                      </button>
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* Formula */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-muted-foreground">Formula</label>
-                  <label className="flex items-center gap-1 text-[11px] text-muted-foreground cursor-pointer select-none">
-                    <input type="checkbox" checked={showCodes} onChange={e => setShowCodes(e.target.checked)} className="accent-primary" />
-                    Show codes
-                  </label>
-                </div>
-                <FormulaInput
-                  ref={formulaRef}
-                  value={expression}
-                  onChange={handleFormulaChange}
-                  channels={channels}
-                  labelIndex={labelIndex}
-                  showCodes={showCodes}
-                  unitsOf={code => unitsByCode.get(code) ?? ''}
-                  placeholder="Type a channel name, e.g. brake, speed, battery…"
-                  testId="textarea-expression"
-                />
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Type any word to find a channel. Use + − * / and ^ (power) between them.
-                </p>
-              </div>
-
-              {/* Channel browser */}
-              <div>
-                <button
-                  onClick={() => setShowChannelList(v => !v)}
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {showChannelList ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                  Browse channels {q ? `(${filtered.length}/${channels.length})` : `(${channels.length})`}
-                </button>
-                {showChannelList && (
-                  <div className="mt-2 space-y-2">
-                    <div className="relative">
-                      <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                      <input
-                        type="text"
-                        value={channelSearch}
-                        onChange={e => setChannelSearch(e.target.value)}
-                        placeholder="Search channels…"
-                        className="w-full pl-7 pr-2 py-1 bg-muted/40 border border-border rounded text-xs text-foreground placeholder-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
-                        data-testid="input-channel-search"
-                      />
-                    </div>
-                    <div className="max-h-56 overflow-y-auto rounded border border-border/40 bg-muted/20" data-testid="channel-browser">
-                      {groups.length === 0 ? (
-                        <p className="p-2 text-xs text-muted-foreground italic">No channels match "{channelSearch}"</p>
-                      ) : groups.map(g => (
-                        <div key={g.cat}>
-                          <p className="sticky top-0 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground bg-card/95">{g.cat}</p>
-                          {g.items.map(c => {
-                            const label = labelIndex.labelOf(c.code);
-                            return renaming?.code === c.code ? (
-                              <div key={c.code} className="px-2 py-1 flex items-center gap-1.5">
-                                <input
-                                  autoFocus
-                                  value={renaming.value}
-                                  onChange={e => setRenaming({ code: c.code, value: e.target.value })}
-                                  onKeyDown={e => {
-                                    if (e.key === 'Enter') saveRename();
-                                    if (e.key === 'Escape') { e.stopPropagation(); setRenaming(null); }
-                                  }}
-                                  onBlur={saveRename}
-                                  placeholder={describeChannel(c.code, car).label}
-                                  className={FIELD}
-                                  data-testid="input-rename-channel"
-                                />
-                                <span className="font-mono text-[10px] text-muted-foreground shrink-0">{c.code}</span>
-                              </div>
-                            ) : (
-                              <div key={c.code} className="group flex items-center gap-1.5 px-2 py-1 hover:bg-muted/60">
-                                <button
-                                  onClick={() => formulaRef.current?.insertChannel(c.code)}
-                                  title={c.description || c.code}
-                                  className="flex-1 min-w-0 flex items-baseline gap-2 text-left text-xs"
-                                >
-                                  <span className="text-foreground truncate">{label}</span>
-                                  {c.uncertain && (
-                                    <span className="text-amber-400" title="We're not sure what this channel is. Rename it if you know.">?</span>
-                                  )}
-                                  <span className="ml-auto font-mono text-[10px] text-muted-foreground shrink-0">
-                                    {c.code}{unitsByCode.get(c.code) ? ` · ${unitsByCode.get(c.code)}` : ''}
-                                  </span>
-                                </button>
-                                {c.category !== 'Your Channels' && (
-                                  <button
-                                    aria-label={`Rename ${label}`}
-                                    title="Rename"
-                                    onClick={() => setRenaming({ code: c.code, value: labels[c.code] ?? '' })}
-                                    className="p-0.5 text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-foreground"
-                                  >
-                                    <Pencil className="w-3 h-3" />
-                                  </button>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Function reference */}
-              <div>
-                <button
-                  onClick={() => setShowFunctions(v => !v)}
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <BookOpen className="w-3 h-3" />
-                  Functions
-                  {showFunctions ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                </button>
-                {showFunctions && (
-                  <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs p-2 rounded border border-border/40 bg-muted/20">
-                    {FUNCTION_HELP.map(f => (
-                      <div key={f.name} className="contents">
-                        <dt className="font-mono text-primary-text">{f.signature}</dt>
-                        <dd className="text-muted-foreground">{f.description}</dd>
+            {/* Recipe slots */}
+            {recipe && (
+              <div className="space-y-2 p-2.5 rounded border border-border/60 bg-muted/20">
+                <p className="text-xs text-muted-foreground">{recipe.blurb}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {recipe.slots.map(slot => {
+                    const id = `recipe-slot-${slot.key}`;
+                    return (
+                      <div key={slot.key}>
+                        <label htmlFor={id} className="block text-[11px] text-muted-foreground mb-0.5">{slot.label}</label>
+                        {slot.kind === 'channel' && (
+                          <select id={id} value={slots[slot.key] ?? ''} disabled={detached}
+                            onChange={e => setSlot(slot.key, e.target.value)} className={`${FIELD} disabled:opacity-50`}>
+                            <option value="">Choose a channel…</option>
+                            {sortedChannels.map(c => (
+                              <option key={c.code} value={c.code}>{labelIndex.labelOf(c.code)}</option>
+                            ))}
+                          </select>
+                        )}
+                        {slot.kind === 'choice' && (
+                          <select id={id} value={slots[slot.key] ?? slot.default} disabled={detached}
+                            onChange={e => setSlot(slot.key, e.target.value)} className={`${FIELD} disabled:opacity-50`}>
+                            {slot.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          </select>
+                        )}
+                        {slot.kind === 'number' && (
+                          <div className="flex items-center gap-1">
+                            <input id={id} type="number" min={1} value={slots[slot.key] ?? String(slot.default)} disabled={detached}
+                              onChange={e => setSlot(slot.key, e.target.value)} className={`${FIELD} disabled:opacity-50`} />
+                            <span className="text-xs text-muted-foreground">{slot.unit}</span>
+                          </div>
+                        )}
                       </div>
-                    ))}
-                  </dl>
+                    );
+                  })}
+                </div>
+                {detached && (
+                  <p className="text-xs text-muted-foreground">
+                    You've edited the formula by hand.{' '}
+                    <button onClick={() => applyRecipe(recipe, slots)} className="text-primary-text hover:underline">
+                      Start over from recipe
+                    </button>
+                  </p>
                 )}
               </div>
+            )}
 
-              {/* Live preview */}
-              <PreviewPanel result={previewResult} />
-            </>
-          ) : (
+            {/* Formula */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Code2 className="w-3 h-3" /> Python Script
+                <label className="text-xs text-muted-foreground">Formula</label>
+                <label className="flex items-center gap-1 text-[11px] text-muted-foreground cursor-pointer select-none">
+                  <input type="checkbox" checked={showCodes} onChange={e => setShowCodes(e.target.checked)} className="accent-primary" />
+                  Show codes
                 </label>
-                <button onClick={() => handleModeChange('formula')} className="text-xs text-primary-text hover:underline" data-testid="btn-mode-formula">
-                  Back to formula
-                </button>
               </div>
-              <textarea
+              <FormulaInput
+                ref={formulaRef}
                 value={expression}
-                onChange={e => setExpression(e.target.value)}
-                rows={8}
-                placeholder="result = {'timestamps': [...], 'values': [...]}"
-                className="w-full px-2.5 py-2 bg-background border border-border rounded text-xs text-foreground placeholder-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary font-mono resize-y leading-relaxed"
-                spellCheck={false}
-                data-testid="textarea-expression"
+                onChange={handleFormulaChange}
+                channels={channels}
+                labelIndex={labelIndex}
+                showCodes={showCodes}
+                unitsOf={code => unitsByCode.get(code) ?? ''}
+                placeholder="Type a channel name, e.g. brake, speed, battery…"
+                testId="textarea-expression"
               />
-              <div className="mt-2 space-y-2 text-xs text-muted-foreground bg-muted/20 border border-border/40 rounded p-2.5">
-                <p className="text-muted-foreground font-medium">Your script receives:</p>
-                <ul className="space-y-1.5 ml-1">
-                  <li>
-                    <code className="text-primary-text/80">channels</code> — dict of all channel data.
-                    Access like <code className="text-primary-text/80">channels['Pack_Voltage']</code>,
-                    each is <code className="text-primary-text/80">{'{"timestamps": [...], "values": [...]}'}</code>
-                  </li>
-                  <li><code className="text-primary-text/80">np</code> — numpy, for array math</li>
-                  <li><code className="text-primary-text/80">math</code> — Python math module</li>
-                  <li>
-                    <code className="text-primary-text/80">interpolate(ch, t)</code> — get a channel's value at timestamp <code className="text-primary-text/80">t</code>.
-                    Useful when channels have different sample rates
-                  </li>
-                </ul>
-                <p className="text-muted-foreground font-medium pt-1 border-t border-border/30">
-                  Must assign: <code className="text-primary-text/80">{"result = {'timestamps': [...], 'values': [...]}"}</code>
-                </p>
-              </div>
-              <div className="mt-3 space-y-2">
-                <button
-                  onClick={() => void runPreview()}
-                  disabled={!expression.trim() || isEvaluating}
-                  className="w-full py-1.5 rounded text-xs border border-primary/50 text-primary-text hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  data-testid="btn-preview"
-                >
-                  {isEvaluating ? 'Evaluating...' : 'Preview'}
-                </button>
-                <PreviewPanel result={previewResult} />
-              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Type any word to find a channel. Use + − * / and ^ (power) between them.
+              </p>
             </div>
-          )}
 
-          {/* Name + Units row */}
-          <div className="grid grid-cols-2 gap-3">
+            {/* Channel browser */}
             <div>
-              <label htmlFor="derived-name" className="block text-xs text-muted-foreground mb-1">Channel Name *</label>
-              <input
-                id="derived-name"
-                type="text"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder="e.g. Battery Power"
-                className={FIELD}
-                data-testid="input-derived-name"
-              />
+              <button
+                onClick={() => setShowChannelList(v => !v)}
+                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {showChannelList ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                Browse channels {q ? `(${filtered.length}/${channels.length})` : `(${channels.length})`}
+              </button>
+              {showChannelList && (
+                <div className="mt-2 space-y-2">
+                  <div className="relative">
+                    <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                    <input
+                      type="text"
+                      value={channelSearch}
+                      onChange={e => setChannelSearch(e.target.value)}
+                      placeholder="Search channels…"
+                      className="w-full pl-7 pr-2 py-1 bg-muted/40 border border-border rounded text-xs text-foreground placeholder-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
+                      data-testid="input-channel-search"
+                    />
+                  </div>
+                  <div className="max-h-56 overflow-y-auto rounded border border-border/40 bg-muted/20" data-testid="channel-browser">
+                    {groups.length === 0 ? (
+                      <p className="p-2 text-xs text-muted-foreground italic">No channels match "{channelSearch}"</p>
+                    ) : groups.map(g => (
+                      <div key={g.cat}>
+                        <p className="sticky top-0 px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground bg-card/95">{g.cat}</p>
+                        {g.items.map(c => {
+                          const label = labelIndex.labelOf(c.code);
+                          return renaming?.code === c.code ? (
+                            <div key={c.code} className="px-2 py-1 flex items-center gap-1.5">
+                              <input
+                                autoFocus
+                                value={renaming.value}
+                                onChange={e => setRenaming({ code: c.code, value: e.target.value })}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') saveRename();
+                                  if (e.key === 'Escape') { e.stopPropagation(); setRenaming(null); }
+                                }}
+                                onBlur={saveRename}
+                                placeholder={describeChannel(c.code, car).label}
+                                className={FIELD}
+                                data-testid="input-rename-channel"
+                              />
+                              <span className="font-mono text-[10px] text-muted-foreground shrink-0">{c.code}</span>
+                            </div>
+                          ) : (
+                            <div key={c.code} className="group flex items-center gap-1.5 px-2 py-1 hover:bg-muted/60">
+                              <button
+                                onClick={() => formulaRef.current?.insertChannel(c.code)}
+                                title={c.description || c.code}
+                                className="flex-1 min-w-0 flex items-baseline gap-2 text-left text-xs"
+                              >
+                                <span className="text-foreground truncate">{label}</span>
+                                {c.uncertain && (
+                                  <span className="text-amber-400" title="We're not sure what this channel is. Rename it if you know.">?</span>
+                                )}
+                                <span className="ml-auto font-mono text-[10px] text-muted-foreground shrink-0">
+                                  {c.code}{unitsByCode.get(c.code) ? ` · ${unitsByCode.get(c.code)}` : ''}
+                                </span>
+                              </button>
+                              {c.category !== 'Your Channels' && (
+                                <button
+                                  aria-label={`Rename ${label}`}
+                                  title="Rename"
+                                  onClick={() => setRenaming({ code: c.code, value: labels[c.code] ?? '' })}
+                                  className="p-0.5 text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-foreground"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
+
+            {/* Function reference */}
             <div>
-              <label htmlFor="derived-units" className="block text-xs text-muted-foreground mb-1">Units (optional)</label>
-              <input
-                id="derived-units"
-                type="text"
-                value={units}
-                onChange={e => setUnits(e.target.value)}
-                placeholder="e.g. mph, g, kW"
-                className={FIELD}
-                data-testid="input-derived-units"
-              />
+              <button
+                onClick={() => setShowFunctions(v => !v)}
+                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <BookOpen className="w-3 h-3" />
+                Functions
+                {showFunctions ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+              {showFunctions && (
+                <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs p-2 rounded border border-border/40 bg-muted/20">
+                  {FUNCTION_HELP.map(f => (
+                    <div key={f.name} className="contents">
+                      <dt className="font-mono text-primary-text">{f.signature}</dt>
+                      <dd className="text-muted-foreground">{f.description}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+            </div>
+
+            {/* Live preview */}
+            <PreviewPanel result={previewResult} />
+          </>
+        ) : (
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Code2 className="w-3 h-3" /> Python Script
+              </label>
+              <button onClick={() => handleModeChange('formula')} className="text-xs text-primary-text hover:underline" data-testid="btn-mode-formula">
+                Back to formula
+              </button>
+            </div>
+            <textarea
+              value={expression}
+              onChange={e => setExpression(e.target.value)}
+              rows={8}
+              placeholder="result = {'timestamps': [...], 'values': [...]}"
+              className="w-full px-2.5 py-2 bg-background border border-border rounded text-xs text-foreground placeholder-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary font-mono resize-y leading-relaxed"
+              spellCheck={false}
+              data-testid="textarea-expression"
+            />
+            <div className="mt-2 space-y-2 text-xs text-muted-foreground bg-muted/20 border border-border/40 rounded p-2.5">
+              <p className="text-muted-foreground font-medium">Your script receives:</p>
+              <ul className="space-y-1.5 ml-1">
+                <li>
+                  <code className="text-primary-text/80">channels</code> — dict of all channel data.
+                  Access like <code className="text-primary-text/80">channels['Pack_Voltage']</code>,
+                  each is <code className="text-primary-text/80">{'{"timestamps": [...], "values": [...]}'}</code>
+                </li>
+                <li><code className="text-primary-text/80">np</code> — numpy, for array math</li>
+                <li><code className="text-primary-text/80">math</code> — Python math module</li>
+                <li>
+                  <code className="text-primary-text/80">interpolate(ch, t)</code> — get a channel's value at timestamp <code className="text-primary-text/80">t</code>.
+                  Useful when channels have different sample rates
+                </li>
+              </ul>
+              <p className="text-muted-foreground font-medium pt-1 border-t border-border/30">
+                Must assign: <code className="text-primary-text/80">{"result = {'timestamps': [...], 'values': [...]}"}</code>
+              </p>
+            </div>
+            <div className="mt-3 space-y-2">
+              <button
+                onClick={() => void runPreview()}
+                disabled={!expression.trim() || isEvaluating}
+                className="w-full py-1.5 rounded text-xs border border-primary/50 text-primary-text hover:bg-primary/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                data-testid="btn-preview"
+              >
+                {isEvaluating ? 'Evaluating...' : 'Preview'}
+              </button>
+              <PreviewPanel result={previewResult} />
             </div>
           </div>
+        )}
 
-          {mode === 'formula' && (
-            <button onClick={() => handleModeChange('python')} className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground" data-testid="btn-mode-python">
-              <Code2 className="w-3 h-3" /> Advanced: write Python instead
-            </button>
-          )}
-
-          {/* Submit error */}
-          {submitError && (
-            <div className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400">
-              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-              <span>{submitError}</span>
-            </div>
-          )}
+        {/* Name + Units row */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="derived-name" className="block text-xs text-muted-foreground mb-1">Channel Name *</label>
+            <input
+              id="derived-name"
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="e.g. Battery Power"
+              className={FIELD}
+              data-testid="input-derived-name"
+            />
+          </div>
+          <div>
+            <label htmlFor="derived-units" className="block text-xs text-muted-foreground mb-1">Units (optional)</label>
+            <input
+              id="derived-units"
+              type="text"
+              value={units}
+              onChange={e => setUnits(e.target.value)}
+              placeholder="e.g. mph, g, kW"
+              className={FIELD}
+              data-testid="input-derived-units"
+            />
+          </div>
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border flex-shrink-0">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
-          >
-            Cancel
+        {mode === 'formula' && (
+          <button onClick={() => handleModeChange('python')} className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground" data-testid="btn-mode-python">
+            <Code2 className="w-3 h-3" /> Advanced: write Python instead
           </button>
-          <button
-            onClick={handleSubmit}
-            disabled={!name.trim() || !expression.trim() || isEvaluating}
-            className="px-4 py-1.5 rounded text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
-            data-testid="btn-create-derived"
-          >
-            {isEvaluating ? 'Evaluating...' : (editing ? 'Update Channel' : 'Create Channel')}
-          </button>
-        </div>
+        )}
+
+        {/* Submit error */}
+        {submitError && (
+          <div className="flex items-start gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400">
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+            <span>{submitError}</span>
+          </div>
+        )}
       </div>
-    </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border flex-shrink-0">
+        <button
+          onClick={onClose}
+          className="px-3 py-1.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSubmit}
+          disabled={!name.trim() || !expression.trim() || isEvaluating}
+          className="px-4 py-1.5 rounded text-xs bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
+          data-testid="btn-create-derived"
+        >
+          {isEvaluating ? 'Evaluating...' : (editing ? 'Update Channel' : 'Create Channel')}
+        </button>
+      </div>
+    </Modal>
   );
 }
