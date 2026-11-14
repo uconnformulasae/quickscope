@@ -18,10 +18,10 @@ interface ExportDialogProps {
   /** Stored session id for export from the session browser. */
   sessionId?: string;
   /** Channel list from loadSession when not opening the log in analysis. */
-  browserChannels?: ExportChannel[];
+  browserChannels?: CsvExportChannel[];
 }
 
-interface ExportChannel {
+interface CsvExportChannel {
   id: number;
   name: string;
   units: string;
@@ -30,14 +30,14 @@ interface ExportChannel {
 
 function channelsForExport(
   session: XRKSession | undefined,
-  browserChannels: ExportChannel[] | undefined,
-): ExportChannel[] {
+  browserChannels: CsvExportChannel[] | undefined,
+): CsvExportChannel[] {
   if (browserChannels?.length) {
     return [...browserChannels].sort((a, b) => a.name.localeCompare(b.name));
   }
   if (!session) return [];
 
-  const list: ExportChannel[] = [];
+  const list: CsvExportChannel[] = [];
   session.channels.forEach((ch) => {
     const count = ch.fileSampleCount ?? (session.samples.get(ch.index) || []).length;
     if (count === 0) return;

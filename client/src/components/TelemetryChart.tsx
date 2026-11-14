@@ -27,17 +27,6 @@ const CURSOR_HIT_PX = 6;
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
-function sessionMinMax(samples: ChannelSample[]): { minSample: ChannelSample; maxSample: ChannelSample } | null {
-  if (samples.length === 0) return null;
-  let minSample = samples[0];
-  let maxSample = samples[0];
-  for (const s of samples) {
-    if (s.value < minSample.value) minSample = s;
-    if (s.value > maxSample.value) maxSample = s;
-  }
-  return { minSample, maxSample };
-}
-
 interface DeltaCursors { a: number; b: number }
 
 /** The docked Δ readout. It subscribes to the cursor pair itself, so dragging
@@ -915,17 +904,12 @@ export function TelemetryChart({
       channels: visibleChannels.flatMap(ac => {
         const data = channelDataMap.get(ac.channelId);
         if (!data) return [];
-        // Whole-session extremes are only needed by the export, so they are
-        // found here on demand, not on every data change.
-        const mm = sessionMinMax(data.allSamples);
         return [{
           channelId: ac.channelId,
           name: data.def.shortName,
           units: data.def.units,
           color: toDarkChartColor(ac.color),
           samples: data.allSamples,
-          globalMin: mm?.minSample ?? null,
-          globalMax: mm?.maxSample ?? null,
         }];
       }),
       xRange: getEffectiveXRange(),

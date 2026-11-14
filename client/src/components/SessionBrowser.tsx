@@ -24,6 +24,7 @@ import { ThemeToggle } from './ThemeToggle';
 import { GPSThumbnail } from './GPSThumbnail';
 import { ExportDialog } from './ExportDialog';
 import { formatBytes, formatRate } from '../lib/format-bytes';
+import { formatAgo } from '../lib/time-format';
 
 interface SessionBrowserProps {
   onSessionLoaded: (
@@ -48,14 +49,11 @@ function formatDuration(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+const DAY_MS = 86_400_000;
+
 function formatRelativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  const sec = Math.floor((now - then) / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
-  return new Date(iso).toLocaleString();
+  const elapsedMs = Date.now() - new Date(iso).getTime();
+  return elapsedMs < DAY_MS ? formatAgo(elapsedMs) : new Date(iso).toLocaleString();
 }
 
 function formatDate(dateStr: string | null): string {

@@ -74,38 +74,27 @@ def test_log_frame_records_cmd_length_and_opcode(log_dir):
     assert frames[2]["opcode"] == 5
 
 
-def test_analyze_raw_stream_counts_frames_and_records_tail(log_dir):
-    raw = encode_frame(b"STCP", b"a" * 8) + encode_frame(b"STCP", b"b" * 8) + encode_frame(
-        b"CNFG", b"c" * 4
-    )
+def test_log_stream_summary_records_counts_sizes_and_tail(log_dir):
+    tail = encode_frame(b"STCP", b"a" * 8)
     trace = AimDownloadTrace("x.xrz")
-    trace.analyze_raw_stream(raw, extracted=16, expected=20)
+    trace.log_stream_summary(
+        raw_bytes=100, extracted=16, expected=20, frame_counts={"STCP:8": 2}, tail=tail,
+    )
     trace.close(status="ok")
 
     analysis = next(e for e in _events(trace) if e["event"] == "stream_analysis")
-    assert analysis["frame_counts"] == {"STCP:8": 2, "CNFG:4": 1}
-    assert analysis["raw_bytes"] == len(raw)
+    assert analysis["frame_counts"] == {"STCP:8": 2}
+    assert analysis["raw_bytes"] == 100
     assert analysis["extracted_bytes"] == 16
     assert analysis["expected_bytes"] == 20
-    assert analysis["tail_hex"] == raw.hex()
+    assert analysis["tail_hex"] == tail.hex()
 
 
-def test_analyze_raw_stream_skips_garbage_to_next_header(log_dir):
-    good = encode_frame(b"STCP", b"z" * 4)
-    raw = b"<hXXXX\xff\xff\xff\xff\x00>junk" + good
+def test_log_stream_summary_tail_is_capped_at_256_bytes(log_dir):
     trace = AimDownloadTrace("x.xrz")
-    trace.analyze_raw_stream(raw, extracted=0, expected=0)
-    trace.close(status="ok")
-
-    events = _events(trace)
-    analysis = next(e for e in events if e["event"] == "stream_analysis")
-    assert analysis["frame_counts"].get("STCP:4") == 1
-
-
-def test_analyze_raw_stream_tail_is_capped_at_256_bytes(log_dir):
-    raw = b"\x00" * 1000
-    trace = AimDownloadTrace("x.xrz")
-    trace.analyze_raw_stream(raw, extracted=0, expected=0)
+    trace.log_stream_summary(
+        raw_bytes=1000, extracted=0, expected=0, frame_counts={}, tail=b"\x00" * 1000,
+    )
     trace.close(status="ok")
 
     analysis = next(e for e in _events(trace) if e["event"] == "stream_analysis")

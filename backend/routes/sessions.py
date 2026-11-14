@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from services.csv_export import parse_conversions, streaming_csv_response
+from services.csv_export import parse_export_query, streaming_csv_response
 from services.xrk_export import content_disposition, read_xrk_export_bytes
 
 from services import (
@@ -140,12 +140,9 @@ async def export_session_csv(
     ``convert`` works as in ``GET /api/export``.
     """
     try:
-        conversions = parse_conversions(convert)
+        names, conversions = parse_export_query(channels, convert)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    names = [n.strip() for n in channels.split(",") if n.strip()]
-    if not names:
-        raise HTTPException(400, "No channels specified")
 
     entry, log, _local_path = await _parsed_log_for_session(session_id)
 

@@ -147,6 +147,14 @@ export function formatChartCursorTime(
   return formatWallClock(new Date(logStartMs + elapsedMs), { includeMs: true });
 }
 
+/** Compact age of something that happened `elapsedMs` ago: "12s ago", "5m ago", "3h ago". */
+export function formatAgo(elapsedMs: number): string {
+  const sec = Math.max(0, Math.floor(elapsedMs / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  return `${Math.floor(sec / 3600)}h ago`;
+}
+
 /** Format session-relative milliseconds for toolbar / readouts. */
 export function formatChartElapsed(
   elapsedMs: number,

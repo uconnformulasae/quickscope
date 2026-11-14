@@ -14,6 +14,7 @@ import { Presence } from '../lib/motion';
 import { type ChannelSources } from './live/ChannelPicker';
 import { BUILTIN_ID, GRID_COLS, cloneLayout, newId, type LiveLayout, type WidgetConfig } from './live/layout-schema';
 import { downloadBlob } from '../lib/saveBlob';
+import { formatAgo } from '../lib/time-format';
 
 interface Props {
   onBack: () => void;
@@ -22,13 +23,6 @@ interface Props {
 }
 
 const VEHICLE_LABEL: Record<VehicleKind, string> = { ev: 'EV', ic: 'IC' };
-
-function timeAgo(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s ago`;
-  const m = Math.round(s / 60);
-  return m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
-}
 
 function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -403,7 +397,7 @@ export function LiveView({ onBack, aimDevice = null }: Props) {
           {status === 'idle' && (
             <Banner tone="muted" icon={<WifiOff className="w-3.5 h-3.5" />}>
               {receivedAt !== null && latest
-                ? <>Not connected — showing last values ({timeAgo(now - receivedAt)}).</>
+                ? <>Not connected — showing last values ({formatAgo(now - receivedAt)}).</>
                 : <>Not connected — previewing the layout. Connect to the car's AiM WiFi to see live values.</>}
             </Banner>
           )}

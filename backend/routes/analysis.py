@@ -302,16 +302,12 @@ def export_csv(channels: str = Query(...), convert: str | None = Query(None)):
     the client's display-unit conversion, applied as ``value * scale + offset``."""
     log = _active_log()
 
-    from services.csv_export import parse_conversions, streaming_csv_response
+    from services.csv_export import parse_export_query, streaming_csv_response
 
     try:
-        conversions = parse_conversions(convert)
+        names, conversions = parse_export_query(channels, convert)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-
-    names = [n.strip() for n in channels.split(",") if n.strip()]
-    if not names:
-        raise HTTPException(400, "No channels specified")
 
     entry = session_store.get_session(state.session_id) if state.session_id else None
     aim_session_id = entry.get("aim_session_id") if entry else None
