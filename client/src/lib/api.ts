@@ -4,6 +4,9 @@
  */
 
 import { filenameFromContentDisposition } from './contentDisposition';
+import type { LapSource } from './xrk-parser';
+
+export type { LapSource };
 
 // In packaged Electron builds, preload.js injects window.__QUICKSCOPE_BACKEND__.
 // In browser dev (`npm run dev`), fall back to the current hostname on port 8000.
@@ -392,8 +395,6 @@ export async function fetchGPS(): Promise<GPSData | null> {
   const data = await res.json();
   return data.gps || null;
 }
-
-export type LapSource = 'device' | 'gps_auto' | 'beacon_auto' | 'none';
 
 export interface LapsResponse {
   laps: {

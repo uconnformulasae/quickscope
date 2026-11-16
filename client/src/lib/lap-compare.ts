@@ -25,13 +25,6 @@ export function selectedWindows(windows: LapWindow[], selected: number[]): LapWi
   return selected.map(i => windows[i]).filter((w): w is LapWindow => !!w);
 }
 
-/** Lap-relative x-range in seconds: [0, longest selected lap]. */
-export function lapRelativeRange(windows: LapWindow[], selected: number[]): [number, number] {
-  let longest = 0;
-  for (const w of selectedWindows(windows, selected)) longest = Math.max(longest, w.durationMs);
-  return [0, longest / 1000];
-}
-
 export const LAP_COMPARE_PALETTE = ['#4361ee', '#f77f00', '#10b981', '#e11d48', '#a855f7', '#eab308'];
 
 export function lapColor(order: number): string {

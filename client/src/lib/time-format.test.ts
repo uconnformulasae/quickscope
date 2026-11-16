@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatAgo,
   formatAimDeviceListDate,
   formatChartAxisTime,
   formatChartCursorTime,
@@ -21,6 +22,19 @@ describe('formatAimDeviceListDate', () => {
     expect(formatAimDeviceListDate('')).toBe('');
     expect(formatAimDeviceListDate('not-a-date')).toBe('not-a-date');
     expect(formatAimDeviceListDate('31/02/2026')).toBe('31/02/2026');
+  });
+});
+
+describe('formatAgo', () => {
+  it('uses seconds, then minutes, then hours, rounding down', () => {
+    expect(formatAgo(59_999)).toBe('59s ago');
+    expect(formatAgo(60_000)).toBe('1m ago');
+    expect(formatAgo(3_599_999)).toBe('59m ago');
+    expect(formatAgo(3_600_000)).toBe('1h ago');
+    expect(formatAgo(30 * 3_600_000)).toBe('30h ago');
+  });
+  it('treats clock skew (a future time) as zero', () => {
+    expect(formatAgo(-5_000)).toBe('0s ago');
   });
 });
 

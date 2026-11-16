@@ -41,6 +41,20 @@ def parse_conversions(convert: str | None) -> dict[str, tuple[str, float, float]
     return conversions
 
 
+def parse_export_query(
+    channels: str, convert: str | None,
+) -> tuple[list[str], dict[str, tuple[str, float, float]]]:
+    """Channel names and conversions from the export routes' ``channels``/``convert`` params.
+
+    Raises ``ValueError`` (with a user-facing message) when either is unusable.
+    """
+    conversions = parse_conversions(convert)
+    names = [n.strip() for n in channels.split(",") if n.strip()]
+    if not names:
+        raise ValueError("No channels specified")
+    return names, conversions
+
+
 def _interp_on_timebase(timestamps, values, timebase):
     """Linear interpolation of one channel onto ``timebase`` (sorted, ms)."""
     ts = np.asarray(timestamps, dtype=np.float64)

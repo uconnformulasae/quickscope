@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLapWindows, lapColor, LAP_COMPARE_PALETTE, lapRelativeRange, segmentInLaps, shiftToLap, toSessionMs } from './lap-compare';
+import { buildLapWindows, lapColor, LAP_COMPARE_PALETTE, segmentInLaps, selectedWindows, shiftToLap, toSessionMs } from './lap-compare';
 
 const markers = [
   { timestamp: 0, lapNumber: 1 },
@@ -19,15 +19,14 @@ describe('buildLapWindows', () => {
   });
 });
 
-describe('lapRelativeRange', () => {
-  it('spans 0 to the longest selected lap, in seconds', () => {
+describe('selectedWindows', () => {
+  it('returns the selected laps in selection order', () => {
     const w = buildLapWindows(markers);
-    expect(lapRelativeRange(w, [0, 1])).toEqual([0, 65]);
-    expect(lapRelativeRange(w, [0])).toEqual([0, 60]);
+    expect(selectedWindows(w, [1, 0]).map(l => l.lapNumber)).toEqual([2, 1]);
   });
 
   it('ignores indices that are not laps', () => {
-    expect(lapRelativeRange(buildLapWindows(markers), [0, 9])).toEqual([0, 60]);
+    expect(selectedWindows(buildLapWindows(markers), [0, 9]).map(l => l.index)).toEqual([0]);
   });
 });
 

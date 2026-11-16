@@ -22,7 +22,7 @@ import { sampleLowerBound as lowerBound, sampleUpperBound as upperBound } from '
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
-export interface ExportChannel {
+export interface ChartExportChannel {
   channelId: number;
   name: string;
   units: string;
@@ -30,15 +30,12 @@ export interface ExportChannel {
   color: string;
   /** All samples for the channel (ms timestamps, sorted) */
   samples: ChannelSample[];
-  /** Whole-session extremes, same as the on-screen min/max markers */
-  globalMin: ChannelSample | null;
-  globalMax: ChannelSample | null;
 }
 
 export interface ChartExportSpec {
   fileName: string | null;
   metadata: SessionMetadata;
-  channels: ExportChannel[];
+  channels: ChartExportChannel[];
   /** Visible window in seconds */
   xRange: [number, number];
   sessionDurationSec: number;
@@ -279,14 +276,14 @@ async function ensureFonts(): Promise<void> {
 interface Region {
   top: number;
   height: number;
-  channels: ExportChannel[];
+  channels: ChartExportChannel[];
   yRange: [number, number];
   yTicks: number[];
 }
 
 interface OverlayAxis {
   units: string;
-  channels: ExportChannel[];
+  channels: ChartExportChannel[];
   yRange: [number, number];
   yTicks: number[];
   side: 'left' | 'right';
@@ -351,7 +348,7 @@ export async function renderChartImage(spec: ChartExportSpec): Promise<ChartExpo
   const regions: Region[] = [];
   const overlayAxes: OverlayAxis[] = [];
   if (isOverlay) {
-    const byUnit = new Map<string, ExportChannel[]>();
+    const byUnit = new Map<string, ChartExportChannel[]>();
     for (const ch of channels) {
       const u = ch.units || '';
       if (!byUnit.has(u)) byUnit.set(u, []);
@@ -748,7 +745,7 @@ export async function renderChartImage(spec: ChartExportSpec): Promise<ChartExpo
  */
 function drawMinMaxMarkers(
   ctx: CanvasRenderingContext2D,
-  ch: ExportChannel,
+  ch: ChartExportChannel,
   region: Region,
   valToY: (v: number) => number,
   timeToX: (tSec: number) => number,
