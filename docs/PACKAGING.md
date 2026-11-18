@@ -7,9 +7,13 @@ installer for Mac and Windows.
 
 | Platform | Installer | Size |
 |---|---|---|
-| macOS (Apple Silicon) | `QuickScope-1.0.0-arm64.dmg` | ~230MB |
-| macOS (Intel) | `QuickScope-1.0.0-x64.dmg` | ~230MB |
-| Windows (x64) | `QuickScope-Setup-1.0.0.exe` | ~220MB |
+| macOS (Apple Silicon) | `QuickScope-mac-arm64.dmg` | ~205MB |
+| macOS (Intel) | `QuickScope-mac-x64.dmg` | ~215MB |
+| Windows (x64) | `QuickScope-windows-x64.exe` | ~175MB |
+| Linux (x64) | `QuickScope-linux-x64.AppImage` | ~255MB |
+| Linux (ARM) | `QuickScope-linux-arm64.AppImage` | ~250MB |
+
+File names carry no version; the release tag (`v<version>`) does.
 
 All installers are self-contained — users don't need Python or Node.
 

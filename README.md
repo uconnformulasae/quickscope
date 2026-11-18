@@ -29,9 +29,10 @@ Sessions are persisted locally in `backend/data/sessions.json` with raw files ca
 
 Download the latest installer from the [Releases page](../../releases/latest):
 
-- **macOS (Apple Silicon)** — `QuickScope-*-arm64.dmg`
-- **macOS (Intel)** — `QuickScope-*-x64.dmg`
-- **Windows (x64)** — `QuickScope-Setup-*.exe`
+- **macOS (Apple Silicon)** — `QuickScope-mac-arm64.dmg`
+- **macOS (Intel)** — `QuickScope-mac-x64.dmg`
+- **Windows (x64)** — `QuickScope-windows-x64.exe`
+- **Linux (x64 / ARM)** — `QuickScope-linux-x64.AppImage` / `QuickScope-linux-arm64.AppImage`
 
 Double-click to install. No Python or Node required. On first launch:
 - **Windows**: may show a SmartScreen warning (click **More info → Run anyway**).
