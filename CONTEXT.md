@@ -1,95 +1,94 @@
 # quickscope — CONTEXT
-**Path:** /Users/mdabek/dev/Formula/software/quickscope
+**Path:** `C:\Users\jesse\OneDrive - University of Connecticut\Documents\quickscope` (Windows). Also checked out at `/Users/mdabek/dev/Formula/software/quickscope` on a teammate's Mac.
 
-**One-liner:** Local-only, single-user desktop telemetry analyzer for AiM `.xrk`/`.xrz` data logger files — Python/FastAPI backend (libxrk parser) + React/Vite/Canvas frontend, packaged with Electron; syncs sessions to the team's Data-Development cloud backend and can pull sessions live over WiFi from an AiM EVO5 device.
+**One-liner:** Local-only, single-user desktop telemetry analyzer for AiM `.xrk`/`.xrz` data logger files. Python/FastAPI backend (AiM DLL or libxrk parser) + React/Vite/Canvas frontend, packaged with Electron. Can pull sessions from, and stream live data off, an AiM EVO5 over WiFi.
 
-**Status:** branch `main`, up to date with `origin/main`. Last commit `0c9c48b` "Merge pull request #7 from uconnformulasae/claude/big-cleanup-sweep" (merges live-data-streaming and LiveView dashboard work). Uncommitted: modified `docs/protocol/captures/analysis/q2_short_payloads.py` and `q7_kkk.py`, plus an untracked `screenshots/` dir — all research/scratch artifacts, not app code. Packaging is functional (Electron + PyInstaller, GitHub Actions release workflow) but this looks like active/recent work (moved folders 3 times, most recent commits are about LiveView and the AiM protocol spec, dated Apr 2026).
+**Status (2026-11-14):** branch `Dev`, up to date with `origin/Dev`. Last commit `2cd0579d` "Merge pull request #27 from uconnformulasae/refactor/26-codebase-sweep" (audit fixes, GPS marker pane, formula-engine precedence fix, Windows test fixes). Only untracked file is `audit.md`. Packaging works (Electron + PyInstaller, GitHub Actions release workflow).
 
 ## Start here
-1. `AGENT.md` — the authoritative agent-facing guide: architecture, data flow, backend API table, frontend state/canvas-chart patterns, common-task recipes. Read this first, it is comprehensive and current.
-2. `README.md` — user-facing overview, install/run instructions, project structure listing.
-3. `docs/protocol/aim-live-protocol.md` — entry point to the reverse-engineered AiM WiFi live-data protocol; links to the deep-dive and research docs.
-4. `backend/main.py` — FastAPI app; confirms/extends the endpoint table in AGENT.md.
-5. `client/src/components/TelemetryChart.tsx` — the custom Canvas chart engine, the most complex/load-bearing frontend file.
-6. `docs/PACKAGING.md` — release/signing/Electron packaging workflow if touching build or distribution.
+1. `AGENT.md` — the authoritative agent-facing guide: architecture, data flow, backend API table, frontend state/canvas-chart patterns, live view, common-task recipes. Read this first.
+2. `README.md` — user-facing overview, install/run instructions, project structure.
+3. `docs/protocol/aim-live-protocol.md` — entry point to the reverse-engineered AiM WiFi live-data protocol; links to the deep-dive and research docs. `docs/aim-device.md` covers the device side.
+4. `backend/main.py` + `backend/routes/` — FastAPI app and route modules.
+5. `client/src/components/TelemetryChart.tsx` + `client/src/lib/chart-draw.ts` — the custom Canvas chart engine, the most complex frontend code.
+6. `docs/PACKAGING.md` / `docs/CI.md` — Electron packaging, signing and CI if touching build or distribution.
 
 ## Folder map
 | Path | What's in it | When to look there |
 |---|---|---|
-| `backend/main.py`, `backend/entry.py`, `backend/state.py` | FastAPI app entry, in-memory session state | Adding/changing REST endpoints |
-| `backend/routes/` | Route modules mounted on the FastAPI app | Same as above |
-| `backend/services/` | `session_store.py` (local JSON session index), `settings_store.py`, `railway_client.py` + `sync_service.py` (Data-Development sync), `aim_connector.py` + `aim_live.py` (AiM WiFi protocol client), `gps_preview.py`, `lap_detection.py`, `upload_log.py` | Business logic for sync, AiM device comms, laps, GPS |
-| `backend/data/` (gitignored) | `sessions.json`, `sessions/` (raw file cache), `settings.json` | Runtime local storage, not source |
-| `client/src/App.tsx` | Root component, view routing | Wiring new views/components in |
-| `client/src/lib/` | `api.ts` (HTTP client), `useXRKStore.ts` (single `useState` global store), `xrk-parser.ts` (types/helpers only, no parsing), `formula-engine.ts` (derived-channel expression evaluator) | Frontend state/data-flow changes |
-| `client/src/components/` | `TelemetryChart.tsx` (canvas engine), `AnalysisPanel.tsx` (Stats/Laps/Histogram/XY/GPS tabs), `ChannelSidebar.tsx`, `SessionBrowser.tsx`, `LiveView.tsx` (live AiM dashboard), `AimSessionPicker.tsx`, `SettingsDialog.tsx`, `GPSMapView.tsx`/`GPSThumbnail.tsx`, `TableView.tsx`, `SessionHeader.tsx`, `SessionInfoModal.tsx`, `DerivedChannelDialog.tsx`, `ExportDialog.tsx` (CSV), `ImageExportDialog.tsx` (Save image preview: Download PNG / Copy to clipboard) | UI features |
-| `client/src/components/ui/` | ~40 shadcn/ui components | Mostly unused scaffolding, harmless — per AGENT.md |
-| `shared/schema.ts` | Shared TS types between server/client | Cross-cutting type changes |
-| `server/` | Vestigial Express server (`index.ts`, `routes.ts`, `static.ts`, `vite.ts`) — only serves the Vite dev build | AGENT.md explicitly calls this vestigial; all real API logic is the Python backend |
-| `electron/` | `main.cjs` (spawns backend, picks free port, loads BrowserWindow), `preload.cjs` (exposes `window.__QUICKSCOPE_BACKEND__`) | Desktop packaging / Electron shell behavior |
-| `docs/protocol/` | `aim-live-protocol.md`, `aim-live-protocol-deep-dive.md`, `aim-protocol-research.md` — reverse-engineered AiM EVO5 WiFi wire protocol (see Key facts) | Anything involving the AiM live-device connection or wire format |
-| `docs/protocol/captures/` | Raw `.pcapng` captures (`live1`, `live2`), parsed/chrono TCP dumps, `extract_*.py`, `parse_aim_stream.py`/`parse_chronological.py` | Re-deriving or re-validating protocol claims from raw packet data |
-| `docs/protocol/captures/analysis/` | `lib_frames.py` (reusable frame parser, fixes a Node-direction bug in `parse_aim_stream.py`) + `q1`..`q7` scripts, each answering one empirical question (CRC/trailer, STNC structure, channel defs, kkk heartbeat, etc.) | Understanding *how* a specific protocol claim was verified |
-| `docs/superpowers/plans/`, `docs/superpowers/specs/` | Dated (`YYYY-MM-DD-name.md`) implementation plans and design specs for past features (overlay mode, light mode, table view/header redesign, Data-Development integration) | Checking whether a feature was planned/shipped before re-designing it; `git log --grep` on the title is often faster than reading the doc |
-| `docs/PACKAGING.md` | Electron + PyInstaller release/signing workflow | Build/release/distribution work |
-| `.github/` | CI/release workflow (GitHub Actions, macOS/Windows build steps with `timeout-minutes`, notarization) | CI or release pipeline changes |
-| `screenshots/` | Untracked, likely for docs/PR use | Low priority, not part of app |
-| **IGNORE** | `node_modules/`, `.venv/`, `dist/`, `build/`, `backend/__pycache__`, `docs/protocol/captures/__pycache__`, `docs/protocol/captures/analysis/__pycache__`, `.git/` | Build artifacts / dependencies, never source of truth |
+| `backend/main.py`, `backend/entry.py`, `backend/state.py`, `backend/config.py` | FastAPI app, frozen-app entry point, in-memory session state, data-dir config | Adding/changing REST endpoints, startup |
+| `backend/routes/` | `sessions.py`, `analysis.py`, `live.py` (incl. live WebSocket), `live_layouts.py`, `settings.py` | Same as above |
+| `backend/parsers/` | `aim_dll.py` (AiM MatLabXRK DLL, Windows), libxrk path + `libxrk_fixup.py` (GPS timecode rebasing), `log_adapter.py`, `parse_gate.py` | XRK parsing, parser selection |
+| `backend/services/` | `session_store.py` (JSON session index), `settings_store.py`, `aim_connector.py` / `aim_live.py` / `aim_discovery.py` / `aim_keepalive.py` / `aim_primary_hub.py` / `aim_pull_*` (AiM WiFi client, pulls and live stream), `lap_detection.py`, `gps_preview.py`, `csv_export.py`, `derived_eval.py`, `session_cache.py`, `live_layout_store.py`, `live_channel_cache.py` | Business logic |
+| `backend/origins.py`, `backend/sanitize.py` | Local-only Host/Origin middleware; input validation | Security, request validation |
+| `backend/data/` (gitignored) | `sessions.json`, `sessions/` (file cache), `settings.json`, `live_layouts.json`, `cache/`, `logs/` | Runtime storage in dev, not source |
+| `client/src/App.tsx` | Root component, view routing | Wiring in new views |
+| `client/src/lib/` | `api.ts`, `useXRKStore.ts` (single `useState` store), `cursorStore.ts`, `chart-draw.ts` / `chart-export.ts` / `chart-cursors.ts`, `formula-engine.ts`, `units.ts`, `binary-search.ts`, `xrk-parser.ts` (types only), plus `*.test.ts` | Frontend state/data flow |
+| `client/src/components/` | `TelemetryChart.tsx`, `AnalysisPanel.tsx`, `ChannelSidebar.tsx`, `SessionBrowser.tsx`, `LiveView.tsx`, `TableView.tsx`, `GPSMapView.tsx`, dialogs (`Modal.tsx`, `ExportDialog.tsx`, `ImageExportDialog.tsx`, `DerivedChannelDialog.tsx`, `SettingsDialog.tsx`), subfolders `analysis/` (tabs), `live/` (dashboard, layouts, widgets), `settings/`, `formula/`, `ui/` (shadcn) | UI features |
+| `electron/` | `main.cjs` (spawns backend, picks free port, serves UI from `app://quickscope`), `preload.cjs` (exposes `window.__QUICKSCOPE_BACKEND__`), `window-size.cjs` | Desktop shell behavior |
+| `scripts/afterPack.cjs` | Ad-hoc macOS code signing for unsigned builds | Mac "damaged app" issues |
+| `tests/` | pytest suite (API, parsers, AiM protocol against `fake_aim_device.py`, live WS, stores, sanitization) + `fixtures/` | Backend changes |
+| `docs/protocol/` | Reverse-engineered AiM EVO5 WiFi protocol docs; `captures/` holds raw `.pcapng` and analysis scripts | Anything touching the AiM wire format |
+| `docs/superpowers/plans/`, `docs/superpowers/specs/` | Dated (`YYYY-MM-DD-name.md`) plans and design specs | Checking whether a feature was planned/shipped |
+| `docs/race-studio-3-comparison.md`, `docs/archive/` | Feature comparison with AiM Race Studio 3; retired docs | Background |
+| `.github/` | CI and release workflows, `actions/desktop-build` | CI or release pipeline changes |
+| `server/`, `shared/` | Empty leftovers from the removed Express server | Ignore; safe to delete |
+| **IGNORE** | `node_modules/`, `.venv/`, `dist/`, `build/`, `release/`, `backend/dist/`, `__pycache__/`, `.git/` | Build artifacts / dependencies |
 
 ## Key facts
-- **Stack:** Python FastAPI backend (port 8000) + React 18/TypeScript/Vite/Tailwind frontend (port 5000), no charting library — custom Canvas2D engine. Electron wraps both for desktop distribution (PyInstaller-frozen backend + Vite bundle in a BrowserWindow).
-- **File formats:** `.xrk` / `.xrz` AiM data-logger files, parsed via the `libxrk` PyPI package (Cython, wraps a fully reverse-engineered format per `docs/protocol/aim-protocol-research.md`). `libxrk` returns `dict[str, pyarrow.Table]` (columns `timecodes` int64 ms + value column); laps come back as a PyArrow table (`num`, `start_time`, `end_time`). GPS timecodes are in a different (raw UTC) timebase than regular channels — the `/api/gps` endpoint offsets by subtracting `min(timestamps)`.
-- **Session storage:** local-only, JSON-backed — `./data/sessions.json` (index) + `./data/sessions/` (raw file cache) + `./data/settings.json` (Railway URL, AiM WiFi SSID/IP). Backend holds exactly one parsed session in memory at a time; no DB, no auth, no multi-user.
-- **Sync with Data-Development:** `backend/services/railway_client.py` + `sync_service.py` sync sessions bidirectionally to the sibling `Data-Development` repo's Railway-deployed backend (multi-user/cloud counterpart; see Related section). Current default Railway URL in `backend/data/settings.json` points at `grateful-nourishment-production-ef50.up.railway.app`.
-- **AiM WiFi protocol findings:** live in `docs/protocol/` — start at `aim-live-protocol.md`, drill into `aim-live-protocol-deep-dive.md` for byte-level decoding (outer-frame trailer = `sum(payload) & 0xFFFF`, confirmed on 2318/2318 frames; 547-byte live-frame channel map; `iSLV/iHW/iUSR/iPTH/iLCK/iSST/iLTS/iPRL` inner commands), and `aim-protocol-research.md` for cross-referencing against `libxrk`'s independently reverse-engineered XRK file format (same outer framing shared between stored files and the live wire protocol). Raw evidence (pcapng captures + per-question analysis scripts) is under `docs/protocol/captures/`. Network layout: UDP discovery on port 36002 (`aim-ka` probe), live TCP data on port 2000, device IP `10.0.0.1`, client polls ~250ms, device replies in batches of 4 frames.
-- **Derived channels:** client-side recursive-descent formula engine (`formula-engine.ts`) — `+ - * / ^`, functions `abs/sqrt/sin/cos/diff/smooth/delay`, channel names as variables, cross-channel interpolation. Recomputed from scratch each time (no incremental updates).
-- **Resizable sidebars (2026-09-17):** both analysis-view sidebars drag to resize via `components/ResizeHandle.tsx`; widths live in `lib/useSidebarWidths.ts` (localStorage `quickscope-sidebar-widths`), deliberately *not* in `useAppState` — the drag mutates `panel.style.width` directly so no React re-render happens per pointermove, and `TelemetryChart`'s ResizeObserver re-measures the canvas. Left 140–480 px (default 192), right 220–640 px (default 288); the chart area never goes below 320 px. Double-click a handle to reset, arrow keys nudge by 16 px.
-- **Style:** dark theme only (`#0d0e14` bg, `#4361ee`/`#f77f00` accents), JetBrains Mono for data, DM Sans for UI, lucide-react icons only.
-
-- **Save image (2026-10-10):** icon-only `ImageDown` button in the chart toolbar (between "Δ Delta" and "Reset") opens `ImageExportDialog`. `client/src/lib/chart-export.ts` re-renders the visible window (same channels, separate/overlay layout, whole-session min/max markers) into an offscreen canvas, 1600 px wide (900 tall, taller for many stacked strips) at 2x, always dark, with a header band (file, car/driver/venue/date, window + duration, per-channel min/max inside the window) and a "QuickScope" footer. Separate renderer on purpose: `chart-draw.ts` stays the on-screen engine. Filename `<file base>_<start>s-<end>s_<channels>.png`.
+- **Stack:** Python FastAPI backend (port 8000) + React 18/TypeScript/Vite 7/Tailwind frontend (port 5173), custom Canvas2D chart, no charting library. Electron 44 wraps both for desktop (PyInstaller-frozen backend + Vite bundle).
+- **Parsing:** on Windows dev machines the AiM `MatLabXRK` DLL (`backend/vendor/`, not committed) is primary, with libxrk as fallback; Mac/Linux use libxrk. **Installers ship libxrk only.** Override with `./start.ps1 -Libxrk` / `-Dll`, `./start.sh --libxrk` / `--dll`, or `QUICKSCOPE_PARSER=libxrk|aim_dll`. libxrk returns `dict[str, pyarrow.Table]` (`timecodes` int64 ms + value column); laps are a PyArrow table (`num`, `start_time`, `end_time`).
+- **GPS timebase:** libxrk's wall-clock GPS timecodes are rebased to session time once at parse time (`parsers/libxrk_fixup.py`); `/api/gps` and GPS lap detection use them as-is.
+- **Session storage:** local-only, JSON-backed under `QUICKSCOPE_DATA_DIR` (dev: `backend/data/`; packaged: the Electron userData `data/` folder). One active parsed session in memory; endpoints take `session_id` so each window reads its own session. No DB, no auth, no multi-user.
+- **No cloud sync anymore:** the Railway / Data-Development sync was removed. `session_store.py` migrates old `source: "railway"` entries, and `settings_store.py` drops the old `railway_url` key. Settings are now just `aim_wifi_ssid`, `aim_device_ip` and `aim_device_port`.
+- **Local only:** `origins.LocalOnlyMiddleware` rejects requests whose `Host` isn't this machine or whose `Origin` isn't the local UI (`app://quickscope` or localhost). `Origin: null` is deliberately not trusted. `QUICKSCOPE_ALLOWED_HOSTS` opens it to other machines.
+- **AiM WiFi protocol:** see `docs/protocol/` (outer-frame trailer = `sum(payload) & 0xFFFF`; UDP discovery on port 36002, live TCP on port 2000, device IP `10.0.0.1`). Pulled files whose name matches a local file of a different size are saved with a `_2`, `_3` ... suffix, never replacing the local session.
+- **Live view:** always rendered, connected or not. Layouts are data (`live/layout-schema.ts`), with built-in EV/IC layouts, user layouts in `live_layouts.json`, and export/import as `*.qslayout.json`. Details in AGENT.md.
+- **Derived channels:** client-side recursive-descent formula engine (`formula-engine.ts`); unary minus binds looser than `^` (`-x^2 = -(x^2)`). Recomputed from scratch each time.
+- **Resizable sidebars:** `components/ResizeHandle.tsx` + `lib/useSidebarWidths.ts` (localStorage), deliberately outside React state so dragging doesn't re-render. Left 140–480 px, right 220–640 px, chart area never below 320 px.
+- **Save image:** `lib/chart-export.ts` re-renders the visible window to an offscreen 1600 px-wide canvas with header/footer; kept separate from the on-screen `chart-draw.ts` on purpose.
+- **Style:** dark theme default (a light theme / `ThemeToggle` also exists), `#4361ee`/`#f77f00` accents, JetBrains Mono for data, DM Sans for UI, lucide-react icons only.
 
 ## How to run / test
-From README.md / AGENT.md (copied verbatim):
 ```bash
-./start.sh          # installs deps if needed, starts both servers; open http://localhost:5000
+./start.sh            # macOS/Linux: installs deps if needed, starts both servers
+./start.ps1           # Windows equivalent
+# open http://localhost:5173
 ```
 Manual:
 ```bash
-# Backend
-cd backend
-pip install -r requirements.txt
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
-
-# Frontend (separate terminal)
-npm install
-npm run dev
+cd backend && pip install -r requirements.txt && python -m uvicorn main:app --port 8000 --reload
+npm install && npm run dev        # separate terminal
 ```
-Other npm scripts (from `package.json`): `npm run build` (Vite build), `npm run check` (`tsc`), `npm run electron:dev`, `npm run backend:freeze` (PyInstaller), `npm run dist` / `dist:mac` / `dist:win` / `dist:linux` (full packaged installer — see `docs/PACKAGING.md`). No test script is defined in `package.json`.
+Tests and checks:
+```bash
+npm test               # pytest, excluding DLL- and libxrk-marked tests
+npm run test:dll       # tests needing the AiM DLL (Windows)
+npm run test:libxrk    # tests needing libxrk
+npm run test:client    # vitest frontend tests
+npm run check          # tsc
+```
+Packaging: `npm run electron:dev`, `npm run backend:freeze`, `npm run dist` / `dist:mac` / `dist:win` / `dist:linux` (see `docs/PACKAGING.md`).
 
+To register a local `.xrk` without the GUI: copy it into `backend/data/sessions/` and call `session_store.add_session(...)` from `backend/` the way the upload route does.
 
-From the Formula root there is also `.claude/launch.json` (config `quickscope`) that runs `start.sh`; the frontend actually serves on **5173** (`PORT` env, `server/index.ts`), not the 5000 that `start.sh` prints.
-To register a local `.xrk` without the GUI: copy it into `backend/data/sessions/` and call `session_store.add_session(...)` from `backend/` the way `routes/analysis.py` `upload_file` does (done 2026-09-08 for the two 2026-09-07 regen mock-endurance runs 0140/0141 from `data/telemetry/2026-09-07-regen-mock-endurance-ct17ev/`).
-
-## Related elsewhere in Formula
-- `software/Data-Development` — the cloud/multi-user backend this project syncs sessions to (Railway-deployed FastAPI, own AiM connector, channel models, PID-tuning services). When the user says "the server," "Railway," or asks about multi-user/persistent/cloud features, that's almost always Data-Development, not QuickScope — check there first.
-- `studies/pid-tuning` — likely consumes similar channel/telemetry concepts; check for overlap if working on analysis features.
-- No other sibling folder appears to touch the AiM WiFi protocol work directly — it is QuickScope-specific reverse-engineering.
+## Desktop shell: Electron vs Tauri vs Rust (evaluated 2026-11-12, no decision)
+- **Electron footprint is small:** ~400 lines across `electron/*.cjs`. The UI talks to the backend only over HTTP/WebSocket and never uses Node or Electron APIs, so swapping shells is cheap on the frontend side.
+- **Tauri shell, keeping Python:** saves roughly 80–100 MB (installers would drop from ~220 MB to ~120–150 MB, because the PyInstaller backend dominates). Costs: the shell gets rewritten in Rust; the UI runs on a different browser engine per OS (WKWebView on macOS, WebKitGTK on Linux, WebView2 on Windows), so the Canvas chart, touch, Leaflet and react-grid-layout need re-testing; `origins.py` must trust `tauri://localhost` / `http(s)://tauri.localhost`; and the PyInstaller one-folder build doesn't fit Tauri's single-binary sidecar model without changes.
+- **All-Rust backend:** libxrk is not a blocker. Its repo (`m3rlin45/libxrk`) has a pure-Rust core crate (`crates/libxrk`; not on crates.io, so it would be a pinned git dependency), and upstream is moving to Rust only. The AiM DLL works through the `xdrk` crate or direct loading. The backend to port is ~7,800 lines of Python: AiM socket code (~3,800, standard-library sockets/struct only), routes (~1,200), and pandas/numpy analysis (lap detection, CSV export, GPS preview). The payoff would be ~10–30 MB installers, no sidecar/port/origin handling, and no PyInstaller. Check libxrk's license against QuickScope's MIT before adopting it.
+- **If revisited:** the lowest-risk order is Tauri shell first, then a Rust (axum) server that forwards unported routes to Python, porting the parsing/analysis routes before the AiM device code, and removing Python last.
 
 ## Gotchas
-- The `server/` (Express/TypeScript) directory looks like a real backend but is vestigial — it only serves the Vite dev build in dev mode. All real API logic lives in the Python `backend/`.
-- `TimeRange` and `ChannelSample` timestamps are milliseconds; the chart converts to seconds only for display — don't mix units when touching `TelemetryChart.tsx` or `useXRKStore.ts`.
-- Canvas chart perf rules are strict: never call `setState` from mouse/touch handlers in `TelemetryChart.tsx` — only mutate refs and set `needsDrawRef.current = true`; `onViewRangeChange` is debounced at 100ms.
-- GPS timecodes from libxrk use a different timebase than other channels (raw UTC vs session-relative) — already handled in the `/api/gps` endpoint, but easy to reintroduce a bug if touching GPS code elsewhere.
-- `parse_aim_stream.py` under `docs/protocol/captures/` has a known Node-direction bug for Live 2 captures (mislabels client/device frames); `lib_frames.py` has the corrected auto-detection logic and is what all later analysis scripts (`q1`..`q7`) actually use.
-- `sessions.json` `local_path` must be **absolute**. The packaged app's backend runs with `cwd=/`, so a relative path fails `Path(local_path).exists()` in `routes/sessions.py::load_session` and the UI shows "Session file not available locally. Pull it first." — which is doubly misleading for a `local_only` entry with no `remote_id` to pull from. Fixed 2026-09-17 for all 46 library entries; `build_library.py` now stores `os.path.abspath(dest)`.
-- This folder has moved twice recently (`~/dev/quickscope` → `~/dev/Formula/quickscope` → `~/dev/Formula/software/quickscope`); double-check any hardcoded absolute paths in scripts, `.claude/` config, or shell history if something references an old location.
-- `docs/superpowers/{plans,specs}/` only cover a handful of past features (overlay mode, light mode, table view/header redesign, Data-Development integration) — most work (e.g. the AiM live protocol, Electron packaging) has no matching plan/spec doc, so don't assume absence of a plan means the feature wasn't built; check `git log` instead.
-- Uncommitted changes exist in two protocol analysis scripts (`q2_short_payloads.py`, `q7_kkk.py`) and an untracked `screenshots/` dir — verify with the user before assuming a clean working tree.
-- `state.parse_recorded_at` tries `%d/%m/%Y` before `%m/%d/%Y`, but the team's AiM files carry US-format dates (`09/07/2026` = Sept 7). Any day ≤ 12 gets month/day swapped in `sessions.json` `recorded_at` (the two regen sessions were patched by hand). Fix the format order if you touch it.
-- CAN-decoded `Torque_Feedback` and `LVCU_Torque_Req` wrap to ~6553 (uint16/10) when the value is negative (regen); use `Torque_Command`, `MCU_DC_Current` or `Pack_Current` for regen sign. `Motor_Temp` is ×10 (275 = 27.5 °C).
+- `TimeRange` and `ChannelSample` timestamps are milliseconds; the chart converts to seconds only for display.
+- Canvas chart performance rules: never call `setState` from mouse/touch handlers in `TelemetryChart.tsx`; mutate refs and set `needsDrawRef.current = true`. Values a child needs during mouse moves go through `cursorStore`.
+- Channel indices are reused between sessions: async work must check `isCurrentSession()` after every `await` (see AGENT.md "Session changes").
+- `sessions.json` `local_path` values may be stale absolute paths from another OS; `session_store.resolve_session_path` handles this and rewrites the index, so go through it rather than reading `local_path` directly.
+- AiM file dates are US month/day; `state.parse_recorded_at` is month-first by default and is only day-first for device timestamps (`day_first=True`). Don't flip the default.
+- CAN-decoded `Torque_Feedback` and `LVCU_Torque_Req` wrap to ~6553 (uint16/10) when negative (regen); use `Torque_Command`, `MCU_DC_Current` or `Pack_Current` for regen sign. `Motor_Temp` is ×10 (275 = 27.5 °C).
+- `docs/protocol/captures/parse_aim_stream.py` mislabels client/device frames for the Live 2 captures; `analysis/lib_frames.py` has the corrected logic.
+- Most features have no plan/spec doc in `docs/superpowers/`; check `git log` before assuming something wasn't built.
+- This folder has lived at several paths and on two OSes; double-check hardcoded absolute paths in scripts or config.
 
-## Local install (2026-09-11)
-
-- `~/Applications/QuickScope.app` is a local unsigned arm64 build of `main` made on 2026-09-11 (`npm run build`, `backend/.venv/bin/pyinstaller quickscope-backend.spec`, `CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --arm64 --dir`). Spotlight finds it as "QuickScope". Its data dir is `~/Library/Application Support/quickscope/`, separate from the dev backend's `backend/data/`.
-- 2026-09-11 source fix (uncommitted): `backend/state.py::parse_recorded_at` now tries month/day/year first (AiM writes US dates; the old day-first order put every date with day ≤ 12 in the wrong month).
-- Build products stay gitignored: `release/mac-arm64/QuickScope.app`, `backend/dist/`, `backend/.venv/` (Python 3.12 + requirements + pyinstaller). Rebuild and re-copy with `ditto release/mac-arm64/QuickScope.app ~/Applications/QuickScope.app` after pulling changes.
+## Local install (teammate's Mac, 2026-09-11)
+- `~/Applications/QuickScope.app` is a local unsigned arm64 build (`npm run build`, `backend/.venv/bin/pyinstaller quickscope-backend.spec`, `CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --arm64 --dir`). Data dir: `~/Library/Application Support/quickscope/`, separate from the dev `backend/data/`.
+- Rebuild and re-copy with `ditto release/mac-arm64/QuickScope.app ~/Applications/QuickScope.app` after pulling changes.

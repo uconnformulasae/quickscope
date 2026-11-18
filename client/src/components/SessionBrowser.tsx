@@ -69,6 +69,9 @@ const SOURCE_CONFIG = {
   aim_device: { icon: Radio, label: 'AiM' },
 } as const;
 
+/** Rendered height of the two-item export menu plus its gap, for choosing up/down. */
+const EXPORT_MENU_HEIGHT_PX = 80;
+
 export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, theme, onToggleTheme }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<LocalSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -93,6 +96,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
   const renameDoneRef = useRef(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const [exportMenuSessionId, setExportMenuSessionId] = useState<string | null>(null);
+  const [isExportMenuAbove, setIsExportMenuAbove] = useState(false);
   const [exportBusyId, setExportBusyId] = useState<string | null>(null);
   const [csvExport, setCsvExport] = useState<{
     sessionId: string;
@@ -179,6 +183,11 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
   const openExportMenu = useCallback((e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
+    // The list scrolls, so a menu dropping below its bottom edge would be cut off.
+    const button = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const list = document.getElementById('session-list-scroll')?.getBoundingClientRect();
+    const spaceBelow = (list?.bottom ?? window.innerHeight) - button.bottom;
+    setIsExportMenuAbove(spaceBelow < EXPORT_MENU_HEIGHT_PX);
     setExportMenuSessionId(prev => (prev === sessionId ? null : sessionId));
   }, []);
 
@@ -660,7 +669,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
             {sessionGroups.map(group => (
             <section key={group.label} aria-label={group.label}>
               <h2 className="px-1 mb-1.5 text-xs font-semibold text-muted-foreground">{group.label}</h2>
-              <div className="rounded-xl border border-[hsl(225,25%,85%)] dark:border-border/60 bg-[hsl(225,30%,97%)] dark:bg-card overflow-hidden divide-y divide-[hsl(225,25%,88%)] dark:divide-border/50">
+              <div className="rounded-xl border border-[hsl(225,25%,85%)] dark:border-border/60 bg-[hsl(225,30%,97%)] dark:bg-card divide-y divide-[hsl(225,25%,88%)] dark:divide-border/50">
             {group.items.map(session => {
               const isLoading = loadingId === session.id;
               // Any load in flight blocks the other rows too (see loadBusyRef).
@@ -684,7 +693,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                       handleSessionClick(session);
                     }
                   }}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 text-left hover:bg-[hsl(225,35%,93%)] dark:hover:bg-muted/70 focus-visible:bg-muted/70 transition-colors group ${isLoading ? 'opacity-60' : 'cursor-pointer'}`}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 first:rounded-t-xl last:rounded-b-xl text-left hover:bg-[hsl(225,35%,93%)] dark:hover:bg-muted/70 focus-visible:bg-muted/70 transition-colors group ${isLoading ? 'opacity-60' : 'cursor-pointer'}`}
                 >
                   {/* GPS thumbnail (only for sessions with a local file) */}
                   {session.local_path ? (
@@ -778,7 +787,9 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                           </button>
                           {exportMenuSessionId === session.id && (
                             <div
-                              className="absolute right-0 top-full mt-1 z-30 min-w-[168px] rounded-md border border-border bg-card py-1 shadow-lg"
+                              className={`absolute right-0 ${isExportMenuAbove ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 min-w-[168px] rounded-md border border-border bg-card py-1 shadow-lg`}
+                              data-testid="session-export-menu"
+                              data-placement={isExportMenuAbove ? 'above' : 'below'}
                               onClick={e => e.stopPropagation()}
                             >
                               <button

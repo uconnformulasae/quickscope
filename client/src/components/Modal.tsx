@@ -27,7 +27,8 @@ export function Modal({ onClose, className = '', closeOnEscape = true, children,
   }, [closeOnEscape, onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center qs-scrim" data-backdrop="1" {...backdrop}>
+    // Above the session header (z-[1100]) and its menu, which sit above Leaflet's panes.
+    <div className="fixed inset-0 z-[1200] flex items-center justify-center qs-scrim" data-backdrop="1" {...backdrop}>
       <div {...panelProps} className={`qs-dialog bg-card border border-border rounded-xl shadow-2xl ${className}`}>
         {children}
       </div>

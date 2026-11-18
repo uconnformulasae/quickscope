@@ -152,6 +152,26 @@ describe('SessionBrowser', () => {
     await waitFor(() => expect(deleted).toEqual(['DELETE']));
   });
 
+  it('opens the export menu upward only when there is no room below it in the list', async () => {
+    let buttonBottom = 0;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const bottom = this.id === 'session-list-scroll' ? 500 : buttonBottom;
+      return { bottom, top: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+    renderBrowser();
+    await screen.findByText('old.xrk');
+    const exportButton = within(rows()[1]).getByTitle('Export');
+
+    buttonBottom = 100;
+    fireEvent.click(exportButton);
+    expect(screen.getByTestId('session-export-menu').dataset.placement).toBe('below');
+
+    fireEvent.click(exportButton);
+    buttonBottom = 460;
+    fireEvent.click(exportButton);
+    expect(screen.getByTestId('session-export-menu').dataset.placement).toBe('above');
+  });
+
   it('does not delete when the confirmation is cancelled', async () => {
     routes['/api/sessions/old'] = () => { throw new Error('should not delete'); };
     vi.spyOn(window, 'confirm').mockReturnValue(false);
