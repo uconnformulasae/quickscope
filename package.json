@@ -89,13 +89,6 @@
             "arm64",
             "x64"
           ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
         }
       ],
       "icon": "build/icon.png",
@@ -106,6 +99,7 @@
       "notarize": false
     },
     "dmg": {
+      "artifactName": "${productName}-mac-${arch}.${ext}",
       "title": "${productName} ${version}",
       "icon": "build/icon.png",
       "background": null,
@@ -139,6 +133,7 @@
       "icon": "build/icon.png"
     },
     "nsis": {
+      "artifactName": "${productName}-windows-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
@@ -152,6 +147,9 @@
       ],
       "category": "Development",
       "icon": "build/icon.png"
+    },
+    "appImage": {
+      "artifactName": "${productName}-linux-${arch}.${ext}"
     }
   }
 }

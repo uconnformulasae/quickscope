@@ -41,10 +41,7 @@ runs:
           const base = pkg.build;
           const macConfig = {
             ...base.mac,
-            target: [
-              { target: 'dmg', arch: [arch] },
-              { target: 'zip', arch: [arch] },
-            ],
+            target: [{ target: 'dmg', arch: [arch] }],
             notarize,
           };
           if (notarize) {
@@ -72,8 +69,8 @@ runs:
         rm -f "${CFG}"
         echo "release/ contents:"
         ls -la release/ || true
-        if ! compgen -G 'release/*.dmg' > /dev/null && ! compgen -G 'release/*.zip' > /dev/null; then
-          echo "::error::No .dmg or .zip under release/ after electron-builder"
+        if ! compgen -G 'release/*.dmg' > /dev/null; then
+          echo "::error::No .dmg under release/ after electron-builder"
           exit 1
         fi
         if ! compgen -G 'release/mac*/QuickScope.app/Contents/Resources/backend/quickscope-backend' > /dev/null; then

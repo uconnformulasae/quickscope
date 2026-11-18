@@ -165,17 +165,16 @@ jobs:
           arch: ${{ matrix.arch }}
           notarize: 'false'
 
+      # Installers only. electron-builder also writes *.blockmap and latest*.yml,
+      # which only electron-updater reads; the app has no auto-updater.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: quickscope-${{ matrix.label }}
           path: |
             release/*.dmg
-            release/*.zip
             release/*.exe
             release/*.AppImage
-            release/*.blockmap
-            release/latest*.yml
           if-no-files-found: error
           retention-days: 1
 
