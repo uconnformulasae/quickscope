@@ -19,6 +19,11 @@ interface ExportDialogProps {
   sessionId?: string;
   /** Channel list from loadSession when not opening the log in analysis. */
   browserChannels?: CsvExportChannel[];
+  /**
+   * Channels to start selected (e.g. those open in the chart). Ids that aren't
+   * exportable are ignored; if none remain, every channel starts selected.
+   */
+  preselectedChannelIds?: number[];
 }
 
 interface CsvExportChannel {
@@ -52,20 +57,25 @@ function channelsForExport(
   return list;
 }
 
+function initialSelection(channels: CsvExportChannel[], preselectedIds: number[] | undefined): Set<number> {
+  const allIds = new Set(channels.map((ch) => ch.id));
+  const preselected = new Set((preselectedIds ?? []).filter((id) => allIds.has(id)));
+  return preselected.size > 0 ? preselected : allIds;
+}
+
 export function ExportDialog({
   session,
   sessionId,
   browserChannels,
+  preselectedChannelIds,
   fileName,
   exportBaseName,
   onClose,
 }: ExportDialogProps) {
   const [search, setSearch] = useState('');
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => {
-    const ids = new Set<number>();
-    channelsForExport(session, browserChannels).forEach((ch) => ids.add(ch.id));
-    return ids;
-  });
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() =>
+    initialSelection(channelsForExport(session, browserChannels), preselectedChannelIds),
+  );
   const display = useDisplaySamples();
   const [useDisplayUnits, setUseDisplayUnits] = useState(true);
   const [isExporting, setIsExporting] = useState(false);

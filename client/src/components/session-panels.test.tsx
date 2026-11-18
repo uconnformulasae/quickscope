@@ -45,6 +45,18 @@ describe('ExportDialog', () => {
     expect(screen.getByText('2K')).toBeTruthy(); // 1500 samples shown as 2K
   });
 
+  it('pre-selects only the channels open in the chart', () => {
+    render(<ExportDialog session={session()} preselectedChannelIds={[2]} fileName="run.xrk" onClose={() => {}} />);
+    expect(screen.getByText('1 / 2 selected')).toBeTruthy();
+    expect(screen.getByText('~300 rows')).toBeTruthy();
+  });
+
+  it('falls back to all channels when none of the open ones are exportable', () => {
+    // 3 has no samples and 10000 is a derived channel; neither appears in the list.
+    render(<ExportDialog session={session()} preselectedChannelIds={[3, 10000]} fileName="run.xrk" onClose={() => {}} />);
+    expect(screen.getByText('2 / 2 selected')).toBeTruthy();
+  });
+
   it('toggles, filters and selects/deselects all', () => {
     render(<ExportDialog session={session()} fileName="run.xrk" onClose={() => {}} />);
     fireEvent.click(screen.getByText('Deselect All'));

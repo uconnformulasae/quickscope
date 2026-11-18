@@ -81,28 +81,22 @@ Cross-platform limitation: you cannot build a Windows installer from a Mac
 
 ## Releasing (via GitHub Actions)
 
-The release pipeline in `.github/workflows/release.yml` builds all three
-installers on the correct platform runners and attaches them to a GitHub
-Release.
+The release pipeline in `.github/workflows/release.yml` is manual-only. It
+builds installers for Windows x64, macOS (arm64 + Intel), and Linux (x64 +
+arm64) on native runners and publishes them to a GitHub Release.
 
 ### Cut a new release
 
-```bash
-# Bump version in package.json, commit, then:
-git tag v1.0.1
-git push origin v1.0.1
-```
+1. Bump `"version"` in `package.json` (e.g. `1.0.2`), commit, and push to `main`.
+2. Go to **Actions → Release → Run workflow**, pick the branch, and optionally
+   tick **pre-release**.
 
-The workflow runs on three runners (macos-14 arm64, macos-13 Intel,
-windows-latest), produces `.dmg` / `.exe` artifacts, and publishes them to a
-GitHub Release auto-generated from the commit log.
+The workflow creates tag `v<version>` on that commit and publishes a Release
+with every installer attached and notes generated from the commit log. If the
+tag already exists, the run fails right away — bump the version and rerun.
 
-Users then find the installers on the repo's **Releases** page.
-
-### Manual build (no release)
-
-Go to **Actions → Release → Run workflow** from the GitHub UI. Installers
-upload as workflow artifacts (no Release is published).
+Release assets never expire, so users can always download installers from the
+repo's **Releases** page.
 
 ## Code signing & notarization (optional, recommended for Mac)
 

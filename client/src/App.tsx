@@ -634,6 +634,7 @@ export default function App() {
         {exportDialogOpen && session && (
         <ExportDialog
           session={session}
+          preselectedChannelIds={activeChannels.map(c => c.channelId)}
           fileName={state.fileName}
           exportBaseName={loadedSessionExportBase ?? undefined}
           onClose={() => setExportDialogOpen(false)}
