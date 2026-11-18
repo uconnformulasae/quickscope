@@ -212,8 +212,10 @@ def test_connect_reports_refused_tcp():
         async with FakeAimDevice() as device:
             port = device.port
         client = AimLiveClient(host="127.0.0.1", port=port)  # server now closed
+        # Windows retries a refused SYN for ~2 s before failing; stay above that
+        # so the refusal, not the timeout, is what gets reported.
         with pytest.raises(ConnectionError, match="TCP connect to 127.0.0.1"):
-            await client.connect(discover_first=False, timeout=1.0)
+            await client.connect(discover_first=False, timeout=5.0)
 
     run(scenario())
 
@@ -470,15 +472,18 @@ def test_fetch_session_list_after_handshake():
     assert rows[0]["lap_count"] == 3
 
 
-def test_fetch_session_list_returns_empty_without_csv():
+def test_fetch_session_list_raises_without_csv():
+    """No CSV is a failed list, not an empty logger -- ``[]`` would hide it."""
     async def scenario():
         async with FakeAimDevice(sessions_csv="no listing here") as device:
             client = await connected_client(device)
-            rows = await client.fetch_session_list(timeout=0.5)
-            await client.close()
-            return rows
+            try:
+                with pytest.raises(ConnectionError, match="session list"):
+                    await client.fetch_session_list(timeout=0.5)
+            finally:
+                await client.close()
 
-    assert run(scenario()) == []
+    run(scenario())
 
 
 def test_fetch_session_list_requires_handshake():

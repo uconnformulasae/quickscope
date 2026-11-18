@@ -1,4 +1,5 @@
 import type { ChannelSample } from './xrk-parser';
+import { nearestIndex } from './binary-search';
 
 export interface TableRow {
   timestamp: number; // milliseconds
@@ -77,19 +78,5 @@ export function buildTableData(
  * Binary search for the row index closest to the given timestamp (ms).
  */
 export function findRowByTimestamp(timestamps: number[], targetMs: number): number {
-  if (timestamps.length === 0) return 0;
-  let lo = 0;
-  let hi = timestamps.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (timestamps[mid] < targetMs) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-  if (lo > 0 && Math.abs(timestamps[lo - 1] - targetMs) < Math.abs(timestamps[lo] - targetMs)) {
-    return lo - 1;
-  }
-  return lo;
+  return nearestIndex(timestamps, targetMs);
 }

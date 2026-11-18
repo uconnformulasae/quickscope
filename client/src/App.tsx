@@ -1,5 +1,10 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { uploadFile, fetchChannelData, fetchLaps, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { buildLapWindows } from './lib/lap-compare';
+import { useSessionViewPersistence } from './lib/useSessionViewPersistence';
+import { applyChannelColors } from './lib/channelColors';
+import { usePreferences } from './lib/usePreferences';
+import { uploadFile, fetchChannelData, fetchLaps, setDataSession, type SessionInfo, type AimStatus, type LocalSession } from './lib/api';
+import { pathStem, quickscopeSessionExportBaseName, sanitizeExportFilePart } from './lib/sessionDisplayName';
 import { useAppState } from './lib/useXRKStore';
 import { useTheme } from './lib/useTheme';
 import { useSidebarWidths, LEFT_SIDEBAR, RIGHT_SIDEBAR } from './lib/useSidebarWidths';
@@ -18,20 +23,27 @@ import { SessionInfoModal } from './components/SessionInfoModal';
 import { SessionBrowser } from './components/SessionBrowser';
 import { SettingsDialog } from './components/SettingsDialog';
 import { LiveView } from './components/LiveView';
+import { Presence } from './lib/motion';
 import { ResizeHandle } from './components/ResizeHandle';
 import { Upload } from 'lucide-react';
+import { formatRate } from './lib/format-bytes';
 
 type View = 'browser' | 'analysis' | 'live';
 
 export default function App() {
+  const app = useAppState();
+  const { prefs } = usePreferences();
+  const persistView = useSessionViewPersistence(app);
   const {
     state,
     derivedSamplesMap,
+    cursorStore,
     setSession,
     setLoading,
     setError,
     setProgress,
     toggleChannel,
+    clearActiveChannels,
     setViewRange,
     setCursorTime,
     setAnalysisTab,
@@ -43,13 +55,30 @@ export default function App() {
     setXYChannels,
     clearSession,
     setChannelSamples,
+    getSessionGeneration,
+    isCurrentSession,
+    beginSessionChange,
     addDerivedChannel,
     removeDerivedChannel,
     updateDerivedChannel,
     previewDerivedChannel,
     setChartMode,
     setViewMode,
-  } = useAppState();
+    toggleLapSelected,
+    setSelectedLaps,
+  } = app;
+
+  const clearLapSelection = useCallback(() => setSelectedLaps([]), [setSelectedLaps]);
+
+  // Selecting exactly one lap zooms the chart to it (keyed on the selection,
+  // so the user can still pan/zoom afterwards).
+  const lapSession = state.session;
+  useEffect(() => {
+    if (!lapSession || state.selectedLaps.length !== 1) return;
+    const lap = buildLapWindows(lapSession.lapMarkers)[state.selectedLaps[0]];
+    if (lap) setViewRange({ startMs: lap.startMs, endMs: lap.endMs });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.selectedLaps]);
 
   const { theme, toggleTheme } = useTheme();
   const { widths, setLeftWidth, setRightWidth } = useSidebarWidths();
@@ -71,12 +100,17 @@ export default function App() {
   // Session ID from backend
   const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
   const [loadedSessionSource, setLoadedSessionSource] = useState<LocalSession['source']>('manual_upload');
+  const [loadedSessionExportBase, setLoadedSessionExportBase] = useState<string | null>(null);
 
   // Drag over state for chart area
   const [isDragOver, setIsDragOver] = useState(false);
 
-  /** Build XRKSession from backend SessionInfo and switch to analysis view */
-  const buildAndSetSession = useCallback(async (info: SessionInfo, fileName: string) => {
+  /** Build XRKSession from backend SessionInfo and switch to analysis view.
+   *  `generation` comes from beginSessionChange(); if another load starts
+   *  while this one is fetching, this one stops and leaves the screen alone. */
+  const buildAndSetSession = useCallback(async (
+    info: SessionInfo, fileName: string, viewKey: string, generation: number,
+  ) => {
     const nameMap = new Map<string, number>();
     for (const ch of info.channels) {
       nameMap.set(ch.name, ch.index);
@@ -107,6 +141,7 @@ export default function App() {
     if (firstFive.length > 0) {
       setProgress({ stage: 'Loading channel data...', percent: 70 });
       const dataMap = await fetchChannelData(firstFive);
+      if (!isCurrentSession(generation)) return;
       dataMap.forEach((data, name) => {
         const idx = nameMap.get(name);
         if (idx !== undefined) {
@@ -139,6 +174,7 @@ export default function App() {
     } catch {
       // Non-fatal: leave laps empty. The Lap tab will show "no markers".
     }
+    if (!isCurrentSession(generation)) return;
 
     const session: XRKSession = {
       metadata: {
@@ -159,38 +195,49 @@ export default function App() {
       logStartMs: resolveLogStartMs(info.recordedAt, info.metadata.date, info.metadata.time),
     };
 
+    // Reopening a session restores its channels/view (saved per session key).
+    persistView.beginSession(viewKey);
     setSession(session, fileName);
     setView('analysis');
-  }, [setSession, setProgress]);
+  }, [setSession, setProgress, persistView, isCurrentSession]);
 
   /** Called when session browser loads a session */
   const handleSessionLoaded = useCallback(async (
-    info: SessionInfo, sessionId: string, fileName: string, source: LocalSession['source'],
+    info: SessionInfo,
+    sessionId: string,
+    fileName: string,
+    source: LocalSession['source'],
+    displayName: string,
   ) => {
+    const generation = beginSessionChange();
+    setDataSession(sessionId);
     setLoadedSessionId(sessionId);
     setLoadedSessionSource(source);
+    setLoadedSessionExportBase(
+      sanitizeExportFilePart(quickscopeSessionExportBaseName(displayName)),
+    );
     setLoading(true);
     setProgress({ stage: 'Building session...', percent: 50 });
     try {
-      await buildAndSetSession(info, fileName);
+      await buildAndSetSession(info, fileName, sessionId, generation);
     } catch (err) {
-      setError(`Failed to load session: ${err instanceof Error ? err.message : String(err)}`);
+      const message = `Failed to load session: ${err instanceof Error ? err.message : String(err)}`;
+      if (isCurrentSession(generation)) setError(message);
+      // The browser view doesn't render the store's loadError; hand the
+      // failure back so the session browser can show it.
+      throw new Error(message);
     }
-  }, [buildAndSetSession, setLoading, setProgress, setError]);
+  }, [buildAndSetSession, setLoading, setProgress, setError, beginSessionChange, isCurrentSession]);
 
   /** Called when user uploads a file from the analysis view header */
   const handleFileSelected = useCallback(async (file: File) => {
+    const generation = beginSessionChange();
     setLoading(true);
     setProgress({ stage: 'Uploading to backend...', percent: 1 });
 
-    const formatRate = (bytesPerSec: number): string => {
-      if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
-      if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-      return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
-    };
-
     try {
       const info = await uploadFile(file, (p) => {
+        if (!isCurrentSession(generation)) return;
         // Map upload bytes to 1..40% of overall progress; the rest is parsing.
         const uploadPct = p.total > 0 ? (p.loaded / p.total) * 40 : 0;
         const eta = p.etaSec >= 0 && p.etaSec < 600 ? `, ${p.etaSec.toFixed(0)}s left` : '';
@@ -199,20 +246,27 @@ export default function App() {
           percent: Math.max(1, Math.min(40, uploadPct)),
         });
       });
+      if (!isCurrentSession(generation)) return;
       setProgress({ stage: 'Fetching channel data...', percent: 50 });
+      setDataSession(info.sessionId ?? null);
       setLoadedSessionId(info.sessionId ?? null);
       setLoadedSessionSource('manual_upload');
-      await buildAndSetSession(info, file.name);
+      setLoadedSessionExportBase(sanitizeExportFilePart(pathStem(file.name)));
+      await buildAndSetSession(info, file.name, info.sessionId ?? file.name, generation);
     } catch (err) {
+      if (!isCurrentSession(generation)) return;
       setError(`Failed to upload XRK file: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [setLoading, setProgress, buildAndSetSession, setError]);
+  }, [setLoading, setProgress, buildAndSetSession, setError, beginSessionChange, isCurrentSession]);
 
   const handleBackToBrowser = useCallback(() => {
+    setDataSession(null);
     setLoadedSessionId(null);
+    setLoadedSessionExportBase(null);
     clearSession();
+    persistView.endSession();
     setView('browser');
-  }, [clearSession]);
+  }, [clearSession, persistView]);
 
   // Lazy fetch channel data when a channel is activated
   const handleToggleChannel = useCallback(async (channelId: number, color: string) => {
@@ -234,22 +288,27 @@ export default function App() {
       return;
     }
 
+    // Channel indices are reused between sessions: if another session is
+    // loaded while this fetch is out, the result belongs to neither.
+    const generation = getSessionGeneration();
     try {
       const dataMap = await fetchChannelData([channelDef.shortName]);
+      if (!isCurrentSession(generation)) return;
       const data = dataMap.get(channelDef.shortName);
       if (data) {
         const channelSamples: ChannelSample[] = data.timestamps.map((t: number, i: number) => ({
           timestamp: t,
           value: data.values[i],
         }));
-        setChannelSamples(channelId, channelSamples);
+        setChannelSamples(channelId, channelSamples, generation);
       }
     } catch (err) {
       console.error('Failed to fetch channel data:', err);
     }
+    if (!isCurrentSession(generation)) return;
 
     toggleChannel(channelId, color);
-  }, [state.activeChannels, state.session, toggleChannel, setChannelSamples]);
+  }, [state.activeChannels, state.session, toggleChannel, setChannelSamples, getSessionGeneration, isCurrentSession]);
 
   const handleOpenCreateDerived = useCallback(() => {
     setEditingDerived(undefined);
@@ -268,6 +327,8 @@ export default function App() {
 
   const handleNavigateToTime = useCallback((timestampMs: number) => {
     if (!state.session) return;
+    // Targets are session times; compare mode's timeline is lap-relative.
+    if (state.selectedLaps.length >= 2) setSelectedLaps([]);
     const durationMs = state.session.durationMs;
     const tSec = timestampMs / 1000;
     const durationSec = durationMs / 1000;
@@ -282,7 +343,7 @@ export default function App() {
       let newEnd = Math.min(durationSec, tSec + windowHalf);
       setViewRange({ startMs: newStart * 1000, endMs: newEnd * 1000 });
     }
-  }, [state.session, state.viewRange, setCursorTime, setViewRange]);
+  }, [state.session, state.viewRange, setCursorTime, setViewRange, state.selectedLaps, setSelectedLaps]);
 
   const handlePreviewDerived = useCallback((def: Omit<DerivedChannel, 'id' | 'color'>) => {
     return previewDerivedChannel(def, editingDerived?.id);
@@ -297,8 +358,10 @@ export default function App() {
 
   const handleFileRenamed = useCallback((newFileName: string) => {
     if (!state.session) return;
+    // setSession resets the view; re-apply the saved one so a rename keeps it.
+    persistView.beginSession(loadedSessionId ?? state.fileName ?? newFileName);
     setSession(state.session, newFileName);
-  }, [state.session, setSession]);
+  }, [state.session, state.fileName, loadedSessionId, setSession, persistView]);
 
   // Drag-and-drop handlers for the chart area
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -327,9 +390,12 @@ export default function App() {
   const { session, activeChannels: rawActiveChannels, leftSidebarOpen, rightSidebarOpen } = state;
 
   // Resolve channel colors for current theme (dark colors need darker variants on light bg)
+  // (and custom colours the user picked for this theme, by channel name).
   const activeChannels = useMemo(
-    () => rawActiveChannels.map(ac => ({ ...ac, color: resolveChartColor(ac.color, theme) })),
-    [rawActiveChannels, theme],
+    () => session
+      ? applyChannelColors(rawActiveChannels, session, state.derivedChannels, theme, prefs.channelColors)
+      : rawActiveChannels.map(ac => ({ ...ac, color: resolveChartColor(ac.color, theme) })),
+    [rawActiveChannels, session, state.derivedChannels, theme, prefs.channelColors],
   );
 
   // ─── Session Browser View ──────────────────────────────────────────────────
@@ -346,7 +412,7 @@ export default function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
         />
-        {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+        <Presence show={settingsOpen}>{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}</Presence>
       </div>
     );
   }
@@ -389,7 +455,7 @@ export default function App() {
           <div
             ref={leftPanelRef}
             style={{ width: widths.left }}
-            className="flex-shrink-0 overflow-hidden"
+            className="qs-slide-in-left flex-shrink-0 overflow-hidden"
           >
             {session ? (
               <ChannelSidebar
@@ -398,6 +464,7 @@ export default function App() {
                 derivedChannels={state.derivedChannels}
                 derivedSamplesMap={derivedSamplesMap}
                 onToggleChannel={handleToggleChannel}
+                onClearChannels={clearActiveChannels}
                 onRemoveDerived={removeDerivedChannel}
                 onEditDerived={handleEditDerived}
                 onCreateDerived={handleOpenCreateDerived}
@@ -407,10 +474,11 @@ export default function App() {
                 onShowOnlyWithDataChange={setShowOnlyWithData}
                 chartMode={state.chartMode}
                 onChartModeChange={setChartMode}
+                theme={theme}
               />
             ) : (
               <div className="flex items-center justify-center h-full bg-card border-r border-border">
-                <p className="text-xs text-muted-foreground/60 text-center px-3">Load a file to see channels</p>
+                <p className="text-xs text-muted-foreground text-center px-3">Load a file to see channels</p>
               </div>
             )}
           </div>
@@ -451,10 +519,12 @@ export default function App() {
                 onViewRangeChange={setViewRange}
                 derivedChannels={state.derivedChannels}
                 derivedSamplesMap={derivedSamplesMap}
-                cursorTime={state.cursorTime}
+                cursorStore={cursorStore}
                 onCursorTimeChange={setCursorTime}
                 chartMode={state.chartMode}
                 fileName={state.fileName}
+                selectedLaps={state.selectedLaps}
+                onClearLapSelection={clearLapSelection}
               />
             )
           ) : (
@@ -480,12 +550,12 @@ export default function App() {
               ) : (
                 <div className={`flex flex-col items-center gap-3 p-8 rounded-xl border-2 border-dashed transition-colors ${isDragOver ? 'border-primary/60 bg-primary/5' : 'border-border/40'}`}>
                   <div className="w-12 h-12 rounded-full bg-muted/40 border border-border flex items-center justify-center">
-                    <Upload className="w-5 h-5 text-muted-foreground/60" />
+                    <Upload className="w-5 h-5 text-muted-foreground" />
                   </div>
                   <div className="text-center">
                     <p className="text-sm font-medium text-foreground">No file loaded</p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Click <span className="font-medium text-foreground">Load File</span> or drop a <span className="font-mono text-xs text-primary/80">.xrk</span> file here
+                      Click <span className="font-medium text-foreground">Load File</span> or drop a <span className="font-mono text-xs text-primary-text/80">.xrk</span> file here
                     </p>
                   </div>
                 </div>
@@ -497,7 +567,7 @@ export default function App() {
           {isDragOver && session && (
             <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary/50 flex items-center justify-center pointer-events-none z-10">
               <div className="bg-card/90 rounded-xl px-6 py-4 text-center">
-                <Upload className="w-6 h-6 text-primary mx-auto mb-2" />
+                <Upload className="w-6 h-6 text-primary-text mx-auto mb-2" />
                 <p className="text-sm font-medium text-foreground">Drop .xrk file to load</p>
               </div>
             </div>
@@ -519,7 +589,7 @@ export default function App() {
           <div
             ref={rightPanelRef}
             style={{ width: widths.right }}
-            className="flex-shrink-0 overflow-hidden"
+            className="qs-slide-in-right flex-shrink-0 overflow-hidden"
           >
             <AnalysisPanel
               session={session}
@@ -535,35 +605,46 @@ export default function App() {
               derivedChannels={state.derivedChannels}
               derivedSamplesMap={derivedSamplesMap}
               onNavigateToTime={handleNavigateToTime}
-              cursorTime={state.cursorTime}
+              cursorStore={cursorStore}
               theme={theme}
+              selectedLaps={state.selectedLaps}
+              onToggleLap={toggleLapSelected}
+              onSetSelectedLaps={setSelectedLaps}
             />
           </div>
         )}
       </div>
 
       {/* Derived channel dialog */}
-      {derivedDialogOpen && session && (
+      <Presence show={!!(derivedDialogOpen && session)}>
+        {derivedDialogOpen && session && (
         <DerivedChannelDialog
           session={session}
           editing={editingDerived}
+          derivedChannels={state.derivedChannels}
           onClose={handleCloseDerivedDialog}
           onPreview={handlePreviewDerived}
           onSubmit={handleSubmitDerived}
         />
-      )}
+        )}
+      </Presence>
 
       {/* Export CSV dialog */}
-      {exportDialogOpen && session && (
+      <Presence show={!!(exportDialogOpen && session)}>
+        {exportDialogOpen && session && (
         <ExportDialog
           session={session}
+          preselectedChannelIds={activeChannels.map(c => c.channelId)}
           fileName={state.fileName}
+          exportBaseName={loadedSessionExportBase ?? undefined}
           onClose={() => setExportDialogOpen(false)}
         />
-      )}
+        )}
+      </Presence>
 
       {/* Session Info modal */}
-      {sessionInfoOpen && session && state.fileName && loadedSessionId && (
+      <Presence show={!!(sessionInfoOpen && session && state.fileName && loadedSessionId)}>
+        {sessionInfoOpen && session && state.fileName && loadedSessionId && (
         <SessionInfoModal
           sessionId={loadedSessionId}
           metadata={session.metadata}
@@ -574,7 +655,8 @@ export default function App() {
           onClose={() => setSessionInfoOpen(false)}
           onFileRenamed={handleFileRenamed}
         />
-      )}
+        )}
+      </Presence>
     </div>
   );
 }

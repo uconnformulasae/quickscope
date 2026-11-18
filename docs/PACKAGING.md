@@ -45,7 +45,7 @@ QuickScope.app / QuickScope.exe
 
 The Electron main process (`electron/main.js`) picks a free port, starts the
 backend with `QUICKSCOPE_DATA_DIR` and `QUICKSCOPE_PORT` env vars, waits for
-`/docs` to respond, then loads the built Vite bundle in a `BrowserWindow`.
+`/api/health` to answer as QuickScope, then loads the built Vite bundle in a `BrowserWindow`.
 A preload script injects `window.__QUICKSCOPE_BACKEND__` so the renderer's
 `api.ts` knows where to send requests.
 
@@ -81,28 +81,22 @@ Cross-platform limitation: you cannot build a Windows installer from a Mac
 
 ## Releasing (via GitHub Actions)
 
-The release pipeline in `.github/workflows/release.yml` builds all three
-installers on the correct platform runners and attaches them to a GitHub
-Release.
+The release pipeline in `.github/workflows/release.yml` is manual-only. It
+builds installers for Windows x64, macOS (arm64 + Intel), and Linux (x64 +
+arm64) on native runners and publishes them to a GitHub Release.
 
 ### Cut a new release
 
-```bash
-# Bump version in package.json, commit, then:
-git tag v1.0.1
-git push origin v1.0.1
-```
+1. Bump `"version"` in `package.json` (e.g. `1.0.2`), commit, and push to `main`.
+2. Go to **Actions → Release → Run workflow**, pick the branch, and optionally
+   tick **pre-release**.
 
-The workflow runs on three runners (macos-14 arm64, macos-13 Intel,
-windows-latest), produces `.dmg` / `.exe` artifacts, and publishes them to a
-GitHub Release auto-generated from the commit log.
+The workflow creates tag `v<version>` on that commit and publishes a Release
+with every installer attached and notes generated from the commit log. If the
+tag already exists, the run fails right away — bump the version and rerun.
 
-Users then find the installers on the repo's **Releases** page.
-
-### Manual build (no release)
-
-Go to **Actions → Release → Run workflow** from the GitHub UI. Installers
-upload as workflow artifacts (no Release is published).
+Release assets never expire, so users can always download installers from the
+repo's **Releases** page.
 
 ## Code signing & notarization (optional, recommended for Mac)
 

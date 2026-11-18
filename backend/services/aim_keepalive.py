@@ -126,7 +126,10 @@ class AimKeepalive:
             await asyncio.sleep(self.interval_s)
 
     def _on_reply(self, data: bytes, ip: str) -> None:
-        if not data:
+        # Port 36002 is open to the whole network. Only the logger we are
+        # keeping alive may refresh the device cache; anyone else could point
+        # the next connect at their own address.
+        if not data or ip != self.host:
             return
         self.reply_count += 1
         self._last_reply_monotonic = time.monotonic()

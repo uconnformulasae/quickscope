@@ -2,21 +2,38 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   listSessions, loadSession, deleteSession,
   renameSession, getAimStatus, uploadFile, fetchUploadLog, fetchAimPullLog,
+  fetchSessionFile,
   type LocalSession, type SessionInfo, type AimStatus, type UploadLogEntry,
   type AimPullLogEntry,
 } from '../lib/api';
+import { saveBlob } from '../lib/saveBlob';
+import {
+  pathStem,
+  quickscopeSessionDisplayName,
+  quickscopeSessionExportFileBase,
+} from '../lib/sessionDisplayName';
 import {
   RefreshCw, Wifi, WifiOff, Upload, Trash2,
   Download, Loader2, Radio,
   ChevronRight, Search, Settings, Pencil, Activity, FileClock,
 } from 'lucide-react';
 import { AimSessionPicker } from './AimSessionPicker';
+import { Presence } from '../lib/motion';
 import { QuickScopeLogo } from './QuickScopeLogo';
 import { ThemeToggle } from './ThemeToggle';
 import { GPSThumbnail } from './GPSThumbnail';
+import { ExportDialog } from './ExportDialog';
+import { formatBytes, formatRate } from '../lib/format-bytes';
+import { formatAgo } from '../lib/time-format';
 
 interface SessionBrowserProps {
-  onSessionLoaded: (info: SessionInfo, sessionId: string, fileName: string, source: LocalSession['source']) => void;
+  onSessionLoaded: (
+    info: SessionInfo,
+    sessionId: string,
+    fileName: string,
+    source: LocalSession['source'],
+    displayName: string,
+  ) => void | Promise<void>;
   onOpenSettings: () => void;
   onOpenLive: (device: AimStatus['device']) => void;
   theme: 'dark' | 'light';
@@ -32,28 +49,11 @@ function formatDuration(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function formatRate(bytesPerSec: number): string {
-  if (bytesPerSec < 1) return '0 B/s';
-  if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`;
-  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-  return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
-}
+const DAY_MS = 86_400_000;
 
 function formatRelativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  const now = Date.now();
-  const sec = Math.floor((now - then) / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
-  return new Date(iso).toLocaleString();
+  const elapsedMs = Date.now() - new Date(iso).getTime();
+  return elapsedMs < DAY_MS ? formatAgo(elapsedMs) : new Date(iso).toLocaleString();
 }
 
 function formatDate(dateStr: string | null): string {
@@ -64,15 +64,13 @@ function formatDate(dateStr: string | null): string {
     + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
-function pathStem(filename: string): string {
-  const dot = filename.lastIndexOf('.');
-  return dot > 0 ? filename.slice(0, dot) : filename;
-}
-
 const SOURCE_CONFIG = {
   manual_upload: { icon: Upload, label: 'Uploaded' },
   aim_device: { icon: Radio, label: 'AiM' },
 } as const;
+
+/** Rendered height of the two-item export menu plus its gap, for choosing up/down. */
+const EXPORT_MENU_HEIGHT_PX = 80;
 
 export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, theme, onToggleTheme }: SessionBrowserProps) {
   const [sessions, setSessions] = useState<LocalSession[]>([]);
@@ -96,6 +94,16 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
   const renameInputRef = useRef<HTMLInputElement>(null);
   // Enter commits and then the input's blur fires too; only the first counts.
   const renameDoneRef = useRef(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const [exportMenuSessionId, setExportMenuSessionId] = useState<string | null>(null);
+  const [isExportMenuAbove, setIsExportMenuAbove] = useState(false);
+  const [exportBusyId, setExportBusyId] = useState<string | null>(null);
+  const [csvExport, setCsvExport] = useState<{
+    sessionId: string;
+    fileName: string;
+    exportBaseName: string;
+    channels: { id: number; name: string; units: string; sampleCount: number }[];
+  } | null>(null);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -131,21 +139,108 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     return () => clearInterval(interval);
   }, [hasIndexingSessions, refreshSessions]);
 
+  useEffect(() => {
+    if (!exportMenuSessionId) return;
+    const onDocumentMouseDown = (event: MouseEvent) => {
+      if (exportMenuRef.current?.contains(event.target as Node)) return;
+      setExportMenuSessionId(null);
+    };
+    document.addEventListener('mousedown', onDocumentMouseDown);
+    return () => document.removeEventListener('mousedown', onDocumentMouseDown);
+  }, [exportMenuSessionId]);
+
   const handleAimPickerDownloaded = useCallback(() => {
     refreshSessions();
   }, [refreshSessions]);
 
+  // The backend has one active session, and channel data is fetched from
+  // whichever that is. Two loads in flight can pair one session's metadata
+  // with another's data, so a second load waits until the first has finished
+  // (including the app building the session, hence the awaits below).
+  const loadBusyRef = useRef(false);
+
   const handleSessionClick = useCallback(async (session: LocalSession) => {
+    if (loadBusyRef.current) return;
+    loadBusyRef.current = true;
     setLoadingId(session.id);
+    setError(null);
     try {
       const info = await loadSession(session.id);
-      onSessionLoaded(info, session.id, session.filename, session.source);
+      await onSessionLoaded(
+        info,
+        session.id,
+        session.filename,
+        session.source,
+        quickscopeSessionDisplayName(session),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Load failed');
     } finally {
+      loadBusyRef.current = false;
       setLoadingId(null);
     }
   }, [onSessionLoaded]);
+
+  const openExportMenu = useCallback((e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    // The list scrolls, so a menu dropping below its bottom edge would be cut off.
+    const button = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const list = document.getElementById('session-list-scroll')?.getBoundingClientRect();
+    const spaceBelow = (list?.bottom ?? window.innerHeight) - button.bottom;
+    setIsExportMenuAbove(spaceBelow < EXPORT_MENU_HEIGHT_PX);
+    setExportMenuSessionId(prev => (prev === sessionId ? null : sessionId));
+  }, []);
+
+  const handleExportCsv = useCallback(async (e: React.MouseEvent, session: LocalSession) => {
+    e.stopPropagation();
+    setExportMenuSessionId(null);
+    // Reading the channel list makes this the backend's active session too.
+    if (loadBusyRef.current) return;
+    loadBusyRef.current = true;
+    setExportBusyId(session.id);
+    setError(null);
+    try {
+      const info = await loadSession(session.id);
+      const channels = info.channels
+        .filter(ch => ch.sampleCount > 0)
+        .map(ch => ({
+          id: ch.index,
+          name: ch.name,
+          units: ch.units,
+          sampleCount: ch.sampleCount,
+        }));
+      if (channels.length === 0) {
+        setError('No channels with data to export');
+        return;
+      }
+      setCsvExport({
+        sessionId: session.id,
+        fileName: session.filename,
+        exportBaseName: quickscopeSessionExportFileBase(session),
+        channels,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      loadBusyRef.current = false;
+      setExportBusyId(null);
+    }
+  }, []);
+
+  const handleExportXrk = useCallback(async (e: React.MouseEvent, session: LocalSession) => {
+    e.stopPropagation();
+    setExportMenuSessionId(null);
+    setExportBusyId(session.id);
+    setError(null);
+    try {
+      const { blob } = await fetchSessionFile(session.id);
+      await saveBlob(blob, `${quickscopeSessionExportFileBase(session)}.xrk`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Download failed');
+    } finally {
+      setExportBusyId(null);
+    }
+  }, []);
 
   const handleDelete = useCallback(async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
@@ -185,6 +280,8 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
   const handleFileUpload = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.xrk') && !file.name.toLowerCase().endsWith('.xrz')) return;
+    if (loadBusyRef.current) return;
+    loadBusyRef.current = true;
     setLoadingId('upload');
     setUploadProgress({ loaded: 0, total: file.size, ratePerSec: 0 });
     setError(null);
@@ -202,13 +299,20 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         ? updated.find(s => s.id === info.sessionId)
         : updated.find(s => s.filename === file.name);
       if (newest) {
-        onSessionLoaded(info, newest.id, file.name, newest.source);
+        await onSessionLoaded(
+          info,
+          newest.id,
+          file.name,
+          newest.source,
+          quickscopeSessionDisplayName(newest),
+        );
       } else if (info.sessionId) {
-        onSessionLoaded(info, info.sessionId, file.name, 'manual_upload');
+        await onSessionLoaded(info, info.sessionId, file.name, 'manual_upload', pathStem(file.name));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
+      loadBusyRef.current = false;
       setLoadingId(null);
       setUploadProgress(null);
     }
@@ -239,6 +343,20 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
     });
   }, [sessions, search]);
 
+  // Month groups ("October 2026") so a long history reads like a calendar,
+  // not one undifferentiated list. Order within and across groups is unchanged.
+  const sessionGroups = useMemo(() => {
+    const groups: { label: string; items: typeof sortedSessions }[] = [];
+    for (const s of sortedSessions) {
+      const d = new Date(s.recorded_at || s.created_at);
+      const label = isNaN(d.getTime()) ? 'Undated' : d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      const last = groups[groups.length - 1];
+      if (last && last.label === label) last.items.push(s);
+      else groups.push({ label, items: [s] });
+    }
+    return groups;
+  }, [sortedSessions]);
+
   return (
     <div
       className="flex flex-col h-full bg-background"
@@ -246,47 +364,46 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
     >
-      {/* Header */}
-      <header className="flex items-center gap-3 px-4 h-12 border-b border-border bg-card flex-shrink-0">
+      {/* Toolbar — one bar, every action visible. Views leads: it's the
+          trackside entry point. Status colors mean status only (green = AiM
+          reachable); the Views button's tint is emphasis. */}
+      <header className="flex items-center gap-2 px-4 h-14 border-b border-border bg-card flex-shrink-0">
         <QuickScopeLogo />
-        <div className="flex-1" />
+        <div className="w-px h-6 bg-border mx-2" />
 
-        {/* Connection indicators */}
-        <div className="flex items-center gap-3 text-xs">
-          {aimStatus?.connected ? (
-            <div className="flex items-center gap-1.5 text-emerald-500 dark:text-emerald-400" title={aimStatus.device?.device_name || aimStatus.device?.ip}>
-              <Wifi className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">
-                AiM {aimStatus.device?.device_name ? `(${aimStatus.device.device_name})` : 'Connected'}
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5 text-muted-foreground/50">
-              <WifiOff className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">AiM</span>
-            </div>
-          )}
-        </div>
-
-        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        {/*
+         * Live opens the dashboard and starts the live TCP session immediately
+         * (same idea as Race Studio’s first screen after selecting the logger).
+         */}
+        <button
+          onClick={() => onOpenLive(aimStatus?.connected ? aimStatus.device : null)}
+          className="flex items-center gap-2 h-8 px-3.5 rounded-lg text-[13px] font-semibold bg-primary/15 text-primary-text hover:bg-primary/25 transition-colors"
+          title={aimStatus?.connected ? 'Open Views: stream live data from the AiM device' : 'Open Views (offline preview: AiM device not reachable)'}
+        >
+          <Activity className="w-4 h-4" />
+          Views
+        </button>
 
         <button
-          onClick={onOpenSettings}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-          title="Settings"
+          onClick={() => setAimPickerOpen(true)}
+          className={`flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-medium transition-colors ${
+            aimStatus?.connected
+              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20'
+              : 'text-foreground/85 hover:bg-muted'
+          }`}
+          title={aimStatus?.connected ? 'Download sessions from AiM device' : 'Pull sessions from AiM (device not currently reachable via WiFi)'}
         >
-          <Settings className="w-4 h-4" />
+          <Download className="w-4 h-4" />
+          Pull
         </button>
-      </header>
 
-      {/* Action bar */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border/50 bg-card/50">
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+          className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-medium text-foreground/85 hover:bg-muted transition-colors"
+          title="Upload an .xrk / .xrz file"
         >
-          <Upload className="w-3.5 h-3.5" />
-          Upload File
+          <Upload className="w-4 h-4" />
+          Upload
         </button>
         <input
           ref={fileInputRef}
@@ -299,36 +416,6 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
             e.target.value = '';
           }}
         />
-
-        <button
-          onClick={() => setAimPickerOpen(true)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            aimStatus?.connected
-              ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20'
-              : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-          title={aimStatus?.connected ? 'Download sessions from AiM device' : 'Pull from AiM (device not currently reachable via WiFi)'}
-        >
-          <Download className="w-3.5 h-3.5" />
-          Pull from AiM
-        </button>
-
-        {/*
-         * Live opens the dashboard and starts the live TCP session immediately
-         * (same idea as Race Studio’s first screen after selecting the logger).
-         */}
-        <button
-          onClick={() => onOpenLive(aimStatus?.connected ? aimStatus.device : null)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            aimStatus?.connected
-              ? 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 hover:bg-emerald-500/20'
-              : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
-          }`}
-          title={aimStatus?.connected ? 'Stream live data from the AiM device' : 'Open live view (offline preview: AiM device not reachable)'}
-        >
-          <Activity className="w-3.5 h-3.5" />
-          Live
-        </button>
 
         <button
           onClick={async () => {
@@ -347,14 +434,15 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
             }
             setShowActivityLog(v => !v);
           }}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+          className={`flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-medium transition-colors ${
             showActivityLog
-              ? 'bg-primary/20 text-primary'
-              : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground'
+              ? 'bg-primary/15 text-primary-text'
+              : 'text-foreground/85 hover:bg-muted'
           }`}
           title="Recent uploads and AiM pulls (server-side log)"
+          aria-pressed={showActivityLog}
         >
-          <FileClock className="w-3.5 h-3.5" />
+          <FileClock className="w-4 h-4" />
           Activity
         </button>
 
@@ -362,16 +450,41 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
 
         {/* Search */}
         <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/50" />
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
           <input
             type="text"
             placeholder="Search sessions..."
+            aria-label="Search sessions"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="pl-7 pr-3 py-1.5 w-48 rounded-md text-xs bg-muted/30 border border-border/50 text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:border-primary/50"
+            className="pl-8 pr-3 h-8 w-56 rounded-lg text-[13px] bg-muted/60 border border-transparent text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/50 focus:bg-background transition-colors"
           />
         </div>
-      </div>
+
+        {/* AiM connection, in words rather than a faded icon */}
+        {aimStatus?.connected ? (
+          <div className="hidden md:flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 ml-2" title={aimStatus.device?.device_name || aimStatus.device?.ip}>
+            <Wifi className="w-3.5 h-3.5" />
+            AiM {aimStatus.device?.device_name ? `(${aimStatus.device.device_name})` : 'Connected'}
+          </div>
+        ) : (
+          <div className="hidden md:flex items-center gap-1.5 text-xs text-muted-foreground ml-2" title="AiM device not reachable over WiFi">
+            <WifiOff className="w-3.5 h-3.5" />
+            AiM offline
+          </div>
+        )}
+
+        <div className="w-px h-6 bg-border mx-1" />
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        <button
+          onClick={onOpenSettings}
+          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          title="Settings"
+          aria-label="Settings"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
+      </header>
 
       {/* Error banner */}
       {error && (
@@ -385,7 +498,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       {uploadProgress && (
         <div className="mx-4 mt-2 px-3 py-2 rounded-md text-xs bg-primary/10 border border-primary/20">
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-primary font-medium flex items-center gap-1.5">
+            <span className="text-primary-text font-medium flex items-center gap-1.5">
               <Loader2 className="w-3 h-3 animate-spin" />
               Uploading {formatBytes(uploadProgress.loaded)} / {formatBytes(uploadProgress.total)}
             </span>
@@ -405,18 +518,18 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
         <div className="mx-4 mt-2 rounded-md border border-border/50 bg-card/50 overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2 border-b border-border/50">
             <div className="flex items-center gap-2 text-xs font-medium">
-              <FileClock className="w-3.5 h-3.5 text-primary" />
+              <FileClock className="w-3.5 h-3.5 text-primary-text" />
               Activity (server-side log)
               <div className="flex rounded-md border border-border/50 overflow-hidden ml-2">
                 <button
                   onClick={() => setActivityTab('uploads')}
-                  className={`px-2 py-0.5 text-[10px] ${activityTab === 'uploads' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted/50'}`}
+                  className={`px-2 py-0.5 text-[10px] ${activityTab === 'uploads' ? 'bg-primary/20 text-primary-text' : 'text-muted-foreground hover:bg-muted/50'}`}
                 >
                   Uploads
                 </button>
                 <button
                   onClick={() => setActivityTab('aim')}
-                  className={`px-2 py-0.5 text-[10px] ${activityTab === 'aim' ? 'bg-primary/20 text-primary' : 'text-muted-foreground hover:bg-muted/50'}`}
+                  className={`px-2 py-0.5 text-[10px] ${activityTab === 'aim' ? 'bg-primary/20 text-primary-text' : 'text-muted-foreground hover:bg-muted/50'}`}
                 >
                   AiM Pulls
                 </button>
@@ -531,12 +644,12 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       {/* Session list */}
       <div id="session-list-scroll" className="flex-1 overflow-y-auto px-4 py-3">
         {sessionsLoading ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/60">
-            <Loader2 className="w-8 h-8 text-primary animate-spin" aria-hidden />
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+            <Loader2 className="w-8 h-8 text-primary-text animate-spin" aria-hidden />
             <p className="text-sm font-medium text-foreground/60">Loading sessions...</p>
           </div>
         ) : sortedSessions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground/60">
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
             {sessions.length === 0 ? (
               <>
                 <div className="w-16 h-16 rounded-full bg-muted/20 border border-border/50 flex items-center justify-center">
@@ -544,7 +657,7 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                 </div>
                 <p className="text-sm font-medium text-foreground/60">No sessions yet</p>
                 <p className="text-xs text-center max-w-xs">
-                  Upload a <span className="font-mono text-primary/80">.xrk</span> file or pull from an AiM device to get started.
+                  Upload a <span className="font-mono text-primary-text/80">.xrk</span> file or pull from an AiM device to get started.
                 </p>
               </>
             ) : (
@@ -552,9 +665,15 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
             )}
           </div>
         ) : (
-          <div className="space-y-1.5">
-            {sortedSessions.map(session => {
+          <div className="space-y-5 max-w-5xl mx-auto">
+            {sessionGroups.map(group => (
+            <section key={group.label} aria-label={group.label}>
+              <h2 className="px-1 mb-1.5 text-xs font-semibold text-muted-foreground">{group.label}</h2>
+              <div className="rounded-xl border border-[hsl(225,25%,85%)] dark:border-border/60 bg-[hsl(225,30%,97%)] dark:bg-card divide-y divide-[hsl(225,25%,88%)] dark:divide-border/50">
+            {group.items.map(session => {
               const isLoading = loadingId === session.id;
+              // Any load in flight blocks the other rows too (see loadBusyRef).
+              const isBlocked = loadingId !== null;
               const sourceCfg = SOURCE_CONFIG[session.source];
               const SourceIcon = sourceCfg.icon;
 
@@ -565,20 +684,22 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                   key={session.id}
                   role="button"
                   tabIndex={isLoading ? -1 : 0}
-                  aria-disabled={isLoading}
-                  onClick={() => { if (!isLoading) handleSessionClick(session); }}
+                  aria-disabled={isBlocked}
+                  onClick={() => { if (!isBlocked) handleSessionClick(session); }}
                   onKeyDown={(e) => {
-                    if (e.target !== e.currentTarget || isLoading) return;
+                    if (e.target !== e.currentTarget || isBlocked) return;
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       handleSessionClick(session);
                     }
                   }}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-[hsl(225,30%,95%)] dark:bg-card border border-[hsl(225,25%,85%)] dark:border-border/50 hover:bg-[hsl(225,35%,91%)] dark:hover:bg-muted hover:border-[hsl(225,30%,78%)] dark:hover:border-border transition-colors group ${isLoading ? 'opacity-60' : 'cursor-pointer'}`}
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 first:rounded-t-xl last:rounded-b-xl text-left hover:bg-[hsl(225,35%,93%)] dark:hover:bg-muted/70 focus-visible:bg-muted/70 transition-colors group ${isLoading ? 'opacity-60' : 'cursor-pointer'}`}
                 >
                   {/* GPS thumbnail (only for sessions with a local file) */}
-                  {session.local_path && (
+                  {session.local_path ? (
                     <GPSThumbnail sessionId={session.id} size={36} />
+                  ) : (
+                    <div aria-hidden className="w-9 h-9 rounded-md bg-muted/50 flex-shrink-0" />
                   )}
 
                   {/* Main info */}
@@ -606,49 +727,91 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                           {session.aim_session_id || session.filename}
                         </span>
                       )}
-                      {session.track_name && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary dark:text-primary border border-primary/20 flex-shrink-0">
-                          {session.track_name}
-                        </span>
-                      )}
                     </div>
-                    <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                      {session.driver_name && <span>{session.driver_name}</span>}
-                      {session.vehicle_name && <span>{session.vehicle_name}</span>}
-                      {session.recorded_at && <span>{formatDate(session.recorded_at)}</span>}
+                    {/* One quiet details line; each item its own node, dot-separated */}
+                    <div className="flex items-center mt-0.5 text-xs text-muted-foreground min-w-0 overflow-hidden whitespace-nowrap">
+                      {[session.vehicle_name, session.track_name, session.driver_name, session.recorded_at && formatDate(session.recorded_at)]
+                        .filter(Boolean)
+                        .map((item, i) => (
+                          <span key={i} className="flex items-center min-w-0">
+                            {i > 0 && <span aria-hidden className="mx-1.5 text-muted-foreground/60">·</span>}
+                            <span className="truncate">{item}</span>
+                          </span>
+                        ))}
                     </div>
                   </div>
 
                   {/* Meta pills */}
-                  <div className="hidden sm:flex items-center gap-2 flex-shrink-0 text-xs text-muted-foreground">
+                  <div className="hidden sm:flex items-center gap-4 flex-shrink-0 text-[13px] text-muted-foreground">
                     {session.index_status === 'pending' ? (
                       <span
-                        className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary"
+                        className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary-text"
                         title="Downloaded; reading laps and metadata in the background"
                       >
                         <Loader2 className="w-2.5 h-2.5 animate-spin" />
                         Indexing
                       </span>
-                    ) : (
-                      <span className="tabular">{formatDuration(session.duration_s)}</span>
+                    ) : null}
+                    {/* Fixed-width, right-aligned columns so numbers line up row to row */}
+                    <span className="w-14 text-right tabular">{session.lap_count > 0 ? `${session.lap_count} laps` : ''}</span>
+                    {session.index_status !== 'pending' && (
+                      <span className="w-16 text-right tabular text-foreground">{formatDuration(session.duration_s)}</span>
                     )}
-                    {session.lap_count > 0 && (
-                      <span>{session.lap_count} laps</span>
-                    )}
-                    <span title={sourceCfg.label} className="inline-flex">
-                      <SourceIcon className="w-3 h-3" />
+                    <span title={sourceCfg.label} aria-label={sourceCfg.label} className="inline-flex w-4 justify-center">
+                      <SourceIcon className="w-3.5 h-3.5" />
                     </span>
                   </div>
 
                   {/* Actions */}
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {isLoading ? (
-                      <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                      <Loader2 className="w-4 h-4 text-primary-text animate-spin" />
                     ) : (
                       <>
+                        <div
+                          className="relative"
+                          ref={exportMenuSessionId === session.id ? exportMenuRef : undefined}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => openExportMenu(e, session.id)}
+                            disabled={exportBusyId === session.id}
+                            className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary transition-all disabled:opacity-50"
+                            title="Export"
+                          >
+                            {exportBusyId === session.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Download className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                          {exportMenuSessionId === session.id && (
+                            <div
+                              className={`absolute right-0 ${isExportMenuAbove ? 'bottom-full mb-1' : 'top-full mt-1'} z-30 min-w-[168px] rounded-md border border-border bg-card py-1 shadow-lg`}
+                              data-testid="session-export-menu"
+                              data-placement={isExportMenuAbove ? 'above' : 'below'}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                className="w-full px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted/50"
+                                onClick={(e) => handleExportCsv(e, session)}
+                              >
+                                Export CSV…
+                              </button>
+                              <button
+                                type="button"
+                                className="w-full px-3 py-1.5 text-left text-xs text-foreground hover:bg-muted/50"
+                                onClick={(e) => handleExportXrk(e, session)}
+                              >
+                                Export XRK…
+                              </button>
+                            </div>
+                          )}
+                        </div>
                         <button
                           onClick={(e) => startRename(e, session)}
-                          className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary transition-all"
+                          className="p-1 rounded opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary-text transition-all"
                           title="Rename"
                         >
                           <Pencil className="w-3.5 h-3.5" />
@@ -667,6 +830,9 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
                 </div>
               );
             })}
+              </div>
+            </section>
+            ))}
           </div>
         )}
       </div>
@@ -675,22 +841,35 @@ export function SessionBrowser({ onSessionLoaded, onOpenSettings, onOpenLive, th
       {isDragOver && (
         <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary/50 flex items-center justify-center z-10 rounded-lg">
           <div className="bg-card/90 rounded-xl px-6 py-4 text-center">
-            <Upload className="w-6 h-6 text-primary mx-auto mb-2" />
+            <Upload className="w-6 h-6 text-primary-text mx-auto mb-2" />
             <p className="text-sm font-medium text-foreground">Drop .xrk / .xrz file to upload</p>
           </div>
         </div>
       )}
 
       {/* AiM Session Picker */}
-      {aimPickerOpen && (
+      <Presence show={aimPickerOpen}>
+        {aimPickerOpen && (
         <AimSessionPicker
           onClose={() => setAimPickerOpen(false)}
           onDownloaded={handleAimPickerDownloaded}
         />
+        )}
+      </Presence>
+
+      {csvExport && (
+        <ExportDialog
+          key={csvExport.sessionId}
+          sessionId={csvExport.sessionId}
+          browserChannels={csvExport.channels}
+          fileName={csvExport.fileName}
+          exportBaseName={csvExport.exportBaseName}
+          onClose={() => setCsvExport(null)}
+        />
       )}
 
       {/* Footer */}
-      <div className="px-4 py-2 border-t border-border/50 bg-card/30 text-xs text-muted-foreground/50">
+      <div className="px-4 py-2 border-t border-border/50 bg-card/30 text-xs text-muted-foreground">
         {sessionsLoading
           ? 'Loading sessions…'
           : `${sessions.length} session${sessions.length !== 1 ? 's' : ''}`}

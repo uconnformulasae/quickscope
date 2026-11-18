@@ -42,7 +42,7 @@ start.sh                    ← Single entry point, starts both servers
 
 ## Backend API (backend/main.py)
 
-All endpoints prefixed with `/api/`. Backend is stateful — one session at a time.
+All endpoints prefixed with `/api/`. The backend keeps one *active* session (the last one loaded); `/api/channels`, `/api/data`, `/api/laps` and `/api/gps` also take `session_id=<id>`, which the UI always sends, so each window reads the session it is showing rather than whichever was loaded last.
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
@@ -52,18 +52,25 @@ All endpoints prefixed with `/api/`. Backend is stateful — one session at a ti
 | `/api/laps` | GET | Lap timing data |
 | `/api/gps` | GET | GPS lat/lon/speed (filtered for valid fixes) |
 | `/api/export?channels=A,B` | GET | CSV download with interpolated timebase |
+| `/api/health` | GET | `{"app": "quickscope"}`; the Electron shell waits for this before opening the window |
 
 `parse_xrk()` returns a `LogFile` with channels as a `dict[str, pyarrow.Table]` where each table has columns `timecodes` (int64 ms) and the channel value column. Metadata is a plain dict. Laps is a PyArrow table with `num`, `start_time`, `end_time`.
 
 **Parser selection:** On Windows, QuickScope tries the official AiM `MatLabXRK` DLL first (`backend/vendor/MatLabXRK-2017-64-ReleaseU.dll` or `AIM_XRK_DLL`). If the DLL is missing or fails, it falls back to libxrk. Mac/Linux always use libxrk. Override via start-script flags (`./start.ps1 -Libxrk` / `-Dll`, or `./start.sh --libxrk` / `--dll`) or env `QUICKSCOPE_PARSER=libxrk|aim_dll`.
 
-GPS timecodes may differ between parsers; the `/api/gps` endpoint offsets them by subtracting `min(timestamps)`.
+**Pulling from the logger:** the logger reuses file names once its memory is cleared. A pulled file whose name matches a local file of a different size is stored beside it with a `_2`, `_3` ... suffix (`aim_connector.pull_target_path`); the local session is never replaced or deleted.
+
+GPS timecodes are session time, the same clock as every other channel: libxrk's wall-clock GPS timecodes are rebased once at parse time (`parsers/libxrk_fixup.py`), and `/api/gps` and GPS lap detection return them as-is, so the map cursor and GPS-detected laps line up with the chart even when GPS gets its first fix late.
+
+**Local only:** `origins.LocalOnlyMiddleware` rejects any request whose `Host` is not this machine or whose `Origin` is not the local UI. Set `QUICKSCOPE_ALLOWED_HOSTS` (comma-separated hostnames/IPs) to serve other machines.
 
 ## Frontend key patterns
 
 ### State management
 
-`useXRKStore.ts` uses a single `useState<AppState>()` hook. All state mutations go through `useCallback` setters. Transient state (cursor position, zoom range, drag state) lives in `useRef` inside `TelemetryChart` to avoid React re-renders on every mouse move.
+`useXRKStore.ts` uses a single `useState<AppState>()` hook. All state mutations go through `useCallback` setters. Transient state (cursor position, zoom range, drag state) lives in `useRef` inside `TelemetryChart` to avoid React re-renders on every mouse move. The chart cursor time is shared through `lib/cursorStore.ts` (a small subscribe-able store returned by the hook as `cursorStore`), not `AppState`, so only the GPS marker re-renders as the mouse moves.
+
+**Session changes:** the store keeps one session generation counter. Async work captures it (`getSessionGeneration()` / `beginSessionChange()`) and checks `isCurrentSession()` after every `await`; channel indices are reused between sessions, so a late result must never be written into the session now on screen.
 
 **`TimeRange` uses milliseconds.** Fields are named `startMs`/`endMs`. Timestamps in `ChannelSample` are also milliseconds. The chart converts to seconds internally for display.
 
@@ -80,10 +87,10 @@ This is the most complex component. Key design:
 - **Touch**: pinch-to-zoom + single-finger pan
 - **Cursor**: `hoverXRef` always tracks mouse; `cursorXRef`/`cursor2XRef` for placed cursors
 - **Delta mode**: two placed cursors with shaded region and Δ panel
-- **Min/max markers**: precomputed from full dataset (cached in `globalMinMaxCache` ref), drawn as triangles with off-screen arrows
+- **Min/max markers**: min and max of the visible window, computed in `chart-draw.ts` and kept in the per-series frame cache (`ChartFrameCache`) until the zoom or the data changes
 
 **Performance rules:**
-- Never call `setState` from mouse/touch handlers — only set refs + `needsDrawRef.current = true`
+- Never call `setState` from mouse/touch handlers — only set refs + `needsDrawRef.current = true`. Values a React child needs while the mouse moves (the cursor time, the delta cursor pair) go through a `ValueStore` from `lib/cursorStore.ts` that the child subscribes to
 - `onViewRangeChange` is debounced at 100ms
 - Min-max trace reduces draw calls for dense data without dropping visible information
 - `requestAnimationFrame` loop only draws when `needsDrawRef.current` is set
@@ -190,5 +197,6 @@ npm run build
 - Monospace font: JetBrains Mono (for data values, axis labels)
 - UI font: DM Sans (for labels, buttons, headings)
 - All new components should use Tailwind classes, not inline styles (except Canvas drawing)
+- Dialogs use `components/Modal.tsx` for the scrim, panel and close behaviour; unit factors live only in `lib/units.ts`; time lookups use `lib/binary-search.ts`
 - Icons from `lucide-react` only
 - File naming: PascalCase for components, camelCase for lib files

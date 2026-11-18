@@ -6,6 +6,7 @@ import logging
 import re
 import socket
 
+from services.aim_device_cache import get_cached, record_from_parsed
 from services.settings_store import load as load_settings
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,33 @@ _DEFAULT_DEVICE_IPS = ("10.0.0.1", "192.168.137.1", "192.168.1.1", "192.168.4.1"
 
 
 def configured_device_ip() -> str:
-    return load_settings().get("aim_device_ip", "10.0.0.1")
+    return load_settings().get("aim_device_ip", DEFAULT_DEVICE_IP)
+
+
+def configured_device_port() -> int:
+    return int(load_settings().get("aim_device_port", DATA_PORT))
+
+
+def resolve_device_host(host: str | None = None) -> str:
+    """Where to dial the logger: an explicit host, else the address it last
+    answered from, else the one in Settings. The one place this is decided."""
+    if host:
+        return host
+    cached = get_cached()
+    if cached is not None:
+        return cached.ip
+    return configured_device_ip() or DEFAULT_DEVICE_IP
+
+
+def remember_device(ip: str, data: bytes) -> dict:
+    """Parse a discovery reply and record the device as reachable.
+
+    Both discovery entry points (the session browser's and the live view's)
+    end here, so they can't disagree about who the logger is.
+    """
+    info = parse_discovery_text(ip, data)
+    record_from_parsed(info)
+    return info
 
 
 def candidate_device_ips() -> list[str]:

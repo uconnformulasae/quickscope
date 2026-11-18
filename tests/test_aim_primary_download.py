@@ -191,7 +191,9 @@ def test_download_file_twice_on_one_stream_keeps_files_separate(tmp_path):
         return one, two
 
     # Act
-    (one, two), _writer = _run_on_primary(_file_reply(first) + _file_reply(second), both)
+    (one, two), _writer = _run_on_primary(
+        _file_reply(first) + _file_reply(second), both, eof=False,
+    )
 
     # Assert
     assert one.read_bytes() == first
@@ -210,7 +212,7 @@ def test_download_file_raises_when_device_rejects_the_request(tmp_path):
 def test_download_file_reuses_complete_local_file_without_touching_the_socket(tmp_path):
     (tmp_path / "a_0001.xrz").write_bytes(b"x" * 500)
     path, writer = _run_on_primary(
-        b"", lambda client: client.download_file("a_0001.xrz", tmp_path, 500)
+        b"", lambda client: client.download_file("a_0001.xrz", tmp_path, 500), eof=False,
     )
 
     assert path.read_bytes() == b"x" * 500

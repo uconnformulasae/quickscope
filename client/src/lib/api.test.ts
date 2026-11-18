@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteSession,
   exportCSV,
+  exportSessionCSV,
+  fetchSessionFile,
   fetchAimPullLog,
   fetchChannelData,
   fetchGPS,
   fetchGPSPreview,
+  fetchLaps,
   fetchUploadLog,
   getSettings,
   listSessions,
@@ -13,6 +16,7 @@ import {
   loadSession,
   pullFromAim,
   renameSession,
+  setDataSession,
   updateSettings,
 } from './api';
 
@@ -195,10 +199,60 @@ describe('analysis endpoints', () => {
     fetchMock.mockResolvedValue(jsonResponse({}, { status: 400 }));
     await expect(exportCSV(['RPM'])).rejects.toThrow('Export failed: 400');
   });
+
+  it('exports a stored session CSV as a blob', async () => {
+    fetchMock.mockResolvedValue(jsonResponse('a,b'));
+    const blob = await exportSessionCSV('sid-1', ['RPM']);
+    expect(blob).toBeInstanceOf(Blob);
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/api/sessions/sid-1/export?channels=RPM`);
+  });
+
+  it('downloads the session file as a blob with filename from Content-Disposition', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: (name: string) => (name.toLowerCase() === 'content-disposition' ? 'attachment; filename="run.xrk"' : null) },
+      blob: async () => new Blob(['xrk']),
+    } as Response);
+    const { blob, filename } = await fetchSessionFile('sid-2');
+    expect(blob).toBeInstanceOf(Blob);
+    expect(filename).toBe('run.xrk');
+    expect(fetchMock).toHaveBeenCalledWith(`${BASE}/api/sessions/sid-2/file`);
+  });
 });
 
 describe('liveWebSocketUrl', () => {
   it('swaps http for ws', () => {
     expect(liveWebSocketUrl()).toBe('ws://localhost:8000/api/live/ws');
+  });
+});
+
+describe('data session', () => {
+  afterEach(() => setDataSession(null));
+
+  it('names the shown session on every data request', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ gps: null, laps: [], source: 'none' }));
+    setDataSession('sid 1');
+
+    await fetchChannelData(['RPM']);
+    await fetchGPS();
+    await fetchLaps();
+
+    expect(fetchMock.mock.calls.map(c => c[0])).toEqual([
+      `${BASE}/api/data?channels=RPM&session_id=sid%201`,
+      `${BASE}/api/gps?session_id=sid%201`,
+      `${BASE}/api/laps?session_id=sid%201`,
+    ]);
+  });
+
+  it('sends no session id once the session is closed', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ gps: null, laps: [], source: 'none' }));
+    setDataSession('sid-1');
+    setDataSession(null);
+
+    await fetchGPS();
+    await fetchLaps();
+
+    expect(fetchMock.mock.calls.map(c => c[0])).toEqual([`${BASE}/api/gps`, `${BASE}/api/laps`]);
   });
 });

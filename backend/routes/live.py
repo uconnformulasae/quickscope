@@ -11,10 +11,10 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from origins import is_allowed_origin
+from origins import is_allowed_request_origin
 
 from services.aim_primary_hub import get_aim_primary_hub
-from services.aim_discovery import DEFAULT_DEVICE_IP
+from services.aim_discovery import DEFAULT_DEVICE_IP, resolve_device_host
 from services.aim_device_cache import get_cached
 from services import aim_live, live_channel_cache
 from services.aim_live import user_visible_error
@@ -40,16 +40,14 @@ async def live_ws(websocket: WebSocket) -> None:
     # CORS never applies to WebSocket handshakes, so any web page could open
     # this socket and take over the logger link -- check Origin ourselves.
     origin = websocket.headers.get("origin")
-    if not is_allowed_origin(origin):
+    if not is_allowed_request_origin(origin):
         logger.warning("Live WS: rejected connection from origin %r", origin)
         await websocket.close(code=1008)
         return
     await websocket.accept()
     settings = load_settings()
-    host = settings.get("aim_device_ip", DEFAULT_DEVICE_IP)
     cached = get_cached()
-    if cached is not None:
-        host = cached.ip
+    host = resolve_device_host()
     logger.info(
         "Live WS: client connected (configured_host=%s cached=%s)",
         settings.get("aim_device_ip", DEFAULT_DEVICE_IP),
@@ -99,8 +97,8 @@ async def live_ws(websocket: WebSocket) -> None:
         await hub.release_live()
         trace.close(
             outcome="device_drop" if device_dropped else "normal",
-            snapshots=client._snapshots_yielded,
-            poll_a_timeouts=client._poll_a_timeouts,
+            snapshots=client.snapshots_yielded,
+            poll_a_timeouts=client.poll_timeouts,
         )
         try:
             await websocket.close()
@@ -110,6 +108,24 @@ async def live_ws(websocket: WebSocket) -> None:
 
 class _DeviceDropped(Exception):
     """The AiM device closed the live TCP mid-stream."""
+
+
+class _LiveQueue(asyncio.Queue):
+    """Outbound message queue that sheds old snapshots first when it is full.
+
+    A stale snapshot is worthless once a newer one exists, but a status or
+    error frame is the only copy of what it says: dropping "live" after
+    "reconnecting" went out would leave the browser showing a dead link.
+    """
+
+    def drop_oldest(self) -> None:
+        pending = self._queue  # the deque asyncio.Queue subclasses work on
+        for i, item in enumerate(pending):
+            if isinstance(item, dict) and item.get("type") == "snapshot":
+                del pending[i]
+                return
+        if pending:
+            pending.popleft()
 
 
 async def _stream_session(
@@ -154,7 +170,7 @@ async def _stream_session(
     # fills, since only the latest data is useful to a live view.
     stop = asyncio.Event()
     device_dropped = False
-    queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAX)
+    queue = _LiveQueue(maxsize=_QUEUE_MAX)
     _SENTINEL = None
 
     sent_units: dict[str, str] | None = None
@@ -163,7 +179,7 @@ async def _stream_session(
         nonlocal sent_units
         msg = {
             "type": "snapshot",
-            "seq": client._snapshots_yielded,
+            "seq": client.snapshots_yielded,
             "ts": snap.timestamp_ms,
             "subsystem": snap.subsystem,
             "channels": snap.channels,
@@ -196,10 +212,7 @@ async def _stream_session(
 
     def _enqueue(item: dict) -> None:
         if queue.full():
-            try:
-                queue.get_nowait()  # drop the oldest, keep the newest
-            except asyncio.QueueEmpty:
-                pass
+            queue.drop_oldest()  # keep the newest
         queue.put_nowait(item)
 
     # Channel names seen this session, cached for the offline layout editor.
@@ -306,8 +319,7 @@ async def live_status() -> dict:
 
     Returns the parsed identity if the device replies to a UDP probe.
     """
-    settings = load_settings()
-    host = settings.get("aim_device_ip", DEFAULT_DEVICE_IP)
+    host = resolve_device_host()
     cached = get_cached()
     if cached is not None:
         logger.debug(

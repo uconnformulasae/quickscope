@@ -38,6 +38,19 @@ def test_math_still_works_inside_scripts():
     assert _run("y = math.sqrt(16) + math.floor(2.7)")["y"] == 6.0
 
 
+def test_top_level_variables_are_visible_inside_generator_expressions():
+    assert _run("k = 2\nresult = sum(x * k for x in [1, 2, 3])")["result"] == 12
+
+
+def test_top_level_variables_are_visible_inside_functions():
+    assert _run("k = 3\ndef scale(x):\n    return x * k\nresult = scale(2)")["result"] == 6
+
+
+def test_only_script_defined_names_are_returned():
+    out = _run("result = 1")
+    assert out == {"result": 1}
+
+
 @pytest.mark.parametrize("name", ["empty", "empty_like", "ndarray"])
 def test_uninitialised_buffers_and_raw_ndarray_are_not_exposed(name):
     with pytest.raises(AttributeError):

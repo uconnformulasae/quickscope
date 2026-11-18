@@ -3,6 +3,11 @@
  * Communicates with the Python/libxrk backend
  */
 
+import { filenameFromContentDisposition } from './contentDisposition';
+import type { LapSource } from './xrk-parser';
+
+export type { LapSource };
+
 // In packaged Electron builds, preload.js injects window.__QUICKSCOPE_BACKEND__.
 // In browser dev (`npm run dev`), fall back to the current hostname on port 8000.
 declare global {
@@ -12,9 +17,30 @@ declare global {
 }
 
 const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-const API_BASE =
+/** Backend origin. The one place this is worked out; import it, don't rebuild it. */
+export const API_BASE =
   (typeof window !== 'undefined' && window.__QUICKSCOPE_BACKEND__) ||
   `${isHttps ? 'https' : 'http'}://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+
+/** The server's own explanation (`detail`) when it sent one, else `<fallback>: <status>`. */
+async function detailError(res: Response, fallback: string): Promise<Error> {
+  const err = await res.json().catch(() => ({ detail: res.statusText }));
+  return new Error(err.detail || `${fallback}: ${res.status}`);
+}
+
+// The session this window is showing. Sent with every data request so the
+// backend answers for it, not for whichever session was loaded last (which
+// may have been loaded by another window).
+let dataSessionId: string | null = null;
+
+/** Name the session the data routes should read; `null` means "the active one". */
+export function setDataSession(sessionId: string | null): void {
+  dataSessionId = sessionId;
+}
+
+function dataSessionParam(prefix: '?' | '&'): string {
+  return dataSessionId ? `${prefix}session_id=${encodeURIComponent(dataSessionId)}` : '';
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -56,6 +82,8 @@ export interface GPSData {
   lat: number[];
   lon: number[];
   speed: number[] | null;
+  /** Units of the speed channel ('' when unknown / no speed channel). */
+  speedUnits?: string;
 }
 
 export interface LocalSession {
@@ -114,29 +142,23 @@ export async function listSessions(): Promise<LocalSession[]> {
 }
 
 export async function loadSession(sessionId: string): Promise<SessionInfo> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/load`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Load failed: ${res.status}`);
-  }
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/load`, { method: 'POST' });
+  if (!res.ok) throw await detailError(res, 'Load failed');
   return res.json();
 }
 
 export async function renameSession(sessionId: string, filename: string): Promise<LocalSession> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/rename`, {
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/rename`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ filename }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `Rename failed: ${res.status}`);
-  }
+  if (!res.ok) throw await detailError(res, 'Rename failed');
   return res.json();
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}`, { method: 'DELETE' });
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
 }
 
@@ -181,10 +203,7 @@ export async function pullFromAim(filenames: string[]): Promise<AimPullResponse>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ filenames }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `AiM pull failed: ${res.status}`);
-  }
+  if (!res.ok) throw await detailError(res, 'AiM pull failed');
   return res.json();
 }
 
@@ -239,7 +258,10 @@ export async function updateSettings(settings: Partial<Settings>): Promise<Setti
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   });
-  if (!res.ok) throw new Error(`Failed to update settings: ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(typeof err.detail === 'string' ? err.detail : `Failed to update settings: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -350,7 +372,7 @@ export async function fetchChannelData(
   if (channels.length === 0) return new Map();
 
   const res = await fetch(
-    `${API_BASE}/api/data?channels=${encodeURIComponent(channels.join(','))}`,
+    `${API_BASE}/api/data?channels=${encodeURIComponent(channels.join(','))}${dataSessionParam('&')}`,
   );
 
   if (!res.ok) {
@@ -366,15 +388,13 @@ export async function fetchChannelData(
 }
 
 export async function fetchGPS(): Promise<GPSData | null> {
-  const res = await fetch(`${API_BASE}/api/gps`);
+  const res = await fetch(`${API_BASE}/api/gps${dataSessionParam('?')}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch GPS: ${res.status}`);
   }
   const data = await res.json();
   return data.gps || null;
 }
-
-export type LapSource = 'device' | 'gps_auto' | 'beacon_auto' | 'none';
 
 export interface LapsResponse {
   laps: {
@@ -387,7 +407,7 @@ export interface LapsResponse {
 }
 
 export async function fetchLaps(): Promise<LapsResponse> {
-  const res = await fetch(`${API_BASE}/api/laps`);
+  const res = await fetch(`${API_BASE}/api/laps${dataSessionParam('?')}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch laps: ${res.status}`);
   }
@@ -406,7 +426,7 @@ export interface GPSPreview {
 }
 
 export async function fetchGPSPreview(sessionId: string): Promise<GPSPreview | null> {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/gps-preview`);
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/gps-preview`);
   if (!res.ok) {
     if (res.status === 404) return null;
     throw new Error(`Failed to fetch GPS preview: ${res.status}`);
@@ -481,11 +501,6 @@ export interface LiveChannelCache {
   units?: Record<string, string>;
 }
 
-async function detailError(res: Response, fallback: string): Promise<Error> {
-  const err = await res.json().catch(() => ({ detail: res.statusText }));
-  return new Error(err.detail || `${fallback}: ${res.status}`);
-}
-
 export async function fetchLiveLayouts(): Promise<LiveLayoutsResponse> {
   const res = await fetch(`${API_BASE}/api/live/layouts`);
   if (!res.ok) throw await detailError(res, 'Failed to load layouts');
@@ -523,12 +538,46 @@ export async function fetchLiveChannels(vehicle: 'ev' | 'ic'): Promise<LiveChann
   return res.json();
 }
 
-export async function exportCSV(channels: string[]): Promise<Blob> {
+/** Per-channel display-unit conversion for the CSV: value * scale + offset. */
+export type ExportConversions = Record<string, { unit: string; scale: number; offset: number }>;
+
+export async function exportCSV(channels: string[], convert?: ExportConversions): Promise<Blob> {
+  const params = new URLSearchParams({ channels: channels.join(',') });
+  if (convert && Object.keys(convert).length > 0) params.set('convert', JSON.stringify(convert));
+  const res = await fetch(`${API_BASE}/api/export?${params.toString()}`);
+  if (!res.ok) {
+    throw new Error(`Export failed: ${res.status}`);
+  }
+  return res.blob();
+}
+
+export async function exportSessionCSV(
+  sessionId: string,
+  channels: string[],
+  convert?: ExportConversions,
+): Promise<Blob> {
+  const params = new URLSearchParams({ channels: channels.join(',') });
+  if (convert && Object.keys(convert).length > 0) params.set('convert', JSON.stringify(convert));
   const res = await fetch(
-    `${API_BASE}/api/export?channels=${encodeURIComponent(channels.join(','))}`,
+    `${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/export?${params.toString()}`,
   );
   if (!res.ok) {
     throw new Error(`Export failed: ${res.status}`);
   }
   return res.blob();
+}
+
+export interface SessionFileDownload {
+  blob: Blob;
+  filename: string;
+}
+
+export async function fetchSessionFile(sessionId: string): Promise<SessionFileDownload> {
+  const res = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/file`);
+  if (!res.ok) {
+    throw new Error(`Download failed: ${res.status}`);
+  }
+  const filename =
+    filenameFromContentDisposition(res.headers.get('Content-Disposition')) ?? 'session.xrk';
+  return { blob: await res.blob(), filename };
 }

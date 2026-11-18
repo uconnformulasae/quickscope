@@ -60,7 +60,7 @@ export function ChannelPicker({
       />
       {unseen && (
         <span
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px] text-amber-600 dark:text-amber-400 pointer-events-none"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-amber-600 dark:text-amber-400 pointer-events-none"
           title={`${sources.vehicleLabel} hasn't sent this channel on this laptop yet. It will show "—" until it does.`}
         >
           not seen

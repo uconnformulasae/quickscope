@@ -3,9 +3,17 @@
  */
 import type { XRKSession, ChannelSample } from '../../lib/xrk-parser';
 import type { DerivedChannel } from '../../lib/useXRKStore';
+import type { DisplaySamplesFn } from '../../lib/useDisplaySamples';
 
-/** Resolve channel info from session or derived channels */
-export function resolveChannel(id: number, session: XRKSession, derivedChannels?: DerivedChannel[]) {
+/** Resolve channel info from session or derived channels. With `display`,
+ *  `units` is the display unit (see useDisplaySamples). */
+export function resolveChannel(id: number, session: XRKSession, derivedChannels?: DerivedChannel[], display?: DisplaySamplesFn) {
+  const chan = rawChannel(id, session, derivedChannels);
+  if (!chan || !display) return chan;
+  return { ...chan, units: display.unitOf(chan.shortName, chan.units) };
+}
+
+function rawChannel(id: number, session: XRKSession, derivedChannels?: DerivedChannel[]) {
   const sessionChan = session.channels.get(id);
   if (sessionChan) return sessionChan;
   const dc = derivedChannels?.find(d => d.id === id);
@@ -13,9 +21,17 @@ export function resolveChannel(id: number, session: XRKSession, derivedChannels?
   return null;
 }
 
-/** Resolve sample data from session or derived samples map */
-export function resolveSamples(id: number, session: XRKSession, derivedSamplesMap?: Map<number, ChannelSample[]>) {
-  return session.samples.get(id) || derivedSamplesMap?.get(id) || [];
+/** Resolve sample data from session or derived samples map. With `display`
+ *  (and the derived channel list, for derived units), values are converted
+ *  to display units. */
+export function resolveSamples(
+  id: number, session: XRKSession, derivedSamplesMap?: Map<number, ChannelSample[]>,
+  display?: DisplaySamplesFn, derivedChannels?: DerivedChannel[],
+) {
+  const raw = session.samples.get(id) || derivedSamplesMap?.get(id) || [];
+  if (!display) return raw;
+  const chan = rawChannel(id, session, derivedChannels);
+  return chan ? display(id, chan.shortName, chan.units, raw).samples : raw;
 }
 
 /** Format a number compactly based on magnitude */

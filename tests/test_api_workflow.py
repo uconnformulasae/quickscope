@@ -103,6 +103,30 @@ def test_reupload_same_filename_does_not_duplicate(client_with_synthetic_log):
     assert len(client_with_synthetic_log.get("/api/sessions").json()) == 1
 
 
+@pytest.mark.parametrize(
+    "bad_parse",
+    [
+        pytest.param(lambda *a, **k: (_ for _ in ()).throw(RuntimeError("corrupt")), id="parser-raises"),
+        pytest.param(lambda *a, **k: type("EmptyLog", (), {"channels": {}})(), id="no-channels"),
+    ],
+)
+def test_failed_reupload_keeps_existing_session_file(
+    client_with_synthetic_log, isolated_data_dir, monkeypatch, bad_parse
+):
+    c = client_with_synthetic_log
+    upload(c)
+    stored_file = isolated_data_dir / "sessions" / "run1.xrk"
+    assert stored_file.read_bytes() == b"bytes"
+
+    monkeypatch.setattr("routes.analysis.parse_file", bad_parse)
+    res = c.post("/api/upload", files={"file": ("run1.xrk", b"garbage", "application/octet-stream")})
+
+    assert res.status_code in (400, 500)
+    assert stored_file.read_bytes() == b"bytes"
+    assert [p.name for p in stored_file.parent.iterdir()] == ["run1.xrk"]
+    assert len(c.get("/api/sessions").json()) == 1
+
+
 @pytest.mark.parametrize("name", ["notes.txt", "run.csv", "run", "run.xrk.exe", ""])
 def test_upload_rejects_non_xrk_extensions(client_with_synthetic_log, name):
     res = client_with_synthetic_log.post(
@@ -236,6 +260,12 @@ def test_gps_returns_track_with_relative_time(client_with_synthetic_log):
     assert min(gps["speed"]) >= 15.0
 
 
+def test_gps_reports_speed_units(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    gps = client_with_synthetic_log.get("/api/gps").json()["gps"]
+    assert gps["speedUnits"] == "m/s"
+
+
 def test_gps_is_null_when_session_has_no_gps(monkeypatch, isolated_data_dir):
     from main import app
     from conftest import make_log
@@ -285,6 +315,23 @@ def test_export_csv_shape_headers_and_download_name(client_with_synthetic_log):
     assert len(rows) - 1 == 9001  # timebase = RPM (100 Hz)
     assert rows[1] == ["0.000000", "3000.00000", "0.00000"]
     assert float(rows[-1][0]) == pytest.approx(90.0)
+
+
+def test_export_applies_display_unit_conversion(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    convert = json.dumps({"RPM": {"unit": "krpm", "scale": 0.001, "offset": 1}})
+    res = client_with_synthetic_log.get("/api/export", params={"channels": "RPM,Throttle_Pos", "convert": convert})
+    assert res.status_code == 200
+    rows = list(csv.reader(io.StringIO(res.text)))
+    assert rows[0] == ["Time (s)", "RPM (krpm)", "Throttle_Pos (%)"]
+    assert float(rows[1][1]) == pytest.approx(3000 * 0.001 + 1)
+    assert rows[1][2] == "0.00000"
+
+
+def test_export_rejects_malformed_convert(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    res = client_with_synthetic_log.get("/api/export", params={"channels": "RPM", "convert": "not json"})
+    assert res.status_code == 400
 
 
 def test_export_interpolates_slower_channel_onto_timebase(client_with_synthetic_log):
@@ -337,21 +384,66 @@ def test_export_skips_unknown_channels_but_keeps_valid_ones(client_with_syntheti
     assert rows[0] == ["Time (s)", "RPM (rpm)"]
 
 
+def test_session_export_without_active_log(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    sid = client_with_synthetic_log.get("/api/sessions").json()[0]["id"]
+
+    session_cache.clear()
+    state.clear()
+
+    res = client_with_synthetic_log.get(
+        f"/api/sessions/{sid}/export",
+        params={"channels": "RPM,Throttle_Pos"},
+    )
+    assert res.status_code == 200
+    rows = list(csv.reader(io.StringIO(res.text)))
+    assert rows[0] == ["Time (s)", "RPM (rpm)", "Throttle_Pos (%)"]
+
+
+def test_session_file_download(client_with_synthetic_log, isolated_data_dir):
+    upload(client_with_synthetic_log)
+    sid = client_with_synthetic_log.get("/api/sessions").json()[0]["id"]
+    entry = client_with_synthetic_log.get("/api/sessions").json()[0]
+
+    res = client_with_synthetic_log.get(f"/api/sessions/{sid}/file")
+    assert res.status_code == 200
+    assert 'filename="run1.xrk"' in res.headers["content-disposition"]
+    assert len(res.content) > 0
+    on_disk = isolated_data_dir / "sessions" / entry["filename"]
+    assert res.content == on_disk.read_bytes()
+
+
+def test_session_file_download_decompresses_xrz(client_with_synthetic_log, isolated_data_dir):
+    import zlib
+
+    payload = b"synthetic-xrk-bytes"
+    xrz_name = "pulled.xrz"
+    xrz_path = isolated_data_dir / "sessions" / xrz_name
+    xrz_path.write_bytes(zlib.compress(payload))
+
+    entry = session_store.add_session(
+        filename=xrz_name,
+        source="aim_device",
+        aim_session_id="Endurance",
+        local_path=str(xrz_path),
+    )
+    sid = entry["id"]
+
+    res = client_with_synthetic_log.get(f"/api/sessions/{sid}/file")
+    assert res.status_code == 200
+    assert res.content == payload
+    assert 'filename="Endurance.xrk"' in res.headers["content-disposition"]
+
+
+def test_session_export_errors(client_with_synthetic_log):
+    upload(client_with_synthetic_log)
+    sid = client_with_synthetic_log.get("/api/sessions").json()[0]["id"]
+    c = client_with_synthetic_log
+    assert c.get(f"/api/sessions/{sid}/export", params={"channels": ""}).status_code == 400
+    assert c.get(f"/api/sessions/nope/export", params={"channels": "RPM"}).status_code == 404
+
+
 # ─── Derived channels ────────────────────────────────────────────────────────
-
-@pytest.fixture
-def no_sigalrm(monkeypatch):
-    """The derived-channel timeout uses SIGALRM, which only works on the main thread.
-
-    Starlette's TestClient serves requests from a worker thread, so in-process
-    tests stub the alarm out. The real timeout is exercised against a live
-    uvicorn process in test_e2e_process.py.
-    """
-    import signal
-
-    monkeypatch.setattr(signal, "signal", lambda *a, **k: None)
-    monkeypatch.setattr(signal, "alarm", lambda *a, **k: 0)
-
 
 SERIES = {"A": {"timestamps": [0, 1000, 2000], "values": [1.0, 2.0, 3.0]}}
 
@@ -363,7 +455,7 @@ def evaluate(c: TestClient, expression: str, channels: dict | None = None):
     )
 
 
-def test_derived_scales_channel(client_with_synthetic_log, no_sigalrm):
+def test_derived_scales_channel(client_with_synthetic_log):
     res = evaluate(
         client_with_synthetic_log,
         "a = channels['A']\n"
@@ -373,7 +465,20 @@ def test_derived_scales_channel(client_with_synthetic_log, no_sigalrm):
     assert res.json() == {"timestamps": [0, 1000, 2000], "values": [2.0, 4.0, 6.0]}
 
 
-def test_derived_can_use_numpy_math_and_interpolate(client_with_synthetic_log, no_sigalrm):
+def test_derived_helper_function_can_read_top_level_variables(client_with_synthetic_log):
+    res = evaluate(
+        client_with_synthetic_log,
+        "a = channels['A']\n"
+        "gain = 3\n"
+        "def scale(v):\n"
+        "    return v * gain\n"
+        "result = {'timestamps': a['timestamps'], 'values': [scale(v) for v in a['values']]}",
+    )
+    assert res.status_code == 200
+    assert res.json()["values"] == [3.0, 6.0, 9.0]
+
+
+def test_derived_can_use_numpy_math_and_interpolate(client_with_synthetic_log):
     res = evaluate(
         client_with_synthetic_log,
         "a = channels['A']\n"
@@ -400,13 +505,13 @@ def test_derived_can_use_numpy_math_and_interpolate(client_with_synthetic_log, n
         ("__import__('os')", "not allowed"),
     ],
 )
-def test_derived_rejects_bad_scripts(client_with_synthetic_log, expression, fragment, no_sigalrm):
+def test_derived_rejects_bad_scripts(client_with_synthetic_log, expression, fragment):
     res = evaluate(client_with_synthetic_log, expression)
     assert res.status_code == 400
     assert fragment in res.json()["detail"]
 
 
-def test_derived_rejects_oversized_expression(client_with_synthetic_log, no_sigalrm):
+def test_derived_rejects_oversized_expression(client_with_synthetic_log):
     res = evaluate(client_with_synthetic_log, "x" * 50_001)
     assert res.status_code == 400
     assert "too long" in res.json()["detail"]

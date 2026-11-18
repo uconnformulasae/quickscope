@@ -25,13 +25,22 @@ from typing import Protocol
 from services.aim_discovery import (
     DATA_PORT,
     candidate_device_ips,
-    configured_device_ip,
+    configured_device_port,
     parse_discovery_text,
     probe_device_ips,
+    remember_device,
 )
-from services.aim_device_cache import record_from_parsed, record_tcp_device
-from services.aim_download_trace import AimDownloadTrace
-from services.aim_live import decode_frame, encode_frame
+from services.aim_device_cache import record_tcp_device
+from services.aim_download_trace import STREAM_TAIL_BYTES, AimDownloadTrace
+from services.aim_live import (
+    STCP_4BYTE_ACK,
+    STCP_CONTROL_OPS,
+    STCP_HELLO,
+    STCP_OPCODE_OFFSET,
+    decode_frame,
+    encode_frame,
+    resync_offset,
+)
 from services.settings_store import load as load_settings
 
 logger = logging.getLogger(__name__)
@@ -41,9 +50,10 @@ logger = logging.getLogger(__name__)
 # silently drops messages with wrong framing or size.
 # Each STNC message is exactly 84 bytes: header(12) + payload(64) + trailer(8)
 
-_HANDSHAKE = bytes.fromhex("3c685354435008000000003e00000000060800003c535443500e003e")
-_ACK = bytes.fromhex("3c685354435004000000003e000000003c5354435000003e")
-_STCP_Q_ACK_OPCODE_OFFSET = 24
+# Built from the same payload constants the live client sends, so the two
+# can't drift: 3c68535443 5008...3e (hello) and 3c68535443 5004...3e (4-byte ack).
+_HANDSHAKE = encode_frame(b"STCP", STCP_HELLO)
+_ACK = encode_frame(b"STCP", STCP_4BYTE_ACK)
 # The device streams a file in batches of 30 blocks (982,320 bytes) and then
 # waits for a cumulative-progress ACK. Each block carries its *absolute* file
 # offset (RS3_PULL_241/242.pcapng: one contiguous 0..N run). An ACK for N
@@ -60,14 +70,13 @@ _HANDSHAKE_REPLY_TIMEOUT_S = 5.0
 # Give up if no *new contiguous* bytes for this long (leaves room for one or two
 # resume ACKs at _STALL_RESUME_S intervals).
 _PROGRESS_IDLE_S = 30.0
-
-
-def _get_device_ip() -> str:
-    return configured_device_ip()
+# Largest file accepted when the device never reports a size. Block offsets
+# come off the wire, so without a ceiling one corrupt u32 allocates ~4 GB.
+_MAX_FILE_BYTES = 1 << 30
 
 
 def _get_data_port() -> int:
-    return int(load_settings().get("aim_device_port", DATA_PORT))
+    return configured_device_port()
 
 
 def _parse_discovery_reply(ip: str, data: bytes) -> dict:
@@ -130,7 +139,7 @@ def discover_device() -> dict | None:
 
     ip, data = probed
     info = _parse_discovery_reply(ip, data)
-    record_from_parsed(parse_discovery_text(ip, data))
+    remember_device(ip, data)
     logger.info("Discovered AiM device at %s: %s", ip, info)
     return info
 
@@ -180,8 +189,7 @@ def _extract_session_csv(raw: bytes) -> str | None:
     if end == -1:
         end = len(text)
     csv_text = text[start:end]
-    # Rows are separated by null bytes (appear as ".." in text)
-    csv_text = csv_text.replace("\r\n", "\n").replace("..", "\n")
+    csv_text = csv_text.replace("\r\n", "\n")
     csv_text = re.sub(r"[^\x20-\x7e\n]", "", csv_text)
     return csv_text.strip()
 
@@ -229,8 +237,8 @@ def _build_download_request(filepath: str) -> bytes:
 
 
 # 64-byte STCP control frames carry an opcode byte at payload[24]:
-# 'A'/'I'/'E'/'H' handshake+ack frames and 'Q' size/ack frames.
-_STCP_CONTROL_OPCODES = frozenset(b"AIQEH")
+# 'A'/'I'/'E'/'H' handshake+ack frames and 'Q' size/ack frames
+# (STCP_CONTROL_OPS in aim_live).
 
 
 def _is_stcp_file_payload(payload: bytes) -> bool:
@@ -240,7 +248,7 @@ def _is_stcp_file_payload(payload: bytes) -> bool:
     if (
         len(payload) == 64
         and payload[4:8] == b"\x00\x00\x00\x00"
-        and payload[_STCP_Q_ACK_OPCODE_OFFSET] in _STCP_CONTROL_OPCODES
+        and payload[STCP_OPCODE_OFFSET] in STCP_CONTROL_OPS
     ):
         return False
     return True
@@ -255,13 +263,20 @@ class _IncrementalReassembler:
     wants in a progress ACK -- while `covered` counts every distinct byte.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, total_size: int = 0) -> None:
         self.file_data = bytearray()
         self._spans: list[list[int]] = []  # sorted, disjoint [start, end)
         self.conflicts = 0  # replayed bytes that differed from what we had
+        self.rejected = 0  # blocks placed beyond the end of the file
+        # The last block may run past the reported size (result() trims it),
+        # so allow one batch of slack before calling an offset corrupt.
+        self._limit = total_size + _BATCH_PAYLOAD_BYTES if total_size > 0 else _MAX_FILE_BYTES
 
     def feed(self, file_offset: int, data: bytes) -> None:
         end = file_offset + len(data)
+        if end > self._limit:
+            self.rejected += 1
+            return
         if end > len(self.file_data):
             self.file_data.extend(b"\x00" * (end - len(self.file_data)))
         if self._is_covered(file_offset, end) and self.file_data[file_offset:end] != data:
@@ -313,6 +328,7 @@ def _drain_download_frames_incremental(
     reassembler: "_IncrementalReassembler",
     trace: AimDownloadTrace | None = None,
     total_file_size: int = 0,
+    frame_counts: dict[str, int] | None = None,
 ) -> bytes:
     """Parse complete frames out of `frame_buffer`, feeding file-data blocks
     into `reassembler` as they're decoded instead of re-parsing the whole
@@ -324,31 +340,36 @@ def _drain_download_frames_incremental(
     (RS3 lists sessions next, RS3_PULL_241/242) also uses offset-0 STCP blocks
     and would overwrite the file.
     """
+    # Walk the buffer by offset: slicing it after every frame copied the whole
+    # remainder once per frame.
+    pos = 0
     while not reassembler.is_complete(total_file_size):
         try:
-            frame, consumed = decode_frame(frame_buffer)
+            frame, consumed = decode_frame(frame_buffer, pos)
         except ValueError as exc:
             if trace is not None:
-                trace.log("frame_resync", error=str(exc), buffer_len=len(frame_buffer))
-            resync = frame_buffer.find(b"<h", 1)
-            if resync == -1:
-                frame_buffer = b""
-                break
-            frame_buffer = frame_buffer[resync:]
+                trace.log("frame_resync", error=str(exc), buffer_len=len(frame_buffer) - pos)
+            pos = resync_offset(frame_buffer, pos)
             continue
         if frame is None or consumed == 0:
             break
-        frame_buffer = frame_buffer[consumed:]
+        pos += consumed
+        if frame_counts is not None:
+            key = f"{frame.cmd.decode('ascii', errors='replace')}:{len(frame.payload)}"
+            frame_counts[key] = frame_counts.get(key, 0) + 1
         if frame.cmd != b"STCP":
             continue
         if _is_stcp_file_payload(frame.payload):
             file_offset = struct.unpack_from("<I", frame.payload, 0)[0]
             data = frame.payload[4:]
             if data:
+                rejected = reassembler.rejected
                 reassembler.feed(file_offset, data)
+                if trace is not None and reassembler.rejected != rejected:
+                    trace.log("block_out_of_range", file_offset=file_offset, block_bytes=len(data))
         elif trace is not None and len(frame.payload) <= 64:
             trace.log_frame(frame, ack_sent=False)
-    return frame_buffer
+    return frame_buffer[pos:] if pos else frame_buffer
 
 
 def _make_download_progress_ack(byte_count: int) -> bytes:
@@ -394,39 +415,6 @@ def _prompt_next_batch(
     return boundary, 1
 
 
-def _drain_download_frames(
-    sock: socket.socket,
-    frame_buffer: bytes,
-    trace: AimDownloadTrace | None = None,
-    *,
-    reply_to_control: bool = True,
-) -> tuple[bytes, int]:
-    """Parse all complete frames in frame_buffer; optionally send live micro-acks."""
-    micro_acks_sent = 0
-    while True:
-        try:
-            frame, consumed = decode_frame(frame_buffer)
-        except ValueError as exc:
-            if trace is not None:
-                trace.log("frame_resync", error=str(exc), buffer_len=len(frame_buffer))
-            resync = frame_buffer.find(b"<h", 1)
-            if resync == -1:
-                frame_buffer = b""
-                break
-            frame_buffer = frame_buffer[resync:]
-            continue
-        if frame is None or consumed == 0:
-            break
-        frame_buffer = frame_buffer[consumed:]
-        if _process_download_frame(
-            sock, frame, trace, reply_to_control=reply_to_control
-        ):
-            micro_acks_sent += 1
-        elif trace is not None and frame.cmd == b"STCP" and len(frame.payload) <= 64:
-            trace.log_frame(frame, ack_sent=False)
-    return frame_buffer, micro_acks_sent
-
-
 class _SendSink(Protocol):
     def sendall(self, data: bytes) -> None: ...
 
@@ -470,9 +458,14 @@ class AimFileReceiver:
         self._sink = sink
         self._trace = trace
         self._on_progress = on_progress
-        self._raw_data = bytearray()
+        # The raw stream itself is not kept (that held the file in memory a
+        # second time). A failed download's trace needs only its size, its mix
+        # of frames and its last bytes, so those are tracked as it arrives.
+        self._raw_len = 0
+        self._raw_tail = bytearray()
+        self._frame_counts: dict[str, int] = {}
         self.frame_buffer = b""
-        self._reassembler = _IncrementalReassembler()
+        self._reassembler = _IncrementalReassembler(total_file_size)
         self._extracted_size = 0
         self._micro_acks_sent = 0
         self._resume_acks = 0
@@ -496,7 +489,7 @@ class AimFileReceiver:
         if self._trace is not None:
             self._trace.log(
                 "idle_timeout",
-                raw_bytes=len(self._raw_data),
+                raw_bytes=self._raw_len,
                 extracted_bytes=self._extracted_size,
                 covered_bytes=self._reassembler.covered,
                 expected_bytes=self.total_file_size,
@@ -547,14 +540,14 @@ class AimFileReceiver:
     def on_eof(self) -> None:
         if self._trace is not None:
             self._trace.log(
-                "recv_eof", raw_bytes=len(self._raw_data), extracted_bytes=self._extracted_size
+                "recv_eof", raw_bytes=self._raw_len, extracted_bytes=self._extracted_size
             )
 
     def connection_reset_error(self) -> RuntimeError:
         if self._trace is not None:
             self._trace.log(
                 "connection_reset",
-                raw_bytes=len(self._raw_data),
+                raw_bytes=self._raw_len,
                 extracted_bytes=self._extracted_size,
                 expected_bytes=self.total_file_size,
                 acked_through=self._acked_through,
@@ -569,9 +562,11 @@ class AimFileReceiver:
     def feed(self, chunk: bytes) -> None:
         self._last_rx = time.monotonic()
         self._recv_count += 1
-        self._raw_data.extend(chunk)
+        self._raw_len += len(chunk)
+        self._raw_tail = (self._raw_tail + chunk[-STREAM_TAIL_BYTES:])[-STREAM_TAIL_BYTES:]
         self.frame_buffer = _drain_download_frames_incremental(
-            self.frame_buffer + chunk, self._reassembler, self._trace, self.total_file_size
+            self.frame_buffer + chunk, self._reassembler, self._trace, self.total_file_size,
+            self._frame_counts,
         )
 
         extracted_size = self._extracted_size = len(self._reassembler)
@@ -592,7 +587,7 @@ class AimFileReceiver:
             trace.log(
                 "recv_chunk",
                 chunk_bytes=len(chunk),
-                raw_bytes=len(self._raw_data),
+                raw_bytes=self._raw_len,
                 extracted_bytes=extracted_size,
                 frame_buffer_remainder=len(self.frame_buffer),
                 recv_count=self._recv_count,
@@ -611,7 +606,14 @@ class AimFileReceiver:
                 micro_acks_sent=self._micro_acks_sent,
             )
 
-    def result(self) -> bytes:
+    def _log_stream_summary(self, *, extracted: int) -> None:
+        assert self._trace is not None
+        self._trace.log_stream_summary(
+            raw_bytes=self._raw_len, extracted=extracted, expected=self.total_file_size,
+            frame_counts=self._frame_counts, tail=bytes(self._raw_tail),
+        )
+
+    def result(self) -> bytearray:
         """The complete file, or ``RuntimeError`` describing what is missing."""
         trace = self._trace
         reassembler = self._reassembler
@@ -619,27 +621,26 @@ class AimFileReceiver:
         covered = reassembler.covered
         if covered == 0:
             if trace is not None:
-                trace.analyze_raw_stream(self._raw_data, extracted=0, expected=total)
-            raise RuntimeError(f"No data blocks found in {len(self._raw_data)} bytes of response")
+                self._log_stream_summary(extracted=0)
+            raise RuntimeError(f"No data blocks found in {self._raw_len} bytes of response")
 
         if reassembler.conflicts and trace is not None:
             trace.log("replay_conflicts", count=reassembler.conflicts)
         if total > 0 and not reassembler.is_complete(total):
             if trace is not None:
-                trace.analyze_raw_stream(
-                    self._raw_data, extracted=self._extracted_size, expected=total
-                )
+                self._log_stream_summary(extracted=self._extracted_size)
             trace_hint = f" trace={trace.path}" if trace is not None else ""
             raise RuntimeError(
                 f"Incomplete download: contiguous {self._extracted_size} / covered {covered} bytes, "
-                f"expected {total} (raw={len(self._raw_data)}, acks={self._micro_acks_sent}, "
+                f"expected {total} (raw={self._raw_len}, acks={self._micro_acks_sent}, "
                 f"resumes={self._resume_acks}, recv_chunks={self._recv_count}){trace_hint}"
             )
 
+        # Hand back the buffer itself: copying it would hold the file twice.
         file_data = reassembler.file_data
         if total > 0 and len(file_data) > total:
-            return bytes(file_data[:total])
-        return bytes(file_data)
+            del file_data[total:]
+        return file_data
 
 
 def _receive_file_data(
@@ -647,7 +648,7 @@ def _receive_file_data(
     total_file_size: int,
     trace: AimDownloadTrace | None = None,
     on_progress: Callable[[int, int], None] | None = None,
-) -> bytes:
+) -> bytearray:
     """Read STCP file blocks from a blocking socket until the whole file is covered."""
     receiver = AimFileReceiver(total_file_size, sock, trace, on_progress)
     sock.settimeout(0.5)
@@ -684,24 +685,34 @@ def file_size_from_info_payload(payload: bytes) -> int:
     return struct.unpack_from("<I", payload, 0x10)[0]
 
 
+def pull_target_path(dest_dir: Path, filename: str, expected_size: int) -> Path:
+    """Where a pulled log goes, without touching a different local session.
+
+    The logger reuses file names once its memory is cleared, so a local file
+    with the same name is the same session only if it is also the size the
+    device reports. One that differs is somebody's data: it stays where it is
+    and the pulled file gets a ``_2``, ``_3`` ... suffix. With no size to
+    compare (``expected_size <= 0``) the existing file is taken as the session.
+    """
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    for n in range(1, 1000):
+        candidate = dest_dir / (filename if n == 1 else f"{stem}_{n}{suffix}")
+        if not candidate.exists():
+            return candidate
+        if expected_size <= 0 or candidate.stat().st_size == expected_size:
+            return candidate
+    return dest_dir / filename
+
+
 def reuse_local_file(
     out_path: Path,
     expected_size: int,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> bool:
-    """True when ``out_path`` is already complete locally; deletes a short leftover."""
+    """True when ``out_path`` (from :func:`pull_target_path`) is already on disk."""
     if not out_path.exists():
         return False
     local_size = out_path.stat().st_size
-    if expected_size > 0 and local_size < expected_size:
-        logger.warning(
-            "Session %s exists but is incomplete (%d/%d bytes); re-downloading.",
-            out_path.name,
-            local_size,
-            expected_size,
-        )
-        out_path.unlink()
-        return False
     logger.debug("Session %s already exists locally, skipping.", out_path.name)
     if on_progress is not None:
         total = expected_size if expected_size > 0 else local_size
@@ -709,7 +720,7 @@ def reuse_local_file(
     return True
 
 
-def write_file_atomically(out_path: Path, file_data: bytes) -> None:
+def write_file_atomically(out_path: Path, file_data: bytes | bytearray) -> None:
     tmp_path = out_path.with_name(f"{out_path.name}.{uuid.uuid4().hex}.tmp")
     tmp_path.write_bytes(file_data)
     os.replace(tmp_path, out_path)
@@ -728,7 +739,7 @@ def download_aim_session(
     only run after the primary is closed (``116CaptureWireshark`` stream 38).
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
-    out_path = dest_dir / filename
+    out_path = pull_target_path(dest_dir, filename, expected_size)
 
     if reuse_local_file(out_path, expected_size, on_progress):
         return out_path

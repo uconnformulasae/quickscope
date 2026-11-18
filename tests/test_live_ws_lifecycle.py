@@ -35,8 +35,8 @@ class _Client:
     def __init__(self, *, identity=None, stream=None) -> None:
         self.identity = identity
         self.channel_units: dict[str, str] = {}
-        self._snapshots_yielded = 0
-        self._poll_a_timeouts = 0
+        self.snapshots_yielded = 0
+        self.poll_timeouts = 0
         self.on_status = None
         self._stream = stream
 

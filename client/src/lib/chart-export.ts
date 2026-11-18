@@ -16,11 +16,13 @@ import { formatTime, formatLapTime } from './xrk-parser';
 import type { ChartMode } from './useXRKStore';
 import {
   niceAxisTicks, formatValue, formatTimeSec, brightenColor, minMaxTrace, clamp, interpolateValue,
+  visibleMinMax, placeLabelBox, contrastText,
 } from './chart-utils';
+import { sampleLowerBound as lowerBound, sampleUpperBound as upperBound } from './binary-search';
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
-export interface ExportChannel {
+export interface ChartExportChannel {
   channelId: number;
   name: string;
   units: string;
@@ -28,15 +30,12 @@ export interface ExportChannel {
   color: string;
   /** All samples for the channel (ms timestamps, sorted) */
   samples: ChannelSample[];
-  /** Whole-session extremes, same as the on-screen min/max markers */
-  globalMin: ChannelSample | null;
-  globalMax: ChannelSample | null;
 }
 
 export interface ChartExportSpec {
   fileName: string | null;
   metadata: SessionMetadata;
-  channels: ExportChannel[];
+  channels: ChartExportChannel[];
   /** Visible window in seconds */
   xRange: [number, number];
   sessionDurationSec: number;
@@ -123,24 +122,6 @@ const TRACE_INSET = 8;
 
 const isKnown = (v: string | undefined | null): v is string =>
   !!v && v.trim() !== '' && v.trim().toLowerCase() !== 'unknown';
-
-function lowerBound(arr: ChannelSample[], tMs: number): number {
-  let a = 0, b = arr.length;
-  while (a < b) {
-    const m = (a + b) >> 1;
-    if (arr[m].timestamp < tMs) a = m + 1; else b = m;
-  }
-  return a;
-}
-
-function upperBound(arr: ChannelSample[], tMs: number): number {
-  let a = 0, b = arr.length;
-  while (a < b) {
-    const m = (a + b) >> 1;
-    if (arr[m].timestamp <= tMs) a = m + 1; else b = m;
-  }
-  return a;
-}
 
 /** Samples within [loMs, hiMs], plus `extra` neighbours on each side. */
 function sliceWindow(samples: ChannelSample[], loMs: number, hiMs: number, extra = 0): ChannelSample[] {
@@ -295,14 +276,14 @@ async function ensureFonts(): Promise<void> {
 interface Region {
   top: number;
   height: number;
-  channels: ExportChannel[];
+  channels: ChartExportChannel[];
   yRange: [number, number];
   yTicks: number[];
 }
 
 interface OverlayAxis {
   units: string;
-  channels: ExportChannel[];
+  channels: ChartExportChannel[];
   yRange: [number, number];
   yTicks: number[];
   side: 'left' | 'right';
@@ -367,7 +348,7 @@ export async function renderChartImage(spec: ChartExportSpec): Promise<ChartExpo
   const regions: Region[] = [];
   const overlayAxes: OverlayAxis[] = [];
   if (isOverlay) {
-    const byUnit = new Map<string, ExportChannel[]>();
+    const byUnit = new Map<string, ChartExportChannel[]>();
     for (const ch of channels) {
       const u = ch.units || '';
       if (!byUnit.has(u)) byUnit.set(u, []);
@@ -648,12 +629,12 @@ export async function renderChartImage(spec: ChartExportSpec): Promise<ChartExpo
       }
     }
 
-    // Whole-session min/max markers, drawn last so labels sit on top
+    // Window min/max markers (same style as on screen), drawn last so labels sit on top
     for (const ch of region.channels) {
       const yRange = isOverlay
         ? overlayAxes.find(a => a.units === (ch.units || ''))?.yRange ?? region.yRange
         : region.yRange;
-      drawMinMaxMarkers(ctx, ch, region, valToYFor(region, yRange), timeToX, lm, plotRight, placed);
+      drawMinMaxMarkers(ctx, ch, region, valToYFor(region, yRange), timeToX, lm, plotRight, placed, x0Ms, x1Ms);
     }
 
     // Y-axis (separate mode: one per strip)
@@ -759,69 +740,61 @@ export async function renderChartImage(spec: ChartExportSpec): Promise<ChartExpo
 }
 
 /**
- * Whole-session min/max markers, as on screen: a triangle at the sample when
- * it is inside the window, an edge arrow (labelled "out of view") when not.
+ * Min/max inside the exported window, matching the on-screen style: dashed
+ * reference lines, a dot at each extreme and a boxed value label.
  */
 function drawMinMaxMarkers(
   ctx: CanvasRenderingContext2D,
-  ch: ExportChannel,
+  ch: ChartExportChannel,
   region: Region,
   valToY: (v: number) => number,
   timeToX: (tSec: number) => number,
   left: number,
   right: number,
   placed: Rect[],
+  x0Ms: number,
+  x1Ms: number,
 ) {
-  const bright = brightenColor(ch.color, 0.3);
+  const mm = visibleMinMax(ch.samples, x0Ms, x1Ms);
+  if (!mm) return;
   const { top, height } = region;
+  const units = ch.units ? ` ${ch.units}` : '';
 
-  const draw = (sample: ChannelSample | null, isMax: boolean) => {
-    if (!sample || !isFinite(sample.value)) return;
+  ctx.save();
+  ctx.strokeStyle = ch.color;
+  ctx.globalAlpha = 0.4;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([8, 8]);
+  ctx.beginPath();
+  for (const s of [mm.max, mm.min]) {
+    const y = valToY(s.value);
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.font = FONT.marker;
+  const boxH = 24;
+  const draw = (sample: ChannelSample, isMax: boolean) => {
     const x = timeToX(sample.timestamp / 1000);
     const y = valToY(sample.value);
-    const word = isMax ? 'max' : 'min';
-    ctx.font = FONT.marker;
-    ctx.fillStyle = bright;
-
-    if (x >= left && x <= right) {
-      ctx.beginPath();
-      if (isMax) {
-        ctx.moveTo(x, y - 10); ctx.lineTo(x - 6, y - 1); ctx.lineTo(x + 6, y - 1);
-      } else {
-        ctx.moveTo(x, y + 10); ctx.lineTo(x - 6, y + 1); ctx.lineTo(x + 6, y + 1);
-      }
-      ctx.closePath();
-      ctx.fill();
-      const label = `${word} ${formatValue(sample.value)}`;
-      const tw = ctx.measureText(label).width;
-      let tx = x + 12;
-      if (tx + tw > right - 4) tx = x - 12 - tw;
-      const ty = placeLabel(placed, tx, tw, isMax ? y - 4 : y + 16, top + 16, top + height - 4);
-      ctx.textAlign = 'left';
-      haloText(ctx, label, tx, ty);
-    } else {
-      const toLeft = x < left;
-      const dir = toLeft ? 1 : -1;
-      const edgeX = toLeft ? left + 4 : right - 4;
-      const label = `${word} ${formatValue(sample.value)} (out of view)`;
-      const tw = ctx.measureText(label).width;
-      const tx = edgeX + dir * 15;
-      const ty = placeLabel(placed, toLeft ? tx : tx - tw, tw, clamp(y, top + 14, top + height - 10) + 5, top + 16, top + height - 4);
-      const ey = ty - 5;
-      ctx.save();
-      ctx.globalAlpha = 0.8;
-      ctx.beginPath();
-      ctx.moveTo(edgeX, ey);
-      ctx.lineTo(edgeX + dir * 9, ey - 6);
-      ctx.lineTo(edgeX + dir * 9, ey + 6);
-      ctx.closePath();
-      ctx.fill();
-      ctx.textAlign = toLeft ? 'left' : 'right';
-      haloText(ctx, label, tx, ty);
-      ctx.restore();
-    }
+    ctx.fillStyle = ch.color;
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    const label = `${isMax ? '▲' : '▼'} ${formatValue(sample.value)}${units}`;
+    const boxW = ctx.measureText(label).width + 14;
+    const pos = placeLabelBox(x, y, boxW, boxH, { left, right, top: top + 4, bottom: top + height - 4 });
+    const by = placeLabel(placed, pos.x, boxW, pos.y + boxH, top + 4 + boxH, top + height - 4) - boxH;
+    ctx.fillStyle = ch.color;
+    ctx.beginPath();
+    ctx.roundRect(pos.x, by, boxW, boxH, 5);
+    ctx.fill();
+    ctx.fillStyle = contrastText(ch.color);
+    ctx.textAlign = 'left';
+    ctx.fillText(label, pos.x + 7, by + boxH - 7);
   };
-
-  draw(ch.globalMax, true);
-  draw(ch.globalMin, false);
+  draw(mm.max, true);
+  draw(mm.min, false);
 }

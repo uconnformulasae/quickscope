@@ -2,14 +2,13 @@
 Settings persistence backed by ./data/settings.json.
 """
 
-import json
-import os
 import threading
-import time
 from pathlib import Path
 
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
+from config import DATA_DIR
+from services.json_store import load_json, save_json
+from sanitize import InvalidInput, validate_device_ip, validate_device_port, validate_wifi_ssid
+
 SETTINGS_FILE = DATA_DIR / "settings.json"
 
 DEFAULTS = {
@@ -19,6 +18,19 @@ DEFAULTS = {
 }
 
 ALLOWED_KEYS = frozenset(DEFAULTS.keys())
+
+# Every setting feeds the AiM socket code, so each one is validated on the way
+# in (PUT) and on the way out of a possibly hand-edited settings.json.
+_VALIDATORS = {
+    "aim_wifi_ssid": validate_wifi_ssid,
+    "aim_device_ip": validate_device_ip,
+    "aim_device_port": validate_device_port,
+}
+assert set(_VALIDATORS) == ALLOWED_KEYS
+
+
+class SettingsError(InvalidInput):
+    """A setting value was rejected; the message is user-visible."""
 
 _lock = threading.Lock()
 
@@ -34,48 +46,48 @@ def load() -> dict:
 
 def _load_unlocked() -> dict:
     _ensure_dir()
-    if not SETTINGS_FILE.exists():
+    # Missing or unreadable (kept aside for recovery): fall back to defaults.
+    stored = load_json(SETTINGS_FILE, lambda data: isinstance(data, dict))
+    if stored is None:
         _save_unlocked(DEFAULTS)
         return dict(DEFAULTS)
-    try:
-        with open(SETTINGS_FILE, "r") as f:
-            stored = json.load(f)
-        if not isinstance(stored, dict):
-            raise ValueError("settings file is not a JSON object")
-    except (ValueError, UnicodeDecodeError):  # JSONDecodeError is a ValueError
-        # Keep the unreadable file for recovery and fall back to defaults.
+    known = {}
+    for k, v in stored.items():
+        if k not in ALLOWED_KEYS:
+            continue  # keys from older versions (e.g. railway_url)
         try:
-            ts = int(time.time())
-            os.replace(SETTINGS_FILE, SETTINGS_FILE.with_name(f"{SETTINGS_FILE.name}.{ts}.corrupt"))
-        except OSError:
-            pass
-        _save_unlocked(DEFAULTS)
-        return dict(DEFAULTS)
-    known = {k: v for k, v in stored.items() if k in ALLOWED_KEYS}
-    if len(known) != len(stored):
-        # Drop keys from older versions (e.g. railway_url) so they stop round-tripping.
-        _save_unlocked({**DEFAULTS, **known})
-    return {**DEFAULTS, **known}
+            known[k] = _VALIDATORS[k](v)
+        except InvalidInput:
+            continue  # unusable hand-edited value: fall back to the default
+    merged = {**DEFAULTS, **known}
+    if merged != stored:
+        # Rewrite so dropped keys and repaired values stop round-tripping.
+        _save_unlocked(merged)
+    return merged
 
 
 def _save_unlocked(settings: dict):
     _ensure_dir()
-    tmp = SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + f".{os.getpid()}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(settings, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, SETTINGS_FILE)  # atomic: a crash mid-write can't leave a truncated file
+    save_json(SETTINGS_FILE, settings)
 
 
-def save(settings: dict):
-    with _lock:
-        _save_unlocked(settings)
+def validate(partial: dict) -> dict:
+    """Validated, normalised known keys from ``partial``; unknown keys are dropped.
+
+    Raises :class:`SettingsError` on the first invalid value.
+    """
+    out = {}
+    for k, v in partial.items():
+        if k in ALLOWED_KEYS:
+            try:
+                out[k] = _VALIDATORS[k](v)
+            except InvalidInput as exc:
+                raise SettingsError(str(exc)) from None
+    return out
 
 
 def update(partial: dict) -> dict:
-    # Only allow known keys
-    filtered = {k: v for k, v in partial.items() if k in ALLOWED_KEYS}
+    filtered = validate(partial)  # all-or-nothing: nothing is saved if any value is bad
     with _lock:
         # Same corrupt-file recovery as load(), so a damaged settings.json
         # can't turn PUT /api/settings into a 500.

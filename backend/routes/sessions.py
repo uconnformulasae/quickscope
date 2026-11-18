@@ -2,10 +2,15 @@
 
 import asyncio
 import time
+import weakref
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
+
+from services.csv_export import parse_export_query, streaming_csv_response
+from services.xrk_export import content_disposition, read_xrk_export_bytes
 
 from services import (
     session_store,
@@ -13,6 +18,7 @@ from services import (
     gps_preview,
     aim_pull_log,
     aim_download_trace,
+    aim_device_cache,
 )
 from services.aim_keepalive import AimKeepalive
 from services import aim_pull_indexer, aim_pull_progress
@@ -29,9 +35,13 @@ router = APIRouter(prefix="/api")
 
 
 # ─── Session CRUD ────────────────────────────────────────────────────────────
+#
+# Routes that only touch the index or the disk are plain ``def``: FastAPI runs
+# them in its thread pool, so a slow disk (the index is rewritten and fsynced
+# on every change) never stalls the event loop carrying the live stream.
 
 @router.get("/sessions")
-async def list_sessions():
+def list_sessions():
     return session_store.list_sessions()
 
 
@@ -62,10 +72,91 @@ async def load_session(session_id: str):
         session_cache.set_active(session_id)
         state.filename = entry["filename"]
 
-    info = extract_session_info(log, entry["filename"])
+    info = await asyncio.to_thread(extract_session_info, log, entry["filename"])
     if entry.get("source") == "aim_device" and entry.get("recorded_at"):
         info = apply_stored_recorded_at(info, entry["recorded_at"])
     return info
+
+
+async def _parsed_log_for_session(session_id: str):
+    """Load a session's parsed log from cache or disk without changing analysis UI state."""
+    entry = session_store.get_session(session_id)
+    if not entry:
+        raise HTTPException(404, "Session not found")
+
+    local_path = session_store.repair_session_path(session_id, entry)
+    if local_path is None:
+        raise HTTPException(400, "Session file not available locally. Pull it first.")
+
+    try:
+        log = await asyncio.to_thread(
+            session_cache.get_or_load,
+            session_id,
+            local_path,
+            lambda: parse_file(local_path, PRIORITY_INTERACTIVE),
+        )
+    except Exception:
+        logger.exception("Failed to parse session file")
+        raise HTTPException(500, "Failed to parse session file")
+
+    return entry, log, local_path
+
+
+@router.get("/sessions/{session_id}/file")
+async def download_session_file(session_id: str):
+    """Export session data as an uncompressed ``.xrk`` (decompresses ``.xrz`` on disk)."""
+    entry = session_store.get_session(session_id)
+    if not entry:
+        raise HTTPException(404, "Session not found")
+
+    local_path = session_store.repair_session_path(session_id, entry)
+    if local_path is None:
+        raise HTTPException(400, "Session file not available locally. Pull it first.")
+
+    try:
+        payload, download_name = await asyncio.to_thread(
+            read_xrk_export_bytes,
+            local_path,
+            entry.get("filename"),
+            entry.get("aim_session_id"),
+        )
+    except ValueError:
+        logger.exception("Failed to prepare XRK export")
+        raise HTTPException(500, "Failed to export session file")
+
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": content_disposition(download_name)},
+    )
+
+
+@router.get("/sessions/{session_id}/export")
+async def export_session_csv(
+    session_id: str, channels: str = Query(...), convert: str | None = Query(None),
+):
+    """CSV export for a stored session without requiring it to be the active analysis session.
+
+    ``convert`` works as in ``GET /api/export``.
+    """
+    try:
+        names, conversions = parse_export_query(channels, convert)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    entry, log, _local_path = await _parsed_log_for_session(session_id)
+
+    try:
+        return await asyncio.to_thread(
+            streaming_csv_response,
+            log, entry["filename"], names, aim_session_id=entry.get("aim_session_id"),
+            conversions=conversions,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+_MAX_RENAME_INPUT_LEN = 1024
 
 
 class RenameRequest(BaseModel):
@@ -73,11 +164,13 @@ class RenameRequest(BaseModel):
 
 
 @router.post("/sessions/{session_id}/rename")
-async def rename_session(session_id: str, body: RenameRequest):
+def rename_session(session_id: str, body: RenameRequest):
     entry = session_store.get_session(session_id)
     if not entry:
         raise HTTPException(404, "Session not found")
 
+    if len(body.filename) > _MAX_RENAME_INPUT_LEN:
+        raise HTTPException(400, "Filename is too long")
     try:
         new_filename = sanitize_filename(body.filename)
     except ValueError:
@@ -97,8 +190,18 @@ async def rename_session(session_id: str, body: RenameRequest):
     old_path = session_store.resolve_session_path(entry)
     new_path = None
     if old_path and old_path.exists():
-        new_path = str(session_store.session_file_path(new_filename))
-        old_path.rename(new_path)
+        target = session_store.session_file_path(new_filename)
+        # rename() silently replaces an existing file on POSIX. A file the
+        # index doesn't know about is still someone's data; a case-only rename
+        # of this same file is fine.
+        if target.exists() and not target.samefile(old_path):
+            raise HTTPException(409, "A file with that name already exists")
+        try:
+            old_path.rename(target)
+        except OSError:
+            logger.exception("Failed to rename %s to %s", old_path, target)
+            raise HTTPException(500, "Could not rename the session file")
+        new_path = str(target)
 
     # Keep the in-memory caches pointing at the renamed file. rebind_file
     # re-fingerprints the new path so the next load is still a cache hit; the
@@ -109,12 +212,25 @@ async def rename_session(session_id: str, body: RenameRequest):
     else:
         session_cache.rename(session_id, new_filename)
 
-    updated = session_store.update_session(
-        session_id,
-        filename=new_filename,
-        aim_session_id=Path(new_filename).stem,
-        local_path=new_path or (str(old_path) if old_path else entry.get("local_path")),
-    )
+    try:
+        updated = session_store.update_session(
+            session_id,
+            filename=new_filename,
+            aim_session_id=Path(new_filename).stem,
+            local_path=new_path or (str(old_path) if old_path else entry.get("local_path")),
+        )
+    except OSError:
+        # The index still names the old file: put the file back so the two agree.
+        logger.exception("Failed to save the session index after renaming %s", old_path)
+        if new_path:
+            try:
+                Path(new_path).rename(old_path)
+                session_cache.rebind_file(session_id, old_path, entry["filename"])
+            except OSError:
+                logger.exception("Could not restore %s after a failed rename", old_path)
+        else:
+            session_cache.rename(session_id, entry["filename"])
+        raise HTTPException(500, "Could not save the renamed session")
     return updated
 
 
@@ -139,7 +255,7 @@ async def get_gps_preview(session_id: str):
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+def delete_session(session_id: str):
     entry = session_store.get_session(session_id)
     if not entry:
         raise HTTPException(404, "Session not found")
@@ -159,9 +275,42 @@ async def delete_session(session_id: str):
 
 # ─── AiM Device ──────────────────────────────────────────────────────────────
 
+def _cached_device_info(cached) -> dict:  # noqa: ANN001
+    return {
+        "ip": cached.ip,
+        "ssid": cached.ssid,
+        "device_name": cached.device_name,
+        "model": cached.model,
+        "serial": cached.serial,
+        "vehicle": cached.vehicle,
+    }
+
+
+async def _find_device(*, trust_cache: bool) -> dict | None:
+    """The logger's identity, without a UDP sweep when we already know it.
+
+    Discovery probes each candidate IP in turn (up to ~10 s when nothing
+    answers). While the primary TCP is open the device is plainly there, and a
+    list or pull is about to dial it anyway, so both reuse the cached identity.
+    ``/aim/status`` passes ``trust_cache=False`` so a logger that went away is
+    still reported as gone.
+    """
+    hub = get_aim_primary_hub()
+    if trust_cache or getattr(hub, "primary_connected", False):
+        cached = aim_device_cache.get_cached()
+        if cached is not None:
+            return _cached_device_info(cached)
+    return await asyncio.to_thread(aim_connector.discover_device)
+
+
+_DEVICE_UNREACHABLE_MSG = (
+    "Could not connect to AiM device. Check WiFi connection and device IP in Settings."
+)
+
+
 @router.get("/aim/status")
 async def aim_status():
-    device_info = await asyncio.to_thread(aim_connector.discover_device)
+    device_info = await _find_device(trust_cache=False)
     connected = device_info is not None
     return {"connected": connected, "device": device_info}
 
@@ -169,27 +318,31 @@ async def aim_status():
 @router.get("/aim/sessions")
 async def list_aim_sessions():
     started = time.monotonic()
-    device = await asyncio.to_thread(aim_connector.discover_device)
+    device = await _find_device(trust_cache=True)
     device_ip = device["ip"] if device else ""
 
     sessions = []
     try:
         hub = get_aim_primary_hub()
         sessions = await hub.list_sessions(device_ip or None)
-    except ConnectionError as exc:
+    except (OSError, RuntimeError) as exc:
+        # OSError covers ConnectionError and TimeoutError: every way the link
+        # can fail is an "ok: false" answer, never an HTTP 500.
         aim_pull_log.record(
             action="list",
             status="list_failed",
             device_ip=device_ip,
             duration_s=time.monotonic() - started,
             session_count=0,
-            error=str(exc)[:200],
+            error=(str(exc) or type(exc).__name__)[:200],
         )
-        return {
-            "ok": False,
-            "sessions": [],
-            "error": "Could not connect to AiM device. Check WiFi connection and device IP in Settings.",
-        }
+        if isinstance(exc, AimLiveActiveError):
+            error = str(exc)  # the device is fine; live view just owns the link
+        elif isinstance(exc, TimeoutError):
+            error = "The AiM device did not answer in time. Check the WiFi link and retry."
+        else:
+            error = _DEVICE_UNREACHABLE_MSG
+        return {"ok": False, "sessions": [], "error": error}
     duration_s = time.monotonic() - started
 
     aim_pull_log.record(
@@ -210,21 +363,21 @@ async def list_aim_sessions():
 
 
 @router.get("/aim/pull/log")
-async def get_aim_pull_log():
+def get_aim_pull_log():
     """Recent AiM list/pull attempts, newest first. In-memory only."""
     return {"entries": aim_pull_log.list_recent()}
 
 
 @router.get("/aim/pull/progress")
-async def get_aim_pull_progress():
+def get_aim_pull_progress():
     """Byte progress for the pull currently running on this backend instance."""
     return aim_pull_progress.snapshot()
 
 
 @router.get("/aim/download/trace")
-async def list_aim_download_traces():
+def list_aim_download_traces():
     """List persisted AiM download trace logs (newest first)."""
-    log_dir = aim_download_trace._LOG_DIR
+    log_dir = aim_download_trace.log_dir()
     if not log_dir.is_dir():
         return {"traces": []}
     files = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -242,9 +395,9 @@ async def list_aim_download_traces():
 
 
 @router.get("/aim/download/trace/{name}")
-async def get_aim_download_trace(name: str):
+def get_aim_download_trace(name: str):
     """Return one AiM download trace log file."""
-    log_dir = aim_download_trace._LOG_DIR
+    log_dir = aim_download_trace.log_dir()
     path = (log_dir / Path(name).name).resolve()
     if not path.is_file() or not path.is_relative_to(log_dir.resolve()):
         raise HTTPException(404, "Trace log not found")
@@ -260,15 +413,36 @@ async def pull_from_aim(body: AimPullRequest):
     if not body.filenames:
         return {"ok": False, "error": "No files selected", "downloaded": [], "results": []}
 
-    device = await asyncio.to_thread(aim_connector.discover_device)
+    device = await _find_device(trust_cache=True)
     device_ip = device["ip"] if device else ""
 
     logger.info("AiM pull: downloading %d selected sessions...", len(body.filenames))
 
     batch = _PullBatch(device_ip)
     filenames = batch.sanitize(body.filenames)
-    aim_pull_progress.begin_pull(filenames)
     hub = get_aim_primary_hub()
+    # A second pull waits its turn here. It would wait on the hub anyway, but
+    # only after resetting the progress the first pull is still reporting.
+    async with _pull_lock():
+        return await _run_pull(hub, filenames, batch, device_ip)
+
+
+_pull_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _pull_lock() -> asyncio.Lock:
+    """One lock per event loop (an ``asyncio.Lock`` can't be shared across loops)."""
+    loop = asyncio.get_running_loop()
+    lock = _pull_locks.get(loop)
+    if lock is None:
+        lock = _pull_locks[loop] = asyncio.Lock()
+    return lock
+
+
+async def _run_pull(hub, filenames: list[str], batch: "_PullBatch", device_ip: str) -> dict:  # noqa: ANN001
+    aim_pull_progress.begin_pull(filenames)
     try:
         try:
             primary = await hub.download_sessions(
@@ -340,13 +514,13 @@ async def _download_legacy(
             device_meta = device_meta_by_file.get(filename, {})
             expected_size = int(device_meta.get("size", 0) or 0)
             aim_pull_progress.start_file(file_index, filename, expected_size)
-            dest = session_store.session_file_path(filename)
+            dest_dir = session_store.session_file_path(filename).parent
             started = time.monotonic()
             try:
-                await asyncio.to_thread(
+                dest = await asyncio.to_thread(
                     aim_connector.download_aim_session,
                     filename,
-                    dest.parent,
+                    dest_dir,
                     expected_size,
                     aim_pull_progress.update_download,
                 )
@@ -419,11 +593,14 @@ class _PullBatch:
             "recorded_at": resolve_aim_recorded_at(device_date, device_hour, "", ""),
             "index_status": "pending",
         }
-        existing = session_store.find_by_filename(filename)
+        # ``path`` can carry a suffix the logger's name doesn't: a different
+        # local session already had that name, so this one is stored beside it.
+        local_name = path.name
+        existing = session_store.find_by_filename(local_name)
         if existing is not None:
             entry = session_store.update_session(existing["id"], **fields) or existing
         else:
-            entry = session_store.add_session(filename=filename, source="aim_device", **fields)
+            entry = session_store.add_session(filename=local_name, source="aim_device", **fields)
 
         aim_pull_indexer.enqueue(aim_pull_indexer.IndexJob(
             session_id=entry["id"],

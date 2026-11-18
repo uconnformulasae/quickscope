@@ -10,7 +10,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from origins import ALLOWED_ORIGINS, ALLOWED_ORIGIN_REGEX
+from origins import ALLOWED_ORIGINS, ALLOWED_ORIGIN_REGEX, LocalOnlyMiddleware
 from routes import sessions, analysis, settings, live, live_layouts
 from services import session_store
 from services.aim_live_logging import setup_aim_live_file_logging
@@ -48,6 +48,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Added last so it runs first: a foreign Host or Origin never reaches a route.
+app.add_middleware(LocalOnlyMiddleware)
+
+
+
+@app.get("/api/health")
+def health() -> dict:
+    """Identifies this server. The desktop shell waits for exactly this answer,
+    so some other program on the port can't be mistaken for the backend."""
+    return {"app": "quickscope"}
+
 
 app.include_router(sessions.router)
 app.include_router(analysis.router)

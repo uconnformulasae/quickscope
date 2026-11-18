@@ -37,8 +37,8 @@ class _FakeIdentity:
 class _FakeLiveClient:
     identity = _FakeIdentity()
     channel_units = {"RPM": "rpm"}
-    _snapshots_yielded = 0
-    _poll_a_timeouts = 0
+    snapshots_yielded = 0
+    poll_timeouts = 0
 
     async def stream(self):
         # No `await` between yields: with nothing to hand control back to the

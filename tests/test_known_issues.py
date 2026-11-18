@@ -152,15 +152,11 @@ def test_corrupt_settings_file_falls_back_to_defaults():
     assert settings_store.load()["aim_device_port"] == 2000
 
 
-def test_derived_evaluate_blocks_object_introspection(monkeypatch):
+def test_derived_evaluate_blocks_object_introspection():
     """``exec`` with a trimmed ``__builtins__`` is not a sandbox: attribute
     walking reaches every loaded class. (This probe only counts them.)"""
-    import signal
-
     from main import app
 
-    monkeypatch.setattr(signal, "signal", lambda *a, **k: None)
-    monkeypatch.setattr(signal, "alarm", lambda *a, **k: 0)
     with TestClient(app) as c:
         res = c.post(
             "/api/derived/evaluate",

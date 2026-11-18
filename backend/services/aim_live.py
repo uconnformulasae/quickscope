@@ -53,10 +53,12 @@ from services.aim_discovery import (
     DEFAULT_DEVICE_IP,
     DISCOVERY_PORT,
     candidate_device_ips,
-    configured_device_ip,
+    parse_discovery_text,
     probe_device_ips,
+    remember_device,
+    resolve_device_host,
 )
-from services.aim_device_cache import get_cached, record_identity
+from services.aim_device_cache import get_cached
 from services.aim_keepalive import AimKeepalive
 from services.aim_live_layout import (
     ChannelField,
@@ -67,12 +69,10 @@ from services.aim_live_layout import (
 
 logger = logging.getLogger(__name__)
 
-# 103-channel legacy vs 113-channel UConn EVO5 (RS3-5-47 / live_pedal use Q:703 → 707 B).
-LIVE_FRAME_SIZE_LEGACY = 547
+# 113-channel UConn EVO5 (RS3-5-47 / live_pedal use Q:703 → 707 B).
 LIVE_FRAME_SIZE_113CH = 707
 # Layout-parse bound only (a field wider/further than this is corrupt); effectively unlimited.
 LIVE_FRAME_LAYOUT_CAP = 1 << 16
-POLL_INTERVAL_S = 0.125  # RS3 steady poll step (RS3-5-47.pcapng)
 # RS3 sends its next steady-poll STNC every 150-190 ms without waiting for a
 # snapshot (RS3-5-47.pcapng). The pump task below reproduces that instead of
 # the old fixed lockstep "send, sleep, send, sleep, block for snapshot" loop.
@@ -94,8 +94,6 @@ POST_SETUP_DRAIN_IDLE_S = 0.2
 # (RS3_long_live.pcapng: 149 s, client FIN); without it QuickScope was dropped
 # every 30.8 s with a ~2 s data gap (QS_Live_long_reconnect.pcapng). See
 # `aim_keepalive`. Reconnect stays as a safety net for real WiFi/device loss.
-RECONNECT_MAX_ATTEMPTS = 10
-RECONNECT_BACKOFF_S = 1.0
 # Fast-recovery tuning. A drop is routine, so a dead attempt must be cheap:
 # the trace logs show good reconnects finish in ~3s, while a hello the device
 # never answers used to burn the full 15s. Kill that socket after
@@ -152,6 +150,19 @@ class Frame:
     trailer: int
 
 
+def resync_offset(buf: bytes | bytearray, offset: int = 0) -> int:
+    """Where to resume after ``decode_frame`` rejected the bytes at ``offset``.
+
+    The next ``<h`` is the next place a frame can start. With none in the
+    buffer everything is noise, except a final ``<`` that may be the first
+    half of a header split across two reads.
+    """
+    nxt = buf.find(b"<h", offset + 1)
+    if nxt != -1:
+        return nxt
+    return len(buf) - 1 if buf[-1:] == b"<" and len(buf) - 1 > offset else len(buf)
+
+
 def decode_frame(buf: bytes, offset: int = 0) -> tuple[Optional[Frame], int]:
     """Try to decode one frame starting at buf[offset].
 
@@ -195,8 +206,8 @@ def decode_frame(buf: bytes, offset: int = 0) -> tuple[Optional[Frame], int]:
 # ── Protocol payload constants captured from Race Studio ────────────────────
 
 
-_STCP_HELLO = b"\x00\x00\x00\x00\x06\x08\x00\x00"
-_STCP_4BYTE_ACK = b"\x00\x00\x00\x00"
+STCP_HELLO = b"\x00\x00\x00\x00\x06\x08\x00\x00"
+STCP_4BYTE_ACK = b"\x00\x00\x00\x00"
 _STCP_OP_A = ord("A")
 _STCP_OP_H = ord("H")  # device asks for enum date follow-up (same response as 'A')
 _STCP_OP_I = ord("I")
@@ -204,7 +215,9 @@ _STCP_OP_Q = ord("Q")
 _STCP_OP_E = ord("E")
 
 
-_STCP_CONTROL_OPS = frozenset((_STCP_OP_A, _STCP_OP_H, _STCP_OP_I, _STCP_OP_Q, _STCP_OP_E))
+# 64-byte STCP control frames carry their opcode at this payload offset.
+STCP_OPCODE_OFFSET = 24
+STCP_CONTROL_OPS = frozenset((_STCP_OP_A, _STCP_OP_H, _STCP_OP_I, _STCP_OP_Q, _STCP_OP_E))
 
 
 def _stnc_sub_cmd(stcp64_payload: bytes) -> int:
@@ -342,16 +355,10 @@ class Identity:
 
 def parse_identity(addr_ip: str, data: bytes) -> Identity:
     """Parse a 244-byte UDP discovery reply into an Identity."""
-    import re
-
-    ident = Identity(ip=addr_ip, raw=data)
-    text = data.decode("ascii", errors="replace")
-    m = re.search(r"AiM-([A-Za-z0-9_]+)-(\d+)-([^\x00]+)", text)
-    if m:
-        ident.model = m.group(1)
-        ident.serial = m.group(2)
-        ident.vehicle = m.group(3).rstrip("\x00").rstrip()
-    return ident
+    info = parse_discovery_text(addr_ip, data)
+    return Identity(
+        ip=addr_ip, model=info["model"], serial=info["serial"], vehicle=info["vehicle"], raw=data,
+    )
 
 
 async def discover(timeout: float = 2.0, ip: str | None = None) -> Optional[Identity]:
@@ -382,13 +389,8 @@ async def discover(timeout: float = 2.0, ip: str | None = None) -> Optional[Iden
             DISCOVERY_PORT,
         )
         return None
+    remember_device(*result)
     ident = parse_identity(*result)
-    record_identity(
-        ident.ip,
-        model=ident.model,
-        serial=ident.serial,
-        vehicle=ident.vehicle,
-    )
     logger.info(
         "AiM live discovery: device at %s model=%s serial=%s vehicle=%s",
         ident.ip,
@@ -406,8 +408,13 @@ async def discover(timeout: float = 2.0, ip: str | None = None) -> Optional[Iden
 class LiveSnapshot:
     timestamp_ms: int
     subsystem: str
-    raw_b64: str
+    raw: bytes = b""
     channels: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def raw_b64(self) -> str:
+        """Base64 of the frame, encoded only when a client asks for raw output."""
+        return base64.b64encode(self.raw).decode("ascii")
 
 
 def parse_live_snapshot(
@@ -431,7 +438,7 @@ def parse_live_snapshot(
     return LiveSnapshot(
         timestamp_ms=timestamp_ms,
         subsystem=subsystem,
-        raw_b64=base64.b64encode(payload).decode("ascii"),
+        raw=bytes(payload),
         channels=channels,
     )
 
@@ -484,6 +491,16 @@ class AimLiveClient:
         # cycling instead of the UI just appearing to freeze.
         self.on_status: Optional[Callable[[dict], None]] = None
 
+    @property
+    def snapshots_yielded(self) -> int:
+        """Live snapshots handed out so far (kept across reconnects)."""
+        return self._snapshots_yielded
+
+    @property
+    def poll_timeouts(self) -> int:
+        """Consecutive 2 s waits that ended without a live snapshot."""
+        return self._poll_a_timeouts
+
     def _emit_status(self, state: str, **fields: object) -> None:
         if self.on_status is not None:
             try:
@@ -497,7 +514,18 @@ class AimLiveClient:
 
     @property
     def connected(self) -> bool:
-        return self._writer is not None and not self._writer.is_closing()
+        """True while the TCP is usable in both directions.
+
+        ``writer.is_closing()`` alone stays False after the *device* closes its
+        end, so a dead link looked healthy and was reused for every later list
+        or live attempt. The reader sees the FIN/reset, so ask it too.
+        """
+        if self._writer is None or self._writer.is_closing():
+            return False
+        reader = self._reader
+        if reader is None:
+            return False
+        return not reader.at_eof() and reader.exception() is None
 
     async def _ensure_keepalive(self) -> None:
         """Start (or retarget) the aim-ka UDP keep-alive; it outlives reconnects."""
@@ -576,7 +604,7 @@ class AimLiveClient:
                     cache_age_s=round(cached.age_s(), 2),
                 )
             else:
-                self.host = configured or configured_device_ip()
+                self.host = resolve_device_host(configured)
                 self.identity = Identity(ip=self.host)
                 self._emit_trace("using_configured_host", ip=self.host)
         logger.info(
@@ -616,7 +644,7 @@ class AimLiveClient:
         self._last_rx_at = asyncio.get_running_loop().time()
         logger.info("AiM live connect: TCP open ok, sending STCP hello")
         self._emit_trace("tcp_ok")
-        await self._send_stcp(_STCP_HELLO)
+        await self._send_stcp(STCP_HELLO)
         self._emit_trace("hello_sent")
         try:
             hello_ack = await self._expect(b"STCP", min_payload_len=8, timeout=hello_timeout)
@@ -672,7 +700,7 @@ class AimLiveClient:
             # Live.pcapng stream 1: after 68 B date, RS3 always sends 4 B STCP ack
             # before the device continues with Q + enum blob (except STNC 0x00010006 aux).
             if post_date_ack:
-                await self._send_stcp(_STCP_4BYTE_ACK)
+                await self._send_stcp(STCP_4BYTE_ACK)
                 self._emit_trace("tx_micro_ack", phase=phase, after="date_followup")
             return
         if op in (_STCP_OP_Q, _STCP_OP_E, _STCP_OP_I):
@@ -681,7 +709,7 @@ class AimLiveClient:
                 live_len = _q_hint_live_payload_size(hint, self._channel_fields or None)
                 if live_len is not None:
                     self._pending_live_size = live_len
-            await self._send_stcp(_STCP_4BYTE_ACK)
+            await self._send_stcp(STCP_4BYTE_ACK)
             return
         logger.warning(
             "AiM live: unhandled STCP-64 opcode %r in phase %s",
@@ -715,7 +743,7 @@ class AimLiveClient:
             logger.debug("AiM live handshake: setup STNC sub=0x%08x", sub_cmd)
             await self._send_stnc(sub_cmd)
             if sub_cmd != STNC_SETUP_FINAL:
-                await self._send_stcp(_STCP_4BYTE_ACK)
+                await self._send_stcp(STCP_4BYTE_ACK)
             await self._autorespond_drain(
                 idle_s=SETUP_DRAIN_IDLE_S,
                 overall_timeout=timeout,
@@ -886,7 +914,7 @@ class AimLiveClient:
                     logger.debug("AiM live drain [%s]: absorbed blob len=%d", label, len(pl))
                 continue
             if len(pl) == 4:
-                await self._send_stcp(_STCP_4BYTE_ACK)
+                await self._send_stcp(STCP_4BYTE_ACK)
             elif len(pl) == 64 and len(pl) > 24:
                 await self._respond_stcp64(pl, phase=label)
             elif is_layout_blob(pl):
@@ -923,14 +951,16 @@ class AimLiveClient:
             try:
                 frame, consumed = decode_frame(self._buf)
             except ValueError as exc:
-                self._decode_resync_bytes += 1
-                if self._decode_resync_bytes in (1, 100, 1000):
+                dropped = resync_offset(self._buf)
+                before = self._decode_resync_bytes
+                self._decode_resync_bytes += dropped
+                if any(before < mark <= self._decode_resync_bytes for mark in (1, 100, 1000)):
                     logger.warning(
                         "AiM live: frame decode resync (%s); dropped %d byte(s) so far",
                         exc,
                         self._decode_resync_bytes,
                     )
-                self._buf.pop(0)
+                del self._buf[:dropped]
                 continue
             if frame is not None:
                 del self._buf[:consumed]
@@ -948,7 +978,7 @@ class AimLiveClient:
             if not self._micro_owed:
                 return
             self._micro_owed = False
-        await self._send_stcp(_STCP_4BYTE_ACK)
+        await self._send_stcp(STCP_4BYTE_ACK)
 
     async def _pump_loop(self) -> None:
         """Alternate STNC A/B on a fixed period. Never waits for a snapshot.
@@ -1109,7 +1139,7 @@ class AimLiveClient:
                     self._snapshots_yielded += 1
                     self._record_snapshot_gap()
                     if self._snapshots_yielded == 1:
-                        raw_len = len(base64.b64decode(snap.raw_b64))
+                        raw_len = len(snap.raw)
                         self._emit_trace(
                             "first_snapshot",
                             subsystem=snap.subsystem,
@@ -1161,10 +1191,7 @@ class AimLiveClient:
                 dropped_at = asyncio.get_running_loop().time()
                 self._emit_status("reconnecting", snapshots=self._snapshots_yielded)
                 # Raises (propagating to the caller) if the device never comes back.
-                await self._reconnect_with_retry(
-                    max_attempts=RECONNECT_MAX_ATTEMPTS,
-                    base_backoff_s=RECONNECT_BACKOFF_S,
-                )
+                await self._reconnect_with_retry()
                 await self._autorespond_drain(
                     idle_s=0.15, overall_timeout=1.0, label="post-reconnect-sync"
                 )
@@ -1237,16 +1264,13 @@ class AimLiveClient:
     async def _reconnect_with_retry(
         self,
         *,
-        max_attempts: int = RECONNECT_MAX_ATTEMPTS,
-        base_backoff_s: float = RECONNECT_BACKOFF_S,
         budget_s: float = RECONNECT_BUDGET_S,
     ) -> None:
         """Redial fast until the device answers or `budget_s` runs out.
 
         Every attempt uses a brand-new socket with a short hello timeout, so a
         listener that accepts TCP but never answers the hello costs ~2s
-        instead of 15s. `max_attempts` / `base_backoff_s` are kept for
-        call-site compatibility; the time budget is the real limit.
+        instead of 15s. The time budget is the only limit.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + budget_s
@@ -1307,7 +1331,7 @@ class AimLiveClient:
         await self._send_stnc(STNC_PREP_SESSIONS)
         await self._send_stnc(STNC_PREP_SESSIONS)
         await self._send_stnc(STNC_GET_SESSIONS)
-        await self._send_stcp(_STCP_4BYTE_ACK)
+        await self._send_stcp(STCP_4BYTE_ACK)
 
         collected = bytearray()
         # The Q reply to GET_SESSIONS announces the CSV byte count
@@ -1331,13 +1355,15 @@ class AimLiveClient:
                 if b"name,size,date,hour," in collected:
                     break
                 continue
-            collected.extend(frame.payload)
-            if frame.cmd != b"STCP":
-                continue
             pl = frame.payload
+            if frame.cmd != b"STCP":
+                collected.extend(pl)
+                continue
             if len(pl) == 4:
-                await self._send_stcp(_STCP_4BYTE_ACK)
-            elif len(pl) == 64 and len(pl) > 24 and pl[24] in _STCP_CONTROL_OPS:
+                collected.extend(pl)
+                await self._send_stcp(STCP_4BYTE_ACK)
+            elif len(pl) == 64 and len(pl) > 24 and pl[24] in STCP_CONTROL_OPS:
+                collected.extend(pl)
                 if pl[24] == _STCP_OP_Q and _stnc_sub_cmd(pl) == STNC_GET_SESSIONS:
                     csv_len = struct.unpack_from("<I", pl, 16)[0]
                 await self._respond_stcp64(
@@ -1345,14 +1371,22 @@ class AimLiveClient:
                     phase="session-list",
                     post_date_ack=False,
                 )
-            elif csv_len and len(pl) > 4:
-                csv_received += len(pl) - 4
+            else:
+                # A data block: u32 offset, then text. The offset is not part
+                # of the list -- left in, its bytes can be printable and land
+                # in the middle of a row once the list spans several blocks.
+                collected.extend(pl[4:])
+                if csv_len:
+                    csv_received += len(pl) - 4
 
         csv_text = _extract_session_csv(bytes(collected))
         if csv_text is None:
             self._emit_trace("session_list_failed", reason="no_csv")
             logger.error("AiM primary: no session CSV in response (%d bytes collected)", len(collected))
-            return []
+            # Not ``[]``: that would look like a logger with nothing on it.
+            raise ConnectionError(
+                "The AiM device did not send its session list. Check the WiFi link and retry."
+            )
         rows = parse_aim_session_csv_rows(csv_text)
         self._emit_trace("session_list_ok", session_count=len(rows))
         logger.info("AiM primary: session list ok (%d sessions)", len(rows))
@@ -1380,7 +1414,7 @@ class AimLiveClient:
         if not self._handshake_done or not self.connected:
             raise RuntimeError("primary handshake must complete before a file download")
         dest_dir.mkdir(parents=True, exist_ok=True)
-        out_path = dest_dir / filename
+        out_path = aim_connector.pull_target_path(dest_dir, filename, expected_size)
         if aim_connector.reuse_local_file(out_path, expected_size, on_progress):
             return out_path
 
@@ -1406,7 +1440,7 @@ class AimLiveClient:
         on_progress: Callable[[int, int], None] | None,
         *,
         info_timeout: float,
-    ) -> bytes:
+    ) -> bytearray:
         from services import aim_connector
 
         assert self._reader is not None and self._writer is not None
@@ -1424,7 +1458,7 @@ class AimLiveClient:
         if total_file_size <= 0:
             raise RuntimeError(f"Device reported no size for {filename}")
 
-        await self._send_stcp(_STCP_4BYTE_ACK)
+        await self._send_stcp(STCP_4BYTE_ACK)
         trace.log("initial_ack_sent")
 
         sink = aim_connector.BufferedSink()

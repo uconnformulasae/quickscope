@@ -14,7 +14,7 @@ class FakeClient:
     instances: list["FakeClient"] = []
     fail_connect: BaseException | None = None
 
-    def __init__(self, host, trace=None):
+    def __init__(self, host, port=2000, trace=None):
         self.host = host
         self._session_trace = trace
         self.connected = False

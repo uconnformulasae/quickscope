@@ -48,7 +48,7 @@ describe('AimSessionPicker', () => {
     expect(screen.getByText('Listing sessions on device...')).toBeTruthy();
 
     expect(await screen.findByText('a_0001.xrk')).toBeTruthy();
-    expect(screen.getByText('2.5 MB')).toBeTruthy();
+    expect(screen.getByText('2.4 MB')).toBeTruthy();
     expect(screen.getByText('800 B')).toBeTruthy();
     expect(screen.getByText('--')).toBeTruthy();
     expect(screen.getByText('4 laps')).toBeTruthy();
@@ -113,7 +113,7 @@ describe('AimSessionPicker', () => {
       results: [{ filename: 'a_0001.xrk', bytes: 2_500_000, duration_s: 3, session_id: 's1', parse_ok: true, local_path: '' }],
     }));
 
-    expect(await screen.findByText(/a_0001\.xrk · 2\.5 MB · downloaded in/)).toBeTruthy();
+    expect(await screen.findByText(/a_0001\.xrk · 2\.4 MB · downloaded in/)).toBeTruthy();
     expect(props.onDownloaded).toHaveBeenCalled();
     expect(screen.getAllByText('downloaded')).toHaveLength(2);
     expect(screen.getByText('0 selected')).toBeTruthy();

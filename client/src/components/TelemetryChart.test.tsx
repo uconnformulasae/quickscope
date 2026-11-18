@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { fakeLayout, makeSession, ramp } from '../test/dom-setup';
 import { describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { TelemetryChart } from './TelemetryChart';
+import { PreferencesProvider } from '../lib/usePreferences';
 
 const session = makeSession({
   1: { name: 'A', samples: ramp(1001) },
@@ -25,15 +26,10 @@ function wheel(canvas: HTMLElement, init: WheelEventInit) {
 }
 
 describe('TelemetryChart wheel', () => {
-  it('lets a plain wheel scroll the strips when they overflow, and zooms on Ctrl/Cmd+wheel', () => {
+  it('zooms on a plain wheel even when the strips overflow', () => {
     fakeLayout({ width: 1000, height: 300, scrollHeight: 800 }); // 4 strips don't fit
-    const onViewRangeChange = vi.fn();
-    renderChart({ onViewRangeChange });
-    const canvas = screen.getByTestId('telemetry-canvas');
-
-    expect(wheel(canvas, {}).defaultPrevented).toBe(false); // native scroll goes through
-    expect(wheel(canvas, { ctrlKey: true }).defaultPrevented).toBe(true);
-    expect(wheel(canvas, { metaKey: true }).defaultPrevented).toBe(true);
+    renderChart();
+    expect(wheel(screen.getByTestId('telemetry-canvas'), {}).defaultPrevented).toBe(true);
   });
 
   it('zooms on a plain wheel when everything fits', () => {
@@ -86,5 +82,192 @@ describe('TelemetryChart drawing', () => {
       act(() => pending.forEach(cb => cb(performance.now())));
     }
     expect(frames).toHaveLength(0);
+  });
+});
+
+describe('TelemetryChart delta cursor drag', () => {
+  const at = (x: number) => ({ clientX: x, clientY: 50, button: 0 });
+  // 10 s session, 1000 px wide: x → time = (x - LEFT_MARGIN) / plotW * 10
+  function timeAt(x: number) { return ((x - 60) / (1000 - 60 - 12)) * 10; }
+
+  it('drags cursor B without panning, and a press on a cursor does not re-place it', async () => {
+    vi.useFakeTimers();
+    fakeLayout({ width: 1000, height: 300 });
+    const onViewRangeChange = vi.fn();
+    renderChart({ onViewRangeChange });
+    fireEvent.click(screen.getByTestId('delta-toggle'));
+    const canvas = screen.getByTestId('telemetry-canvas');
+
+    for (const x of [300, 600]) {
+      fireEvent.mouseDown(canvas, at(x));
+      fireEvent.mouseUp(canvas, at(x));
+    }
+    expect(Number(canvas.dataset.cursorB)).toBeCloseTo(timeAt(600), 2);
+
+    fireEvent.mouseDown(canvas, at(600));
+    fireEvent.mouseMove(canvas, at(700));
+    fireEvent.mouseUp(canvas, at(700));
+    expect(Number(canvas.dataset.cursorB)).toBeCloseTo(timeAt(700), 2);
+    expect(Number(canvas.dataset.cursorA)).toBeCloseTo(timeAt(300), 2);
+
+    fireEvent.mouseDown(canvas, at(702));
+    fireEvent.mouseUp(canvas, at(702));
+    expect(Number(canvas.dataset.cursorB)).toBeCloseTo(timeAt(700), 2);
+
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(onViewRangeChange).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});
+
+describe('TelemetryChart delta readout', () => {
+  const at = (x: number) => ({ clientX: x, clientY: 50, button: 0 });
+  const place = (canvas: HTMLElement, x: number) => {
+    fireEvent.mouseDown(canvas, at(x));
+    fireEvent.mouseUp(canvas, at(x));
+  };
+
+  it('docks under the chart once both cursors are placed, and follows a drag', () => {
+    fakeLayout({ width: 1000, height: 900 });
+    renderChart({ activeChannels: [{ channelId: 1, color: '#f00' }] });
+    fireEvent.click(screen.getByTestId('delta-toggle'));
+    const canvas = screen.getByTestId('telemetry-canvas');
+
+    place(canvas, 300);
+    expect(screen.queryByTestId('delta-readout')).toBeNull(); // only one cursor yet
+    place(canvas, 600);
+
+    const readout = screen.getByTestId('delta-readout');
+    // Docked after the plot, not inside the canvas container.
+    expect(canvas.parentElement!.contains(readout)).toBe(false);
+    expect(readout.textContent).toMatch(/Δt\s*=\s*\d+\.\d{3}s/);
+    const rows = readout.querySelectorAll('tbody tr');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].querySelectorAll('td')).toHaveLength(4);
+
+    const before = readout.textContent;
+    fireEvent.mouseDown(canvas, at(600));
+    fireEvent.mouseMove(canvas, at(800));
+    fireEvent.mouseUp(canvas, at(800));
+    expect(screen.getByTestId('delta-readout').textContent).not.toBe(before);
+  });
+
+  it('goes away when delta mode is turned off', () => {
+    fakeLayout({ width: 1000, height: 900 });
+    renderChart({ activeChannels: [{ channelId: 1, color: '#f00' }] });
+    fireEvent.click(screen.getByTestId('delta-toggle'));
+    const canvas = screen.getByTestId('telemetry-canvas');
+    place(canvas, 300);
+    place(canvas, 600);
+    expect(screen.getByTestId('delta-readout')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('delta-toggle'));
+    expect(screen.queryByTestId('delta-readout')).toBeNull();
+  });
+});
+
+describe('TelemetryChart lap compare', () => {
+  const lapSess = {
+    ...makeSession({ 1: { name: 'A', samples: ramp(1001) } }), // 10 s
+    lapMarkers: [
+      { timestamp: 0, lapNumber: 1 },
+      { timestamp: 4000, lapNumber: 2 },
+      { timestamp: 7000, lapNumber: 3 },
+    ],
+  };
+
+  it('shows a compare chip for 2+ selected laps and exits via its button', () => {
+    fakeLayout({ width: 1000, height: 300 });
+    const onClear = vi.fn();
+    render(
+      <TelemetryChart session={lapSess} activeChannels={[{ channelId: 1, color: '#f00' }]} viewRange={null}
+        onViewRangeChange={() => {}} selectedLaps={[0, 1]} onClearLapSelection={onClear} />,
+    );
+    const chip = screen.getByTestId('lap-compare-chip');
+    expect(chip.textContent).toContain('Lap 1');
+    expect(chip.textContent).toContain('Lap 2');
+    fireEvent.click(screen.getByRole('button', { name: 'Exit lap compare' }));
+    expect(onClear).toHaveBeenCalled();
+  });
+
+  it('keeps compare zoom/pan inside the chart (no session view-range emits)', () => {
+    vi.useFakeTimers();
+    fakeLayout({ width: 1000, height: 300 });
+    const onViewRangeChange = vi.fn();
+    render(
+      <TelemetryChart session={lapSess} activeChannels={[{ channelId: 1, color: '#f00' }]} viewRange={null}
+        onViewRangeChange={onViewRangeChange} selectedLaps={[0, 1]} />,
+    );
+    const canvas = screen.getByTestId('telemetry-canvas');
+    wheel(canvas, {});
+    fireEvent.mouseDown(canvas, { clientX: 500, clientY: 50, button: 0 });
+    fireEvent.mouseMove(canvas, { clientX: 400, clientY: 50 });
+    fireEvent.mouseUp(canvas, { clientX: 400, clientY: 50 });
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(onViewRangeChange).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('shows no chip for a single selected lap', () => {
+    fakeLayout({ width: 1000, height: 300 });
+    render(
+      <TelemetryChart session={lapSess} activeChannels={[{ channelId: 1, color: '#f00' }]} viewRange={null}
+        onViewRangeChange={() => {}} selectedLaps={[1]} />,
+    );
+    expect(screen.queryByTestId('lap-compare-chip')).toBeNull();
+  });
+});
+
+describe('TelemetryChart unit menu', () => {
+  function speedSession() {
+    const s = makeSession({ 1: { name: 'Speed', samples: ramp(1001) }, 2: { name: 'RPM', samples: ramp(1001) } });
+    s.channels.set(1, { ...s.channels.get(1)!, units: 'km/h' });
+    s.channels.set(2, { ...s.channels.get(2)!, units: 'rpm' });
+    return s;
+  }
+  const renderWithPrefs = (s = speedSession()) => render(
+    <PreferencesProvider>
+      <TelemetryChart session={s} activeChannels={[{ channelId: 1, color: '#f00' }, { channelId: 2, color: '#0f0' }]}
+        viewRange={null} onViewRangeChange={() => {}} />
+    </PreferencesProvider>,
+  );
+
+  it('opens unit options when the strip label/axis area is clicked, and applies the choice', () => {
+    localStorage.clear();
+    fakeLayout({ width: 1000, height: 400 });
+    renderWithPrefs();
+    const canvas = screen.getByTestId('telemetry-canvas');
+    // Two strips of ~182 px each; click the first strip's label area (x < left margin).
+    fireEvent.mouseDown(canvas, { clientX: 20, clientY: 60, button: 0 });
+    const menu = screen.getByRole('menu', { name: /Speed units/ });
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'mph' }));
+    expect(JSON.parse(localStorage.getItem('quickscope-preferences')!).unitOverrides).toEqual({ Speed: 'mph' });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('does not open for a channel whose units cannot change', () => {
+    fakeLayout({ width: 1000, height: 400 });
+    renderWithPrefs();
+    fireEvent.mouseDown(screen.getByTestId('telemetry-canvas'), { clientX: 20, clientY: 300, button: 0 });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('does not open in overlay mode', () => {
+    fakeLayout({ width: 1000, height: 400 });
+    render(
+      <PreferencesProvider>
+        <TelemetryChart session={speedSession()} activeChannels={[{ channelId: 1, color: '#f00' }, { channelId: 2, color: '#0f0' }]}
+          viewRange={null} onViewRangeChange={() => {}} chartMode="overlay" />
+      </PreferencesProvider>,
+    );
+    const canvas = screen.getByTestId('telemetry-canvas');
+    for (const x of [5, 20, 40, 990]) fireEvent.mouseDown(canvas, { clientX: x, clientY: 60, button: 0 });
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('does not open from the plot area', () => {
+    fakeLayout({ width: 1000, height: 400 });
+    renderWithPrefs();
+    fireEvent.mouseDown(screen.getByTestId('telemetry-canvas'), { clientX: 500, clientY: 60, button: 0 });
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 });

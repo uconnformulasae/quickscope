@@ -347,7 +347,9 @@ def test_download_runs_handshake_request_ack_and_writes_file(tmp_path, monkeypat
     assert list((tmp_path / "dest").glob("*.tmp")) == []
 
 
-def test_download_replaces_incomplete_local_file(tmp_path, monkeypatch):
+def test_download_keeps_a_different_local_file_of_the_same_name(tmp_path, monkeypatch):
+    """A local file that isn't the size the logger reports is another session
+    (names are reused after a memory clear): it stays, the pull goes beside it."""
     (tmp_path / "a.xrz").write_bytes(b"x" * 3)
     sock = ScriptedSocket([encode_frame(b"STCP", b"\x00" * 8)])  # no info frames
     monkeypatch.setattr(aim_connector, "_open_device_socket", lambda **_k: (sock, "10.0.0.1"))
@@ -363,7 +365,9 @@ def test_download_replaces_incomplete_local_file(tmp_path, monkeypatch):
 
     # Short info reply → falls back to the session-list size
     assert received_sizes == [10]
+    assert out == tmp_path / "a_2.xrz"
     assert out.read_bytes() == b"0123456789"
+    assert (tmp_path / "a.xrz").read_bytes() == b"x" * 3
 
 
 def test_download_error_closes_socket_and_leaves_no_file(tmp_path, monkeypatch):

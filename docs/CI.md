@@ -6,8 +6,8 @@ QuickScope uses **GitHub-hosted runners** for all CI.
 
 | Workflow | When | Purpose |
 |----------|------|---------|
-| [ci.yml](../.github/workflows/ci.yml) | PRs targeting `main`, `workflow_dispatch` | Tests, Docker smoke, unsigned desktop builds (all platforms) |
-| [release.yml](../.github/workflows/release.yml) | Tags `v*.*.*`, `workflow_dispatch` | Signed/notarized (when secrets exist) installers + GitHub Release |
+| [ci.yml](../.github/workflows/ci.yml) | PRs targeting `main`, `workflow_dispatch` | Tests, Docker smoke |
+| [release.yml](../.github/workflows/release.yml) | `workflow_dispatch` only | Desktop installers (all platforms, signed/notarized when secrets exist) published to a permanent GitHub Release tagged `v<package.json version>` |
 
 ### CI jobs (`ci.yml`)
 
@@ -16,13 +16,12 @@ QuickScope uses **GitHub-hosted runners** for all CI.
 | `test / ubuntu` | `ubuntu-latest` | `pytest -m "not dll"`, `npm audit`, TypeScript (`npm run check`), Vitest |
 | `test / windows` | `windows-latest` | `pytest -m dll` (MatLabXRK DLL + fixtures) |
 | `docker` | `ubuntu-latest` | `docker compose build` + backend `/docs` healthcheck |
-| `desktop / win-x64` | `windows-latest` | PyInstaller + Electron NSIS (x64) |
-| `desktop / mac-arm64` | `macos-latest` | Unsigned `.dmg` / `.zip` (arm64) |
-| `desktop / mac-x64-intel` | `macos-15-intel` | Unsigned `.dmg` / `.zip` (x64, native Intel runner) |
-| `desktop / linux-x64` | `ubuntu-latest` | AppImage x64 (libxrk backend) |
-| `desktop / linux-arm64` | `ubuntu-24.04-arm` | AppImage arm64 (libxrk backend) |
 
-**Full desktop matrix runs on every PR to `main`** (five parallel installer jobs). Use `workflow_dispatch` inputs `skip_desktop` or `skip_docker` to debug faster.
+Desktop installers are **not** built on PRs. Use `workflow_dispatch` input `skip_docker` to debug faster.
+
+### Release jobs (`release.yml`)
+
+Run from **Actions → Release → Run workflow**. `prepare` reads the version from `package.json` and fails immediately if tag `v<version>` already exists. The `build` matrix (win-x64, mac-arm64, mac-x64-intel, linux-x64, linux-arm64) then produces installers, and `release` creates the tag on the selected commit and publishes a GitHub Release with every installer attached. Release assets never expire; the intermediate workflow artifacts are kept for one day.
 
 Parser coverage uses pytest markers (`dll`, `libxrk`) — there are no separate “regression” workflow files.
 
@@ -77,13 +76,8 @@ On `main`, enable required status checks:
 - `test / ubuntu`
 - `test / windows`
 - `docker`
-- `desktop / win-x64`
-- `desktop / mac-arm64`
-- `desktop / mac-x64-intel`
-- `desktop / linux-x64`
-- `desktop / linux-arm64`
 
-Remove legacy names (`test`, `dll-regression`, `libxrk-regression`, `smoke / smoke`, etc.) if they are still listed.
+Remove legacy names (`test`, `dll-regression`, `libxrk-regression`, `smoke / smoke`, `desktop / *`, etc.) if they are still listed.
 
 ## Local commands
 

@@ -275,11 +275,11 @@ def test_hub_failed_connect_stops_keepalive(monkeypatch) -> None:  # noqa: ANN00
 
     async def body() -> None:
         _install_fake_keepalive(monkeypatch)
-        port = _closed_tcp_port()
+        closed_port = _closed_tcp_port()
 
         class _ClosedPortClient(AimLiveClient):
-            def __init__(self, host: str, trace=None) -> None:  # noqa: ANN001
-                super().__init__(host=host, port=port, trace=trace)
+            def __init__(self, host: str, port: int = 0, trace=None) -> None:  # noqa: ANN001, ARG002
+                super().__init__(host=host, port=closed_port, trace=trace)
 
             async def connect(self, **kwargs) -> None:  # noqa: ANN003
                 await super().connect(discover_first=False, tcp_timeout=1.0)

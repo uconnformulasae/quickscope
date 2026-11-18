@@ -8,13 +8,13 @@ Built-in layouts live in the client and are never written here.
 """
 
 import json
-import os
 import threading
-import time
 from pathlib import Path
 
-_DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DATA_DIR = Path(os.environ.get("QUICKSCOPE_DATA_DIR", _DEFAULT_DATA_DIR))
+from config import DATA_DIR
+from services.json_store import load_json, save_json
+from sanitize import MAX_LAYOUT_NAME_LEN, InvalidInput, clean_text, is_valid_layout_id, validate_layout_id
+
 LAYOUTS_FILE = DATA_DIR / "live_layouts.json"
 
 MAX_LAYOUT_BYTES = 256 * 1024
@@ -36,20 +36,12 @@ def _empty() -> dict:
 
 
 def _load_unlocked() -> dict:
-    path = LAYOUTS_FILE
-    if not path.exists():
-        return _empty()
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-        if not isinstance(data, dict) or not isinstance(data.get("layouts"), list):
-            raise ValueError("live layouts file has the wrong shape")
-    except (ValueError, UnicodeDecodeError):
-        # Keep the unreadable file for recovery and start fresh.
-        try:
-            os.replace(path, path.with_name(f"{path.name}.{int(time.time())}.corrupt"))
-        except OSError:
-            pass
+    # Missing or unreadable (kept aside for recovery): start fresh.
+    data = load_json(
+        LAYOUTS_FILE,
+        lambda d: isinstance(d, dict) and isinstance(d.get("layouts"), list),
+    )
+    if data is None:
         return _empty()
     sel = data.get("selection") if isinstance(data.get("selection"), dict) else {}
     active = sel.get("active") if isinstance(sel.get("active"), dict) else {}
@@ -64,14 +56,7 @@ def _load_unlocked() -> dict:
 
 
 def _save_unlocked(data: dict) -> None:
-    path = LAYOUTS_FILE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)  # atomic: a crash mid-write can't leave a truncated file
+    save_json(LAYOUTS_FILE, data)
 
 
 def load() -> dict:
@@ -82,12 +67,18 @@ def load() -> dict:
 def _check_layout(layout_id: str, layout: object) -> dict:
     if not isinstance(layout, dict):
         raise LayoutError("Layout must be a JSON object")
+    try:
+        validate_layout_id(layout_id)
+        name = clean_text(layout.get("name"), max_len=MAX_LAYOUT_NAME_LEN, field="Layout name")
+    except InvalidInput as exc:
+        raise LayoutError(str(exc)) from None
     if layout.get("id") != layout_id:
         raise LayoutError("Layout id does not match the URL")
     if layout_id.startswith("builtin-"):
         raise LayoutError("Built-in layouts can't be overwritten; save a copy instead")
-    if not isinstance(layout.get("name"), str) or not layout["name"].strip():
+    if not name:
         raise LayoutError("Layout needs a name")
+    layout = {**layout, "name": name}
     if layout.get("vehicle") not in VEHICLES:
         raise LayoutError('Layout vehicle must be "ev" or "ic"')
     if not isinstance(layout.get("widgets"), list):
@@ -136,10 +127,10 @@ def update_selection(partial: dict) -> dict:
         sel = data["selection"]
         if isinstance(partial.get("active"), dict):
             sel["active"] = {
-                k: v for k, v in partial["active"].items() if k in VEHICLES and isinstance(v, str)
+                k: v for k, v in partial["active"].items() if k in VEHICLES and is_valid_layout_id(v)
             }
         for key in ("pinned", "last_used"):
-            if key in partial and (partial[key] is None or isinstance(partial[key], str)):
+            if key in partial and (partial[key] is None or is_valid_layout_id(partial[key])):
                 sel[key] = partial[key]
         _save_unlocked(data)
         return sel

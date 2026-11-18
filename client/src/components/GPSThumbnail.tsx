@@ -139,7 +139,7 @@ export function GPSThumbnail({
         style={{ width: size, height: size }}
         title="No GPS data"
       >
-        <MapPin className="w-3 h-3 text-muted-foreground/50" />
+        <MapPin className="w-3 h-3 text-muted-foreground" />
       </div>
     );
   }
@@ -170,7 +170,7 @@ export function GPSThumbnail({
           strokeWidth={1.5}
           strokeLinejoin="round"
           strokeLinecap="round"
-          className="text-primary"
+          className="text-primary-text"
         />
         <circle
           cx={sx * size}

@@ -1,62 +1,90 @@
 import { useState, useMemo, useCallback } from 'react';
 import { X, Download, Search, CheckSquare, Square } from 'lucide-react';
 import type { XRKSession } from '../lib/xrk-parser';
-import { exportCSV } from '../lib/api';
+import { exportCSV, exportSessionCSV, type ExportConversions } from '../lib/api';
+import { sanitizeExportFilePart } from '../lib/sessionDisplayName';
+import { useDisplaySamples } from '../lib/useDisplaySamples';
+import { getConverter, linearCoefficients } from '../lib/units';
+import { Modal } from './Modal';
+import { downloadBlob } from '../lib/saveBlob';
 
 interface ExportDialogProps {
-  session: XRKSession;
   fileName: string | null;
   onClose: () => void;
+  /** QuickScope session list label (preferred over ``fileName`` for download names). */
+  exportBaseName?: string;
+  /** Active analysis session (in-app export). */
+  session?: XRKSession;
+  /** Stored session id for export from the session browser. */
+  sessionId?: string;
+  /** Channel list from loadSession when not opening the log in analysis. */
+  browserChannels?: CsvExportChannel[];
+  /**
+   * Channels to start selected (e.g. those open in the chart). Ids that aren't
+   * exportable are ignored; if none remain, every channel starts selected.
+   */
+  preselectedChannelIds?: number[];
 }
 
-interface ExportChannel {
+interface CsvExportChannel {
   id: number;
   name: string;
   units: string;
   sampleCount: number;
 }
 
+function channelsForExport(
+  session: XRKSession | undefined,
+  browserChannels: CsvExportChannel[] | undefined,
+): CsvExportChannel[] {
+  if (browserChannels?.length) {
+    return [...browserChannels].sort((a, b) => a.name.localeCompare(b.name));
+  }
+  if (!session) return [];
+
+  const list: CsvExportChannel[] = [];
+  session.channels.forEach((ch) => {
+    const count = ch.fileSampleCount ?? (session.samples.get(ch.index) || []).length;
+    if (count === 0) return;
+    list.push({
+      id: ch.index,
+      name: ch.shortName,
+      units: ch.units,
+      sampleCount: count,
+    });
+  });
+  list.sort((a, b) => a.name.localeCompare(b.name));
+  return list;
+}
+
+function initialSelection(channels: CsvExportChannel[], preselectedIds: number[] | undefined): Set<number> {
+  const allIds = new Set(channels.map((ch) => ch.id));
+  const preselected = new Set((preselectedIds ?? []).filter((id) => allIds.has(id)));
+  return preselected.size > 0 ? preselected : allIds;
+}
+
 export function ExportDialog({
   session,
+  sessionId,
+  browserChannels,
+  preselectedChannelIds,
   fileName,
+  exportBaseName,
   onClose,
 }: ExportDialogProps) {
   const [search, setSearch] = useState('');
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => {
-    // Default: select all channels that have data in the file
-    const ids = new Set<number>();
-    session.channels.forEach((ch) => {
-      const fileCount = ch.fileSampleCount ?? (session.samples.get(ch.index) || []).length;
-      if (fileCount > 0) {
-        ids.add(ch.index);
-      }
-    });
-    return ids;
-  });
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() =>
+    initialSelection(channelsForExport(session, browserChannels), preselectedChannelIds),
+  );
+  const display = useDisplaySamples();
+  const [useDisplayUnits, setUseDisplayUnits] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
-  // Build the full channel list (session + derived), only those with data
-  const allChannels = useMemo<ExportChannel[]>(() => {
-    const list: ExportChannel[] = [];
-
-    session.channels.forEach((ch) => {
-      const count = ch.fileSampleCount ?? (session.samples.get(ch.index) || []).length;
-      if (count === 0) return;
-      list.push({
-        id: ch.index,
-        name: ch.shortName,
-        units: ch.units,
-        sampleCount: count,
-      });
-    });
-
-    // Derived channels are not listed: the backend export only knows session channels.
-
-    // Sort alphabetically
-    list.sort((a, b) => a.name.localeCompare(b.name));
-    return list;
-  }, [session]);
+  const allChannels = useMemo(
+    () => channelsForExport(session, browserChannels),
+    [session, browserChannels],
+  );
 
   const filteredChannels = useMemo(() => {
     if (!search) return allChannels;
@@ -117,16 +145,23 @@ export function ExportDialog({
       }
 
       // Call backend export endpoint
-      const blob = await exportCSV(channelNames);
-      const url = URL.createObjectURL(blob);
-      const baseName = fileName ? fileName.replace(/\.(xrk|xrz)$/i, '') : 'export';
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${baseName}_export.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const convert: ExportConversions = {};
+      if (useDisplayUnits) {
+        for (const c of selectedChannels) {
+          const target = display.unitOf(c.name, c.units);
+          const conv = getConverter(c.units, target);
+          if (!conv.identity) convert[c.name] = { unit: conv.unit, ...linearCoefficients(conv) };
+        }
+      }
+      const blob = sessionId
+        ? await exportSessionCSV(sessionId, channelNames, convert)
+        : await exportCSV(channelNames, convert);
+      const baseName = exportBaseName
+        ? sanitizeExportFilePart(exportBaseName)
+        : fileName
+          ? sanitizeExportFilePart(fileName.replace(/\.(xrk|xrz)$/i, ''))
+          : 'export';
+      downloadBlob(blob, `${baseName}_export.csv`);
 
       onClose();
     } catch (err) {
@@ -135,121 +170,129 @@ export function ExportDialog({
     } finally {
       setIsExporting(false);
     }
-  }, [selectedIds, allChannels, fileName, onClose]);
+  }, [selectedIds, allChannels, fileName, exportBaseName, onClose, sessionId, useDisplayUnits, display]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 flex flex-col overflow-hidden"
-        style={{ maxHeight: '80vh' }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Download className="w-4 h-4 text-primary" />
-            <span className="text-sm font-semibold text-foreground">Export CSV</span>
-          </div>
+    <Modal
+      onClose={onClose}
+      closeOnEscape={false}
+      className="w-full max-w-md mx-4 flex flex-col overflow-hidden"
+      style={{ maxHeight: '80vh' }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <Download className="w-4 h-4 text-primary-text" />
+          <span className="text-sm font-semibold text-foreground">Export CSV</span>
+        </div>
+        <button
+          onClick={onClose}
+          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Search + Select All/None */}
+      <div className="px-4 pt-3 pb-2 flex-shrink-0 space-y-2">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Filter channels..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full pl-8 pr-3 py-1.5 bg-muted/50 border border-border rounded-md text-xs text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+        </div>
+        <div className="flex items-center justify-between">
           <button
-            onClick={onClose}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            onClick={selectedCount === allChannels.length ? deselectAll : selectAll}
+            className="flex items-center gap-1 px-2 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Search + Select All/None */}
-        <div className="px-4 pt-3 pb-2 flex-shrink-0 space-y-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-            <input
-              type="text"
-              placeholder="Filter channels..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 bg-muted/50 border border-border rounded-md text-xs text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <button
-              onClick={selectedCount === allChannels.length ? deselectAll : selectAll}
-              className="flex items-center gap-1 px-2 py-0.5 rounded text-xs text-muted-foreground hover:text-foreground border border-border hover:border-muted-foreground/40 transition-colors"
-            >
-              {selectedCount === allChannels.length ? (
-                <><Square className="w-3 h-3" /> Deselect All</>
-              ) : (
-                <><CheckSquare className="w-3 h-3" /> Select All</>
-              )}
-            </button>
-            <span className="text-xs text-muted-foreground">
-              {selectedCount} / {allChannels.length} selected
-            </span>
-          </div>
-        </div>
-
-        {/* Channel list */}
-        <div className="flex-1 overflow-y-auto px-4 pb-2 space-y-0.5 min-h-0">
-          {filteredChannels.map(ch => {
-            const isSelected = selectedIds.has(ch.id);
-            return (
-              <button
-                key={ch.id}
-                onClick={() => toggleChannel(ch.id)}
-                className={`flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-left transition-colors hover:bg-muted/30 ${isSelected ? 'bg-muted/20' : ''}`}
-              >
-                <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-border'}`}>
-                  {isSelected && (
-                    <svg viewBox="0 0 10 8" fill="none" className="w-2.5 h-2 text-white">
-                      <path d="M1 4L3.5 6.5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <span className={`text-xs font-medium ${isSelected ? 'text-foreground' : 'text-muted-foreground'}`}>
-                    {ch.name}
-                    {ch.units && <span className="ml-1 text-muted-foreground/50">{ch.units}</span>}
-                  </span>
-                </div>
-                <span className="text-xs text-muted-foreground/40 tabular flex-shrink-0">
-                  {ch.sampleCount >= 1000 ? `${(ch.sampleCount / 1000).toFixed(0)}K` : ch.sampleCount}
-                </span>
-              </button>
-            );
-          })}
-          {filteredChannels.length === 0 && (
-            <div className="text-center py-8 text-muted-foreground text-xs">No channels match your filter</div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-border flex-shrink-0 bg-muted/10">
-          <div className="text-xs text-muted-foreground">
-            {exportError ? (
-              <span className="text-red-500" role="alert">Export failed: {exportError}</span>
-            ) : totalRows > 0 ? (
-              <>~{totalRows.toLocaleString()} rows</>
+            {selectedCount === allChannels.length ? (
+              <><Square className="w-3 h-3" /> Deselect All</>
             ) : (
-              'Select channels to export'
+              <><CheckSquare className="w-3 h-3" /> Select All</>
             )}
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onClose}
-              className="px-3 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors border border-border"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={selectedIds.size === 0 || isExporting}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" />
-              {isExporting ? 'Exporting...' : `Export ${selectedCount > 0 ? selectedCount : ''} channels`}
-            </button>
-          </div>
+          </button>
+          <span className="text-xs text-muted-foreground">
+            {selectedCount} / {allChannels.length} selected
+          </span>
         </div>
       </div>
-    </div>
+
+      {/* Channel list */}
+      <div className="flex-1 overflow-y-auto px-4 pb-2 space-y-0.5 min-h-0">
+        {filteredChannels.map(ch => {
+          const isSelected = selectedIds.has(ch.id);
+          return (
+            <button
+              key={ch.id}
+              onClick={() => toggleChannel(ch.id)}
+              className={`no-press flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-left transition-colors hover:bg-muted/30 ${isSelected ? 'bg-muted/20' : ''}`}
+            >
+              <div className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center transition-colors ${isSelected ? 'bg-primary border-primary' : 'border-border'}`}>
+                {isSelected && (
+                  <svg viewBox="0 0 10 8" fill="none" className="w-2.5 h-2 text-white">
+                    <path d="M1 4L3.5 6.5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className={`text-xs font-medium ${isSelected ? 'text-foreground' : 'text-muted-foreground'}`}>
+                  {ch.name}
+                  {ch.units && <span className="ml-1 text-muted-foreground">{useDisplayUnits ? display.unitOf(ch.name, ch.units) : ch.units}</span>}
+                </span>
+              </div>
+              <span className="text-xs text-muted-foreground tabular flex-shrink-0">
+                {ch.sampleCount >= 1000 ? `${(ch.sampleCount / 1000).toFixed(0)}K` : ch.sampleCount}
+              </span>
+            </button>
+          );
+        })}
+        {filteredChannels.length === 0 && (
+          <div className="text-center py-8 text-muted-foreground text-xs">No channels match your filter</div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between px-4 py-3 border-t border-border flex-shrink-0 bg-muted/10">
+        <div className="text-xs text-muted-foreground">
+          {exportError ? (
+            <span className="text-red-500" role="alert">Export failed: {exportError}</span>
+          ) : totalRows > 0 ? (
+            <>~{totalRows.toLocaleString()} rows</>
+          ) : (
+            'Select channels to export'
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground mr-1 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={useDisplayUnits}
+              onChange={e => setUseDisplayUnits(e.target.checked)}
+              className="accent-primary"
+            />
+            Display units
+          </label>
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors border border-border"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={selectedIds.size === 0 || isExporting}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-white hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            {isExporting ? 'Exporting...' : `Export ${selectedCount > 0 ? selectedCount : ''} channels`}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }

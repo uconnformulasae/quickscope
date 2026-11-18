@@ -3,15 +3,71 @@
  * Separated from TelemetryChart.tsx for readability.
  */
 import type { ChannelSample } from './xrk-parser';
-import type { DrawContext, StripLayout } from './chart-utils';
+import type { ChartSeriesCacheEntry, DrawContext, StripLayout } from './chart-utils';
 import {
-  MONO_FONT, AXIS_WIDTH,
+  MONO_FONT, AXIS_WIDTH, scaledFont,
   BOTTOM_AXIS_HEIGHT,
-  niceAxisTicks, formatValue, clamp, brightenColor, minMaxTrace,
+  niceAxisTicks, formatValue, clamp, scanSeries, visibleSampleRange,
+  contrastText, layoutLegendRows, thinLabels, chooseLabelBox,
+  type LabelRect, type TracePoints,
 } from './chart-utils';
 import { formatChartAxisTime } from './time-format';
+import { convertibleUnits } from './units';
+import { lapColor } from './lap-compare';
+import { formatLapTime } from './xrk-parser';
 
 const LERP_RATE = 0.18;
+
+/**
+ * One series at the current zoom: its visible index range, the trace to draw,
+ * its value range and its min/max, all from a single walk over the samples.
+ * With a frame cache the walk happens once per zoom, not once per frame.
+ */
+function seriesOf(dc: DrawContext, samples: ChannelSample[]): ChartSeriesCacheEntry {
+  const { xRange, plotW } = dc;
+  const cached = dc.cache?.get(samples);
+  if (cached && cached.x0 === xRange[0] && cached.x1 === xRange[1] && cached.plotW === plotW && cached.lm === dc.lm) {
+    return cached;
+  }
+  const [start, end] = visibleSampleRange(samples, xRange);
+  const entry: ChartSeriesCacheEntry = {
+    x0: xRange[0], x1: xRange[1], plotW, lm: dc.lm, start, end,
+    ...scanSeries(
+      samples, start, end, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW,
+      xRange[0] * 1000, xRange[1] * 1000,
+    ),
+  };
+  dc.cache?.set(samples, entry);
+  return entry;
+}
+
+/** Value range feeding a channel's y-axis: every compared lap in compare mode. */
+function channelValueRange(dc: DrawContext, channelId: number, allSamples: ChannelSample[]): [number, number] {
+  const series = dc.compare?.series.get(channelId);
+  if (!series) return seriesOf(dc, allSamples).valueRange;
+  let mn = Infinity, mx = -Infinity;
+  for (const lap of series) {
+    const [lo, hi] = seriesOf(dc, lap).valueRange;
+    if (lo < mn) mn = lo;
+    if (hi > mx) mx = hi;
+  }
+  return [mn, mx];
+}
+
+/** Stroke one trace (already min-max reduced). */
+function strokeTrace(dc: DrawContext, ds: ChannelSample[], valToY: (v: number) => number) {
+  if (ds.length < 2) return;
+  const { ctx, xRange, plotW } = dc;
+  ctx.beginPath();
+  let started = false;
+  for (const s of ds) {
+    const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
+    const y = valToY(s.value);
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
 
 /** Compute smoothed Y-range for overlay mode shared axes */
 export function computeOverlayYRanges(dc: DrawContext): void {
@@ -21,14 +77,7 @@ export function computeOverlayYRanges(dc: DrawContext): void {
     const data = dc.channelDataMap.get(strip.channelId);
     if (!data) continue;
     const units = data.def.units || '';
-    const visible = data.allSamples.length > 0
-      ? dc.getVisibleSamples(strip.channelId, data.allSamples, dc.xRange, dc.plotW)
-      : [];
-    let mn = Infinity, mx = -Infinity;
-    for (const s of visible) {
-      if (s.value < mn) mn = s.value;
-      if (s.value > mx) mx = s.value;
-    }
+    let [mn, mx] = channelValueRange(dc, strip.channelId, data.allSamples);
     if (!isFinite(mn)) { mn = 0; mx = 1; }
     const existing = unitMinMax.get(units);
     if (existing) {
@@ -63,16 +112,12 @@ export function computeOverlayYRanges(dc: DrawContext): void {
 
 /** Compute Y-range for a single strip (separate mode), with lerp smoothing */
 function computeStripYRange(
-  dc: DrawContext, strip: StripLayout, ds: ChannelSample[], defUnits: string,
+  dc: DrawContext, strip: StripLayout, allSamples: ChannelSample[], defUnits: string,
 ): [number, number] {
   const sharedRange = dc.chartMode === 'overlay' ? dc.sharedYRanges.get(defUnits) : undefined;
   if (sharedRange) return sharedRange;
 
-  let tMin = Infinity, tMax = -Infinity;
-  for (const s of ds) {
-    if (s.value < tMin) tMin = s.value;
-    if (s.value > tMax) tMax = s.value;
-  }
+  let [tMin, tMax] = channelValueRange(dc, strip.channelId, allSamples);
   if (!isFinite(tMin)) { tMin = 0; tMax = 1; }
   const yPad = (tMax - tMin) * 0.08 || 0.5;
   const targetMin = tMin - yPad;
@@ -96,11 +141,9 @@ function computeStripYRange(
 }
 
 /** Draw all strip content: grid, traces, min/max markers, y-axes, labels */
-export function drawStrips(
-  dc: DrawContext,
-  globalMinMaxCache: Map<number, { minSample: ChannelSample; maxSample: ChannelSample }>,
-): void {
+export function drawStrips(dc: DrawContext): void {
   const { ctx, w, lm, rm, plotW, xRange, xTicks, strips, channelDataMap, chartMode, session } = dc;
+  const pendingMarkers: { strip: StripLayout; mm: VisibleMinMax; valToY: (v: number) => number; units: string; trace: TracePoints }[] = [];
   let gridDrawnForOverlay = false;
   const overlayAxesDrawn = new Set<string>();
 
@@ -108,13 +151,11 @@ export function drawStrips(
     const data = channelDataMap.get(strip.channelId);
     if (!data) continue;
     const { allSamples, def } = data;
-    const visible = allSamples.length > 0
-      ? dc.getVisibleSamples(strip.channelId, allSamples, xRange, plotW)
-      : [];
+    const series = seriesOf(dc, allSamples);
 
-    const [yMin, yMax] = computeStripYRange(dc, strip, visible, def.units || '');
+    const [yMin, yMax] = computeStripYRange(dc, strip, allSamples, def.units || '');
     // Min-max per-pixel optimization for rendering (pixel-identical output)
-    const ds = minMaxTrace(visible, (tSec) => dc.timeToX(tSec, xRange, plotW), plotW);
+    const ds = series.trace;
     const ySpan = yMax - yMin || 1;
     const valToY = (v: number) =>
       strip.top + strip.height - 4 - ((v - yMin) / ySpan) * (strip.height - 8);
@@ -161,41 +202,61 @@ export function drawStrips(
       ctx.setLineDash([]);
 
       if (strip === strips[0]) {
-        ctx.font = `9px ${MONO_FONT}`;
+        ctx.font = scaledFont(9, dc.fontScale);
         ctx.fillStyle = dc.colors.lapText;
         ctx.textAlign = 'center';
-        session.lapMarkers.forEach((lap, i) => {
-          const lt = lap.timestamp / 1000;
-          if (lt >= xRange[0] && lt <= xRange[1]) {
-            ctx.fillText(`L${i + 1}`, dc.timeToX(lt, xRange, plotW), strip.top + 10);
-          }
-        });
+        // Dense laps: skip labels that would overlap the previous one.
+        const shown = session.lapMarkers
+          .map((lap, i) => ({ t: lap.timestamp / 1000, label: `L${i + 1}` }))
+          .filter(l => l.t >= xRange[0] && l.t <= xRange[1]);
+        const xs = shown.map(l => dc.timeToX(l.t, xRange, plotW));
+        const keep = thinLabels(xs, shown.map(l => ctx.measureText(l.label).width), 4);
+        shown.forEach((l, i) => { if (keep[i]) ctx.fillText(l.label, xs[i], strip.top + 10 * dc.fontScale); });
       }
 
       if (chartMode === 'overlay') gridDrawnForOverlay = true;
     }
 
-    // Line trace
-    if (ds.length > 1) {
+    // Line trace(s), clipped to the plot: getVisibleSamples pads past the
+    // window edges so lines run to the border, but must not draw past it.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(lm, strip.top, plotW, strip.height);
+    ctx.clip();
+    ctx.lineJoin = 'round';
+    let labelTrace = ds; // trace min/max boxes should avoid (first lap in compare)
+    const lapSeries = dc.compare?.series.get(strip.channelId);
+    if (lapSeries) {
+      // Compare: one trace per lap. Separate strips colour by lap; overlay
+      // keeps the channel colour and tells laps apart by dash + fade.
+      for (let i = lapSeries.length - 1; i >= 0; i--) {
+        const lapDs = seriesOf(dc, lapSeries[i]).trace;
+        if (i === 0) labelTrace = lapDs;
+        ctx.save();
+        if (chartMode === 'overlay') {
+          ctx.strokeStyle = strip.color;
+          ctx.globalAlpha = Math.max(0.4, 1 - 0.2 * i);
+          ctx.setLineDash(i === 0 ? [] : [6, 3]);
+        } else {
+          ctx.strokeStyle = lapColor(i);
+        }
+        ctx.lineWidth = i === 0 ? 2.0 : 1.5;
+        strokeTrace(dc, lapDs, valToY);
+        ctx.restore();
+      }
+    } else if (ds.length > 1) {
       ctx.strokeStyle = strip.color;
       ctx.lineWidth = 2.0;
-      ctx.lineJoin = 'round';
-      ctx.beginPath();
-      let started = false;
-      for (const s of ds) {
-        const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
-        const y = valToY(s.value);
-        if (!started) { ctx.moveTo(x, y); started = true; }
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
+      strokeTrace(dc, ds, valToY);
     }
 
     // Data point markers — visible when zoomed in tight (>8px between points)
-    if (visible.length > 1 && visible.length <= plotW / 4) {
+    const visibleCount = series.end - series.start;
+    if (visibleCount > 1 && visibleCount <= plotW / 4) {
       ctx.fillStyle = strip.color;
       ctx.beginPath();
-      for (const s of visible) {
+      for (let k = series.start; k < series.end; k++) {
+        const s = allSamples[k];
         const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
         const y = valToY(s.value);
         if (x >= lm && x <= w - rm) {
@@ -205,9 +266,19 @@ export function drawStrips(
       }
       ctx.fill();
     }
+    ctx.restore(); // end trace clip
 
-    // Min/Max markers
-    drawMinMaxMarkers(dc, strip, globalMinMaxCache, valToY);
+    // Min/Max markers (visible window) are drawn after every trace (below),
+    // so no later channel's line paints over a box.
+    const mm = series.minMax;
+    pendingMarkers.push({
+      strip, mm, valToY, units: def.units || '',
+      trace: {
+        xs: labelTrace.map(p => dc.timeToX(p.timestamp / 1000, xRange, plotW)),
+        ys: labelTrace.map(p => valToY(p.value)),
+      },
+    });
+    if (chartMode !== 'overlay') drawMinMaxReadout(dc, strip, mm, def.units || '');
 
     // Y-axis
     drawYAxis(dc, strip, yTicks, valToY, def, overlayAxesDrawn);
@@ -215,14 +286,18 @@ export function drawStrips(
     // Channel name (separate mode)
     if (chartMode !== 'overlay') {
       ctx.save();
-      ctx.font = `bold 10px ${MONO_FONT}`;
+      ctx.font = scaledFont(10, dc.fontScale, 'bold');
       ctx.fillStyle = strip.color;
       ctx.textAlign = 'center';
       ctx.translate(12, strip.top + strip.height / 2);
       ctx.rotate(-Math.PI / 2);
       const maxChars = Math.floor(strip.height / 6);
+      // ▾ marks a clickable unit (opens the unit menu).
+      const suffix = convertibleUnits(strip.units).length > 0 ? ' ▾' : '';
       let nameText = strip.label;
-      if (nameText.length > maxChars) nameText = nameText.slice(0, maxChars - 1) + '…';
+      const room = maxChars - suffix.length;
+      if (nameText.length > room) nameText = nameText.slice(0, Math.max(1, room - 1)) + '…';
+      nameText += suffix;
       ctx.fillText(nameText, 0, 0);
       ctx.restore();
     }
@@ -238,59 +313,89 @@ export function drawStrips(
       ctx.stroke();
     }
   }
+  // Second pass: all reference lines, then all boxes (on top of every trace).
+  // Overlay strips share one plot, so boxes there avoid every channel's line
+  // and each other; separate strips only their own.
+  for (const m of pendingMarkers) drawMinMaxLines(dc, m.strip, m.mm, m.valToY);
+  const placed: LabelRect[] = [];
+  const allTraces = pendingMarkers.map(m => m.trace);
+  for (const m of pendingMarkers) {
+    drawMinMaxBoxes(dc, m.strip, m.mm, m.valToY, m.units, chartMode === 'overlay' ? allTraces : [m.trace], placed);
+  }
 }
 
-function drawMinMaxMarkers(
-  dc: DrawContext, strip: StripLayout,
-  cache: Map<number, { minSample: ChannelSample; maxSample: ChannelSample }>,
-  valToY: (v: number) => number,
+export type VisibleMinMax = ChartSeriesCacheEntry['minMax'];
+
+function minMaxText(mm: NonNullable<VisibleMinMax>, units: string): string {
+  return `min ${formatValue(mm.min.value)} · max ${formatValue(mm.max.value)}${units ? ` ${units}` : ''}`;
+}
+
+/** RaceStudio-style dashed reference lines across the plot at the window's min and max. */
+function drawMinMaxLines(dc: DrawContext, strip: StripLayout, mm: VisibleMinMax, valToY: (v: number) => number) {
+  if (!mm) return;
+  const { ctx, w, lm, rm } = dc;
+  ctx.save();
+  ctx.strokeStyle = strip.color;
+  ctx.globalAlpha = 0.4;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  for (const s of [mm.max, mm.min]) {
+    const y = Math.round(valToY(s.value)) + 0.5;
+    ctx.moveTo(lm, y);
+    ctx.lineTo(w - rm, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Dot + boxed value at the window's min and max, each placed where traces
+ *  don't run through it and it doesn't cover another box. */
+function drawMinMaxBoxes(
+  dc: DrawContext, strip: StripLayout, mm: VisibleMinMax,
+  valToY: (v: number) => number, units: string, traces: TracePoints[], placed: LabelRect[],
 ) {
+  if (!mm) return;
   const { ctx, w, lm, rm, xRange, plotW } = dc;
-  const globalMM = cache.get(strip.channelId);
-  if (!globalMM) return;
+  const bounds = { left: lm, right: w - rm, top: strip.top + 2, bottom: strip.top + strip.height - 2 };
+  const textColor = contrastText(strip.color);
+  const fontPx = Math.round(11 * dc.fontScale);
+  const boxH = fontPx + 6;
+  ctx.font = `bold ${fontPx}px ${MONO_FONT}`;
+  const draw = (s: typeof mm.max, isMax: boolean) => {
+    const x = dc.timeToX(s.timestamp / 1000, xRange, plotW);
+    const y = valToY(s.value);
+    ctx.fillStyle = strip.color;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
 
-  const bright = brightenColor(strip.color, 0.3);
-  const chartLeft = lm;
-  const chartRight = w - rm;
-
-  const drawMarker = (sample: ChannelSample, isMax: boolean) => {
-    const tSec = sample.timestamp / 1000;
-    const rawX = dc.timeToX(tSec, xRange, plotW);
-    const inView = rawX >= chartLeft && rawX <= chartRight;
-    const markerY = valToY(sample.value);
-    ctx.fillStyle = bright;
-    ctx.font = `8px ${MONO_FONT}`;
-
-    if (inView) {
-      ctx.beginPath();
-      if (isMax) {
-        ctx.moveTo(rawX, markerY - 5); ctx.lineTo(rawX - 3, markerY); ctx.lineTo(rawX + 3, markerY);
-      } else {
-        ctx.moveTo(rawX, markerY + 5); ctx.lineTo(rawX - 3, markerY); ctx.lineTo(rawX + 3, markerY);
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.textAlign = 'left';
-      ctx.fillText(`${isMax ? '▲' : '▼'} ${formatValue(sample.value)}`, rawX + 5, markerY + 3);
-    } else {
-      const edgeX = rawX < chartLeft ? chartLeft + 4 : chartRight - 4;
-      const edgeY = clamp(markerY, strip.top + 8, strip.top + strip.height - 8);
-      const arrowDir = rawX < chartLeft ? 1 : -1;
-      ctx.globalAlpha = 0.7;
-      ctx.beginPath();
-      ctx.moveTo(edgeX + arrowDir * 6, edgeY);
-      ctx.lineTo(edgeX + arrowDir * 2, edgeY - 4);
-      ctx.lineTo(edgeX + arrowDir * 2, edgeY + 4);
-      ctx.closePath();
-      ctx.fill();
-      ctx.textAlign = arrowDir > 0 ? 'left' : 'right';
-      ctx.fillText(`${isMax ? '▲' : '▼'} ${formatValue(sample.value)}`, edgeX + arrowDir * 9, edgeY + 3);
-      ctx.globalAlpha = 1;
-    }
+    const label = `${isMax ? '▲' : '▼'} ${formatValue(s.value)}${units ? ` ${units}` : ''}`;
+    const boxW = ctx.measureText(label).width + 8;
+    const pos = chooseLabelBox(x, y, boxW, boxH, bounds, isMax ? 'above' : 'below', traces, placed);
+    placed.push({ x: pos.x, y: pos.y, w: boxW, h: boxH });
+    ctx.fillStyle = strip.color;
+    ctx.beginPath();
+    ctx.roundRect(pos.x, pos.y, boxW, boxH, 3);
+    ctx.fill();
+    ctx.fillStyle = textColor;
+    ctx.textAlign = 'left';
+    ctx.fillText(label, pos.x + 4, pos.y + boxH - 5);
   };
+  draw(mm.max, true);
+  draw(mm.min, false);
+}
 
-  drawMarker(globalMM.maxSample, true);
-  drawMarker(globalMM.minSample, false);
+/** "min X · max Y unit" at the bottom-right of a strip (separate mode). */
+function drawMinMaxReadout(dc: DrawContext, strip: StripLayout, mm: VisibleMinMax, units: string) {
+  if (!mm) return;
+  const { ctx, w, rm } = dc;
+  ctx.font = scaledFont(10, dc.fontScale);
+  ctx.fillStyle = dc.colors.text;
+  ctx.textAlign = 'right';
+  // Bottom-right: the cursor value pill occupies the top-right.
+  ctx.fillText(minMaxText(mm, units), w - rm - 4, strip.top + strip.height - 6);
+
 }
 
 function drawYAxis(
@@ -311,10 +416,10 @@ function drawYAxis(
     overlayAxesDrawn.add(units);
 
     const axX = isLeft
-      ? lm - 5 - sideIndex * AXIS_WIDTH
-      : w - rm + 5 + sideIndex * AXIS_WIDTH;
+      ? lm - 5 - sideIndex * AXIS_WIDTH * dc.fontScale
+      : w - rm + 5 + sideIndex * AXIS_WIDTH * dc.fontScale;
 
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     ctx.fillStyle = dc.colors.text;
     ctx.textAlign = isLeft ? 'right' : 'left';
     for (const yt of yTicks) {
@@ -333,13 +438,13 @@ function drawYAxis(
     ctx.stroke();
 
     if (units) {
-      ctx.font = `8px ${MONO_FONT}`;
+      ctx.font = scaledFont(8, dc.fontScale);
       ctx.fillStyle = dc.colors.text;
       ctx.textAlign = isLeft ? 'right' : 'left';
       ctx.fillText(units, axX, strip.top + strip.height - 4);
     }
   } else {
-    ctx.font = `10px ${MONO_FONT}`;
+    ctx.font = scaledFont(10, dc.fontScale);
     ctx.fillStyle = strip.color;
     ctx.textAlign = 'right';
     for (const yt of yTicks) {
@@ -351,29 +456,98 @@ function drawYAxis(
   }
 }
 
-/** Draw overlay legend bar */
-export function drawOverlayLegend(dc: DrawContext): void {
-  if (dc.chartMode !== 'overlay' || dc.strips.length === 0) return;
+/** Lap legend for compare mode: "■ Lap 3 1:12.400" per compared lap. */
+export function drawCompareLegend(dc: DrawContext): void {
+  // Overlay mode lists the laps in the legend band instead (drawOverlayLegend).
+  if (!dc.compare || dc.strips.length === 0 || dc.chartMode === 'overlay') return;
   const { ctx, lm } = dc;
-  ctx.font = `bold 9px ${MONO_FONT}`;
-  let legendX = lm + 6;
-  const legendY = 14;
+  ctx.font = scaledFont(9, dc.fontScale, 'bold');
+  let x = lm + 6;
+  const y = Math.round(12 * dc.fontScale);
+  dc.compare.laps.forEach((lap, i) => {
+    const color = lapColor(i);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 3);
+    ctx.lineTo(x + 14, y - 3);
+    ctx.stroke();
+    x += 18;
+    const label = `Lap ${lap.lapNumber} ${formatLapTime(lap.durationMs / 1000)}`;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.fillText(label, x, y);
+    x += ctx.measureText(label).width + 14;
+  });
+}
+
+interface LegendEntry { label: string; color: string; dash: number[] }
+
+/** Overlay legend entries: each channel (with its window min/max), then the
+ *  compared laps when lap compare is on. */
+function overlayLegendEntries(dc: DrawContext): LegendEntry[] {
+  const entries: LegendEntry[] = [];
   for (const strip of dc.strips) {
     const data = dc.channelDataMap.get(strip.channelId);
     if (!data) continue;
-    const name = data.def.shortName;
-    ctx.strokeStyle = strip.color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(legendX, legendY - 3);
-    ctx.lineTo(legendX + 12, legendY - 3);
-    ctx.stroke();
-    legendX += 15;
-    ctx.fillStyle = strip.color;
-    ctx.textAlign = 'left';
-    ctx.fillText(name, legendX, legendY);
-    legendX += ctx.measureText(name).width + 12;
+    const mm = seriesOf(dc, data.allSamples).minMax;
+    const label = mm ? `${data.def.shortName} (${minMaxText(mm, data.def.units || '')})` : data.def.shortName;
+    entries.push({ label, color: strip.color, dash: [] });
   }
+  dc.compare?.laps.forEach((lap, i) => entries.push({
+    label: `Lap ${lap.lapNumber} ${formatLapTime(lap.durationMs / 1000)}`,
+    color: dc.colors.text,
+    dash: i > 0 ? [6, 3] : [],
+  }));
+  return entries;
+}
+
+const LEGEND_SWATCH = 15; // line sample + gap before the text
+const LEGEND_PAD = 4;
+
+function overlayLegendLayout(dc: DrawContext) {
+  const { ctx } = dc;
+  ctx.font = scaledFont(9, dc.fontScale, 'bold');
+  const entries = overlayLegendEntries(dc);
+  const widths = entries.map(e => LEGEND_SWATCH + ctx.measureText(e.label).width + LEGEND_PAD * 2);
+  const places = layoutLegendRows(widths, Math.max(1, dc.plotW - 12), 6);
+  const rowH = Math.round(18 * dc.fontScale);
+  const rows = places.length ? places[places.length - 1].row + 1 : 0;
+  return { entries, widths, places, rowH, height: rows ? rows * rowH + 6 : 0 };
+}
+
+/** Height of the legend band above the plot (overlay mode only). */
+export function overlayLegendHeight(dc: DrawContext): number {
+  if (dc.chartMode !== 'overlay' || dc.strips.length === 0) return 0;
+  return overlayLegendLayout(dc).height;
+}
+
+/** Overlay legend: wrapped rows in a band above the plot, each entry on a
+ *  backdrop so it stays legible over the grid. */
+export function drawOverlayLegend(dc: DrawContext): void {
+  if (dc.chartMode !== 'overlay' || dc.strips.length === 0) return;
+  const { ctx, lm } = dc;
+  const { entries, widths, places, rowH } = overlayLegendLayout(dc);
+  entries.forEach((e, i) => {
+    const x = lm + 6 + places[i].x;
+    const top = 3 + places[i].row * rowH;
+    const midY = top + rowH / 2;
+    ctx.fillStyle = dc.colors.cursorPill;
+    ctx.beginPath();
+    ctx.roundRect(x, top + 1, widths[i], rowH - 2, 3);
+    ctx.fill();
+    ctx.strokeStyle = e.color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(e.dash);
+    ctx.beginPath();
+    ctx.moveTo(x + LEGEND_PAD, midY);
+    ctx.lineTo(x + LEGEND_PAD + 11, midY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = e.color;
+    ctx.textAlign = 'left';
+    ctx.fillText(e.label, x + LEGEND_PAD + LEGEND_SWATCH, midY + 3 * dc.fontScale);
+  });
 }
 
 /** Draw the bottom X-axis with ticks and labels */
@@ -382,7 +556,7 @@ export function drawXAxis(dc: DrawContext): number {
 
   const axisY = strips.length > 0
     ? strips[strips.length - 1].top + strips[strips.length - 1].height
-    : h - BOTTOM_AXIS_HEIGHT;
+    : h - BOTTOM_AXIS_HEIGHT * dc.fontScale;
 
   ctx.strokeStyle = dc.colors.separator;
   ctx.lineWidth = 1;
@@ -391,7 +565,7 @@ export function drawXAxis(dc: DrawContext): number {
   ctx.lineTo(w - rm, Math.round(axisY) + 0.5);
   ctx.stroke();
 
-  ctx.font = `10px ${MONO_FONT}`;
+  ctx.font = scaledFont(10, dc.fontScale);
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'center';
   const tickStep = xTicks.length >= 2 ? xTicks[1] - xTicks[0] : undefined;
@@ -406,7 +580,7 @@ export function drawXAxis(dc: DrawContext): number {
     }
   }
 
-  ctx.font = `9px ${MONO_FONT}`;
+  ctx.font = scaledFont(9, dc.fontScale);
   ctx.fillStyle = dc.colors.text;
   ctx.textAlign = 'right';
   ctx.fillText(dc.session.logStartMs !== null ? 'Time' : 'Time (s)', w - rm, axisY + 30);

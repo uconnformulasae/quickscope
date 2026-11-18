@@ -112,7 +112,7 @@ See [tests/fixtures/README.md](tests/fixtures/README.md) for fixture layout and 
 # Backend
 cd backend
 pip install -r requirements.txt
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+python3 -m uvicorn main:app --host 127.0.0.1 --port 8000
 
 # Frontend (separate terminal)
 npm install
@@ -134,6 +134,7 @@ Optional env overrides:
 |----------|---------|
 | `QUICKSCOPE_DATA_DIR` | Override `backend/data` location |
 | `QUICKSCOPE_PARSER` | `libxrk` or `aim_dll` (same as start-script flags) |
+| `QUICKSCOPE_ALLOWED_HOSTS` | Comma-separated hostnames/IPs, besides this machine, that the backend and dev server answer to. Unset by default: QuickScope is local-only. To open it from another device, set this to the host machine's LAN address and bind to it (`--host 0.0.0.0`, `HOST=0.0.0.0 npm run dev`, or `QUICKSCOPE_BIND=0.0.0.0` for Docker). |
 | `AIM_XRK_DLL` | Path to `MatLabXRK-2017-64-ReleaseU.dll` |
 
 ## AiM Device Connection

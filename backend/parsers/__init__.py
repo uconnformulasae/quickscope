@@ -8,6 +8,7 @@ import io
 import logging
 import os
 import sys
+import threading
 import warnings
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,14 +32,39 @@ def _packaged_backend() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+class _MutedForThread(io.TextIOBase):
+    """``sys.stdout`` stand-in that drops one thread's writes and passes on the rest.
+
+    ``sys.stdout`` is shared by the whole process, and parses run in worker
+    threads: swapping in a plain buffer also swallowed whatever any other
+    thread printed while a parse was running.
+    """
+
+    def __init__(self, target, thread_id: int) -> None:  # noqa: ANN001
+        self._target = target
+        self._thread_id = thread_id
+
+    def write(self, text: str) -> int:
+        # No console at all (windowed build): there is nowhere to pass it on to.
+        if self._target is None or threading.get_ident() == self._thread_id:
+            return len(text)
+        return self._target.write(text)
+
+    def flush(self) -> None:
+        if self._target is not None:
+            self._target.flush()
+
+    def __getattr__(self, name: str):
+        return getattr(self._target, name)
+
+
 @contextmanager
 def _suppress_libxrk_noise():
     """Mute libxrk stdout prints and GPS RuntimeWarnings on fallback path."""
     old_filters = list(warnings.filters)
     warnings.filterwarnings("ignore", category=RuntimeWarning, module=r"libxrk\.gps")
-    buf = io.StringIO()
     old_stdout = sys.stdout
-    sys.stdout = buf
+    sys.stdout = _MutedForThread(old_stdout, threading.get_ident())
     try:
         yield
     finally:

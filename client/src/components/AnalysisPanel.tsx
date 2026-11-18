@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { XRKSession } from '../lib/xrk-parser';
 import type { ActiveChannel, AnalysisTab, TimeRange, DerivedChannel } from '../lib/useXRKStore';
 import type { ChannelSample } from '../lib/xrk-parser';
@@ -7,6 +8,8 @@ import { StatsTab } from './analysis/StatsTab';
 import { LapAnalysisTab } from './analysis/LapAnalysisTab';
 import { HistogramTab } from './analysis/HistogramTab';
 import { XYPlotTab } from './analysis/XYPlotTab';
+import { useCursorTime, type CursorStore } from '../lib/cursorStore';
+import type { ComponentProps } from 'react';
 
 interface AnalysisPanelProps {
   session: XRKSession;
@@ -23,7 +26,18 @@ interface AnalysisPanelProps {
   derivedSamplesMap?: Map<number, ChannelSample[]>;
   onNavigateToTime?: (timestampMs: number) => void;
   cursorTime?: number | null;
+  /** Live chart cursor; only the GPS marker subscribes to it. */
+  cursorStore?: CursorStore;
   theme?: 'dark' | 'light';
+  selectedLaps?: number[];
+  onToggleLap?: (index: number) => void;
+  onSetSelectedLaps?: (indices: number[]) => void;
+}
+
+/** GPS map that follows the live cursor. Subscribing here, and not in the
+ *  panel, keeps a mouse move over the chart from re-rendering the other tabs. */
+function LiveCursorGPSMap({ cursorStore, ...rest }: { cursorStore: CursorStore } & Omit<ComponentProps<typeof GPSMapView>, 'cursorTime'>) {
+  return <GPSMapView {...rest} cursorTime={useCursorTime(cursorStore)} />;
 }
 
 const TABS: { id: AnalysisTab; label: string; icon: any }[] = [
@@ -49,21 +63,43 @@ export function AnalysisPanel({
   derivedSamplesMap,
   onNavigateToTime,
   cursorTime,
+  cursorStore,
   theme,
+  selectedLaps,
+  onToggleLap,
+  onSetSelectedLaps,
 }: AnalysisPanelProps) {
+  // Tabs are flex-1 but long labels widen theirs, so the indicator follows the
+  // active button's measured box rather than assuming equal widths.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null);
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const measure = () => {
+      const active = bar.querySelector<HTMLElement>(`[data-tab-id="${analysisTab}"]`);
+      setIndicator(active ? { left: active.offsetLeft, width: active.offsetWidth } : null);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, [analysisTab]);
+
   return (
     <div className="flex flex-col h-full bg-card border-l border-border overflow-hidden">
       {/* Tab bar */}
-      <div className="flex-shrink-0 flex border-b border-border">
+      <div ref={barRef} className="relative flex-shrink-0 flex border-b border-border">
         {TABS.map(tab => {
           const Icon = tab.icon;
           return (
             <button
               key={tab.id}
+              data-tab-id={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className={`flex-1 flex flex-col items-center gap-0.5 py-2 px-1 text-xs transition-colors
+              className={`flex-1 flex flex-col items-center gap-0.5 py-2 px-1 text-xs transition-colors border-b-2 border-transparent
                 ${analysisTab === tab.id
-                  ? 'text-primary border-b-2 border-primary bg-primary/5'
+                  ? 'text-primary-text bg-primary/5'
                   : 'text-muted-foreground hover:text-foreground hover:bg-muted/30'
                 }`}
             >
@@ -72,15 +108,33 @@ export function AnalysisPanel({
             </button>
           );
         })}
+        {/* Active-tab indicator slides between tabs instead of jumping. */}
+        {indicator && (
+          <span
+            aria-hidden
+            data-tab-indicator
+            className="qs-indicator absolute bottom-0 left-0 h-0.5 bg-primary pointer-events-none"
+            style={{ width: indicator.width, transform: `translateX(${indicator.left}px)` }}
+          />
+        )}
       </div>
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto overscroll-contain">
+        <div key={analysisTab} className="qs-fade-in h-full">
         {analysisTab === 'stats' && (
           <StatsTab session={session} activeChannels={activeChannels} viewRange={viewRange} derivedChannels={derivedChannels} derivedSamplesMap={derivedSamplesMap} onNavigateToTime={onNavigateToTime} />
         )}
         {analysisTab === 'lapanalysis' && (
-          <LapAnalysisTab session={session} activeChannels={activeChannels} derivedChannels={derivedChannels} derivedSamplesMap={derivedSamplesMap} />
+          <LapAnalysisTab
+            session={session}
+            activeChannels={activeChannels}
+            derivedChannels={derivedChannels}
+            derivedSamplesMap={derivedSamplesMap}
+            selectedLaps={selectedLaps}
+            onToggleLap={onToggleLap}
+            onSetSelectedLaps={onSetSelectedLaps}
+          />
         )}
         {analysisTab === 'histogram' && (
           <HistogramTab
@@ -106,8 +160,13 @@ export function AnalysisPanel({
           />
         )}
         {analysisTab === 'gps' && (
-          <GPSMapView cursorTime={cursorTime} />
+          cursorStore ? (
+            <LiveCursorGPSMap cursorStore={cursorStore} sessionKey={session.metadata} lapMarkers={session.lapMarkers} selectedLaps={selectedLaps} />
+          ) : (
+            <GPSMapView sessionKey={session.metadata} cursorTime={cursorTime} lapMarkers={session.lapMarkers} selectedLaps={selectedLaps} />
+          )
         )}
+        </div>
       </div>
     </div>
   );

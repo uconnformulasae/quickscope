@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateFormula, extractChannelNames, type ChannelMap } from './formula-engine';
+import { checkFormula, evaluateFormula, extractChannelNames, formatChannelRef, FUNCTION_HELP, type ChannelMap } from './formula-engine';
 
 const ch = (timestamps: number[], values: number[]) => ({ timestamps, values });
 
@@ -29,6 +29,12 @@ describe('scalar arithmetic', () => {
     ['2 + 3 * 4', 14],
     ['(2 + 3) * 4', 20],
     ['2 ^ 3 ^ 2', 512],
+    ['-2 ^ 2', -4],
+    ['2 ^ -1', 0.5],
+    ['-2 ^ -2', -0.25],
+    ['--2 ^ 2', 4],
+    ['3 * -2', -6],
+    ['(-2) ^ 2', 4],
     ['sqrt(16)', 4],
     ['abs(-3.5)', 3.5],
     ['min(3, 9)', 3],
@@ -62,6 +68,10 @@ describe('channel arithmetic', () => {
 
   it('unary minus negates channels', () => {
     expect(ok('-A').values).toEqual([-1, -2, -3]);
+  });
+
+  it('unary minus applies after ^ on channels', () => {
+    expect(ok('-A ^ 2').values).toEqual([-1, -4, -9]);
   });
 
   it('min/max of two channels is element-wise', () => {
@@ -225,5 +235,67 @@ describe('signal and arithmetic fixes', () => {
 
   it('subtraction WITH spaces works today (workaround)', () => {
     expect(ok('RPM - 100').values).toEqual([0, 100, 200]);
+  });
+});
+
+describe('bracket-quoted channel names', () => {
+  it('evaluates a channel whose name has spaces', () => {
+    const r = evaluateFormula('[GPS Speed] * 2', { 'GPS Speed': ch([0, 1000], [10, 20]) });
+    expect(r).toEqual({ timestamps: [0, 1000], values: [20, 40] });
+  });
+
+  it('extracts bracketed and bare channel names', () => {
+    expect(extractChannelNames('[GPS Speed] - Spd1')).toEqual(['GPS Speed', 'Spd1']);
+  });
+
+  it('never treats a bracketed name as a function or constant', () => {
+    expect(evaluateFormula('[pi]', {})).toBe("Unknown channel: 'pi'");
+  });
+
+  it('formats channel refs, quoting only when needed', () => {
+    expect(formatChannelRef('GPS Speed')).toBe('[GPS Speed]');
+    expect(formatChannelRef('Spd1')).toBe('Spd1');
+    expect(formatChannelRef('sqrt')).toBe('[sqrt]');
+    expect(formatChannelRef('1abc')).toBe('[1abc]');
+  });
+});
+
+describe('checkFormula (friendly diagnostics)', () => {
+  const known = () => true;
+  it('returns null for a valid formula', () => {
+    expect(checkFormula('A + 1', known)).toBeNull();
+  });
+  it('asks for an operator between two channels', () => {
+    expect(checkFormula('A B', known)?.message).toBe('Add an operator (+ − × ÷) between A and B');
+  });
+  it('flags a dangling operator', () => {
+    expect(checkFormula('A -', known)?.message).toBe("Missing something after the '-'");
+  });
+  it('flags an unclosed parenthesis', () => {
+    expect(checkFormula('(A', known)?.message).toBe("A '(' is never closed");
+  });
+  it('names an unknown channel with its range', () => {
+    expect(checkFormula('Nope', () => false)).toEqual({
+      message: "There's no channel called 'Nope' in this session", start: 0, end: 4,
+    });
+  });
+  it('explains wrong argument counts with the signature', () => {
+    expect(checkFormula('mavg(A)', known)?.message).toContain('mavg(channel, milliseconds)');
+  });
+  it('flags an unknown function', () => {
+    expect(checkFormula('foo(A)', known)?.message).toBe("Unknown function 'foo'");
+  });
+  it('does not call e or pi unknown channels', () => {
+    expect(checkFormula('A * pi', (n) => n === 'A')).toBeNull();
+  });
+  it('flags an unclosed bracket', () => {
+    expect(checkFormula('[GPS Speed', known)?.message).toBe("A '[' is never closed");
+  });
+});
+
+describe('FUNCTION_HELP', () => {
+  it('documents every supported function', () => {
+    const names = FUNCTION_HELP.map(f => f.name);
+    for (const n of ['abs', 'sqrt', 'min', 'max', 'pow', 'diff', 'smooth', 'mavg', 'delay']) expect(names).toContain(n);
   });
 });

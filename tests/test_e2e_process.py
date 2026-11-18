@@ -27,6 +27,10 @@ from conftest import REPO_ROOT, fixture_xrk
 
 ENTRY = REPO_ROOT / "backend" / "entry.py"
 STARTUP_TIMEOUT_S = 30
+# terminate() is SIGTERM on POSIX (graceful: 0, or -15 if uvicorn re-raises it)
+# but TerminateProcess on Windows, which always exits 1. Electron hard-kills
+# the backend on Windows too (taskkill /f), so 1 is the real-world exit there.
+STOP_EXIT_CODES = (0, -15, 1) if sys.platform == "win32" else (0, -15)
 
 pytestmark = pytest.mark.e2e
 
@@ -109,7 +113,7 @@ def test_backend_boots_serves_defaults_and_shuts_down_cleanly(backend):
     assert httpx.get(f"{backend.base}/api/sessions").json() == []
     assert httpx.get(f"{backend.base}/api/channels").status_code == 400
     assert httpx.get(f"{backend.base}/docs").status_code == 200
-    assert backend.stop() in (0, -15, None)
+    assert backend.stop() in STOP_EXIT_CODES
 
 
 def test_two_backends_do_not_share_data(tmp_path):
@@ -146,7 +150,7 @@ def test_user_session_survives_quit_and_relaunch(backend):
         sid = c.get("/api/sessions").json()[0]["id"]
         rpm_before = c.get("/api/data", params={"channels": "RPM"}).json()["RPM"]
 
-    assert backend.stop() in (0, -15)
+    assert backend.stop() in STOP_EXIT_CODES
     assert (backend.data_dir / "sessions" / xrk.name).stat().st_size == xrk.stat().st_size
 
     backend.port = _free_port()

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 import { ChannelDatalist, ChannelPicker, type ChannelSources } from './ChannelPicker';
+import { WidgetFormulaField } from './WidgetFormulaField';
 import { compatibleUnits } from './units';
 import {
   WIDGET_TYPES,
@@ -11,6 +12,7 @@ import {
   type WidgetConfig,
   type WidgetType,
 } from './layout-schema';
+import { Modal } from '../Modal';
 
 const INPUT = 'w-full px-2 py-1 bg-background border border-border rounded text-xs text-foreground placeholder-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary';
 const LABEL = 'block text-[10px] uppercase tracking-wide text-muted-foreground mb-1';
@@ -37,7 +39,7 @@ function NumField({ label, value, onChange, placeholder }: {
   }, [value]);
   return (
     <label className="block min-w-0">
-      <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">{label}</span>
+      <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">{label}</span>
       <input
         value={text}
         inputMode="decimal"
@@ -60,7 +62,7 @@ function SelectField<T extends string>({ label, value, options, onChange }: {
 }) {
   return (
     <label className="block min-w-0">
-      <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">{label}</span>
+      <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">{label}</span>
       <select value={value ?? ''} onChange={(e) => onChange((e.target.value || undefined) as T | undefined)} className={INPUT}>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
@@ -86,7 +88,7 @@ function UnitField({ ch, sourceUnit, set }: { ch: ChannelRef; sourceUnit?: strin
   if (choices.length === 0) {
     return (
       <label className="block min-w-0">
-        <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">Unit</span>
+        <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">Unit</span>
         <input value={ch.unit ?? ''} onChange={(e) => set({ unit: e.target.value || undefined })} placeholder={sourceUnit || 'auto'} className={INPUT} />
       </label>
     );
@@ -102,9 +104,10 @@ function UnitField({ ch, sourceUnit, set }: { ch: ChannelRef; sourceUnit?: strin
 }
 
 /** Type-specific settings for one channel row. */
-function ChannelDetails({ type, ch, sourceUnit, set }: {
+function ChannelDetails({ type, ch, sourceUnit, set, sources }: {
   type: WidgetType;
   ch: ChannelRef;
+  sources: ChannelSources;
   /** Unit the logger sends this channel in, when known. */
   sourceUnit?: string;
   set: (patch: Partial<ChannelRef>) => void;
@@ -147,12 +150,12 @@ function ChannelDetails({ type, ch, sourceUnit, set }: {
         <SelectField<Tone> label="Color" value={ch.tone} options={TONES} onChange={(v) => set({ tone: v })} />
         <NumField label="No data ≤" value={ch.invalidBelow} onChange={(v) => set({ invalidBelow: v })} />
       </div>
-      <label className="block">
-        <span className="block text-[9px] uppercase tracking-wide text-muted-foreground/80 mb-0.5">
-          Formula (optional — replaces the channel, e.g. Pack_Voltage * Pack_Current / 1000)
+      <div>
+        <span className="block text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">
+          Formula (optional — replaces the channel; type a channel name, e.g. battery voltage × battery current / 1000)
         </span>
-        <input value={ch.expr ?? ''} onChange={(e) => set({ expr: e.target.value || undefined })} spellCheck={false} className={`${INPUT} font-mono`} />
-      </label>
+        <WidgetFormulaField value={ch.expr} onChange={(expr) => set({ expr })} sources={sources} />
+      </div>
     </div>
   );
 }
@@ -206,140 +209,139 @@ export function WidgetConfigDialog({
   const listId = `channels-${widget.id}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onMouseDown={onClose}>
-      <div
-        className="relative w-[640px] max-w-[calc(100vw-2rem)] max-h-[90vh] flex flex-col bg-card border border-border rounded-xl shadow-2xl overflow-hidden"
-        onMouseDown={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label="Configure widget"
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <LayoutGrid className="w-4 h-4 text-primary" />
-            <h2 className="text-sm font-semibold text-foreground">Configure widget</h2>
-          </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded" title="Close">
-            <X className="w-4 h-4" />
-          </button>
+    <Modal
+      onClose={onClose}
+      closeOnEscape={false}
+      className="relative w-[640px] max-w-[calc(100vw-2rem)] max-h-[90vh] flex flex-col overflow-hidden"
+      role="dialog"
+      aria-label="Configure widget"
+    >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <LayoutGrid className="w-4 h-4 text-primary-text" />
+          <h2 className="text-sm font-semibold text-foreground">Configure widget</h2>
         </div>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded" title="Close">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <ChannelDatalist id={listId} sources={sources} />
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <ChannelDatalist id={listId} sources={sources} />
 
-          <div className="grid grid-cols-2 gap-3">
-            <label className="block">
-              <span className={LABEL}>Type</span>
-              <select value={draft.type} onChange={(e) => changeType(e.target.value as WidgetType)} className={INPUT}>
-                {WIDGET_TYPES.map((t) => <option key={t.type} value={t.type}>{t.label} — {t.description}</option>)}
-              </select>
-            </label>
-            <label className="block">
-              <span className={LABEL}>Title</span>
-              <input value={draft.title} onChange={(e) => set({ title: e.target.value })} className={INPUT} />
-            </label>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3 items-end">
-            {draft.type === 'stats' && (
-              <SelectField<StatStyle>
-                label="Tile size"
-                value={draft.style ?? 'tile'}
-                options={[{ value: 'big', label: 'Large' }, { value: 'tile', label: 'Medium' }, { value: 'compact', label: 'Compact' }]}
-                onChange={(v) => set({ style: v })}
-              />
-            )}
-            {HAS_COLUMNS.has(draft.type) && (
-              <NumField
-                label="Columns"
-                value={draft.columns}
-                placeholder="auto"
-                onChange={(v) => set({ columns: v === undefined ? undefined : Math.max(1, Math.min(12, Math.round(v))) })}
-              />
-            )}
-            {draft.type === 'gForce' && (
-              <NumField label="Range (g)" value={draft.channels[0]?.max} placeholder="2" onChange={(v) => setChannel(0, { max: v })} />
-            )}
-            <label className="flex items-center gap-2 text-xs text-muted-foreground pb-1.5">
-              <input type="checkbox" checked={!!draft.emphasis} onChange={(e) => set({ emphasis: e.target.checked || undefined })} />
-              Highlight border
-            </label>
-          </div>
-
-          {HAS_CHANNELS.has(draft.type) && (
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className={LABEL}>Channels</span>
-                {draft.type !== 'gForce' && (
-                  <button
-                    onClick={() => set({ channels: [...draft.channels, { name: '' }] })}
-                    className="flex items-center gap-1 text-[11px] text-primary hover:underline"
-                  >
-                    <Plus className="w-3 h-3" /> Add channel
-                  </button>
-                )}
-              </div>
-              {draft.channels.length === 0 && (
-                <p className="text-[11px] text-muted-foreground/70">No channels yet.</p>
-              )}
-              <div className="space-y-2">
-                {draft.channels.map((ch, i) => (
-                  <div key={i} className="rounded-md border border-border/60 bg-muted/20 p-2 space-y-2">
-                    <div className="flex items-center gap-2">
-                      {draft.type === 'gForce' && (
-                        <span className="text-[10px] text-muted-foreground w-20 shrink-0">{i === 0 ? 'Lateral' : 'Longitudinal'}</span>
-                      )}
-                      <ChannelPicker value={ch.name} onChange={(name) => setChannel(i, { name })} listId={listId} sources={sources} />
-                      {draft.type !== 'gForce' && (
-                        <>
-                          <input
-                            value={ch.label ?? ''}
-                            onChange={(e) => setChannel(i, { label: e.target.value || undefined })}
-                            placeholder="Label"
-                            className={`${INPUT} !w-32`}
-                          />
-                          <button onClick={() => move(i, -1)} disabled={i === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up">
-                            <ArrowUp className="w-3 h-3" />
-                          </button>
-                          <button onClick={() => move(i, 1)} disabled={i === draft.channels.length - 1} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down">
-                            <ArrowDown className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={() => set({ channels: draft.channels.filter((_, j) => j !== i) })}
-                            className="p-1 text-muted-foreground hover:text-red-500"
-                            title="Remove channel"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                    <ChannelDetails type={draft.type} ch={ch} sourceUnit={ch.expr ? undefined : sources.units[ch.name]} set={(patch) => setChannel(i, patch)} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
+        <div className="grid grid-cols-2 gap-3">
           <label className="block">
-            <span className={LABEL}>{draft.type === 'note' ? 'Text' : 'Note under widget (optional)'}</span>
-            <textarea
-              value={draft.note ?? ''}
-              onChange={(e) => set({ note: e.target.value || undefined })}
-              rows={draft.type === 'note' ? 5 : 2}
-              className={`${INPUT} resize-y`}
-            />
+            <span className={LABEL}>Type</span>
+            <select value={draft.type} onChange={(e) => changeType(e.target.value as WidgetType)} className={INPUT}>
+              {WIDGET_TYPES.map((t) => <option key={t.type} value={t.type}>{t.label} — {t.description}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className={LABEL}>Title</span>
+            <input value={draft.title} onChange={(e) => set({ title: e.target.value })} className={INPUT} />
           </label>
         </div>
 
-        <div className="flex justify-end gap-2 px-4 py-3 border-t border-border flex-shrink-0">
-          <button onClick={onClose} className="px-3 py-1.5 rounded-md text-xs font-medium bg-muted/50 text-foreground hover:bg-muted transition-colors">
-            Cancel
-          </button>
-          <button onClick={save} className="px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
-            Apply
-          </button>
+        <div className="grid grid-cols-3 gap-3 items-end">
+          {draft.type === 'stats' && (
+            <SelectField<StatStyle>
+              label="Tile size"
+              value={draft.style ?? 'tile'}
+              options={[{ value: 'big', label: 'Large' }, { value: 'tile', label: 'Medium' }, { value: 'compact', label: 'Compact' }]}
+              onChange={(v) => set({ style: v })}
+            />
+          )}
+          {HAS_COLUMNS.has(draft.type) && (
+            <NumField
+              label="Columns"
+              value={draft.columns}
+              placeholder="auto"
+              onChange={(v) => set({ columns: v === undefined ? undefined : Math.max(1, Math.min(12, Math.round(v))) })}
+            />
+          )}
+          {draft.type === 'gForce' && (
+            <NumField label="Range (g)" value={draft.channels[0]?.max} placeholder="2" onChange={(v) => setChannel(0, { max: v })} />
+          )}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground pb-1.5">
+            <input type="checkbox" checked={!!draft.emphasis} onChange={(e) => set({ emphasis: e.target.checked || undefined })} />
+            Highlight border
+          </label>
         </div>
+
+        {HAS_CHANNELS.has(draft.type) && (
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className={LABEL}>Channels</span>
+              {draft.type !== 'gForce' && (
+                <button
+                  onClick={() => set({ channels: [...draft.channels, { name: '' }] })}
+                  className="flex items-center gap-1 text-[11px] text-primary-text hover:underline"
+                >
+                  <Plus className="w-3 h-3" /> Add channel
+                </button>
+              )}
+            </div>
+            {draft.channels.length === 0 && (
+              <p className="text-[11px] text-muted-foreground">No channels yet.</p>
+            )}
+            <div className="space-y-2">
+              {draft.channels.map((ch, i) => (
+                <div key={i} className="rounded-md border border-border/60 bg-muted/20 p-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    {draft.type === 'gForce' && (
+                      <span className="text-[10px] text-muted-foreground w-20 shrink-0">{i === 0 ? 'Lateral' : 'Longitudinal'}</span>
+                    )}
+                    <ChannelPicker value={ch.name} onChange={(name) => setChannel(i, { name })} listId={listId} sources={sources} />
+                    {draft.type !== 'gForce' && (
+                      <>
+                        <input
+                          value={ch.label ?? ''}
+                          onChange={(e) => setChannel(i, { label: e.target.value || undefined })}
+                          placeholder="Label"
+                          className={`${INPUT} !w-32`}
+                        />
+                        <button onClick={() => move(i, -1)} disabled={i === 0} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up">
+                          <ArrowUp className="w-3 h-3" />
+                        </button>
+                        <button onClick={() => move(i, 1)} disabled={i === draft.channels.length - 1} className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down">
+                          <ArrowDown className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => set({ channels: draft.channels.filter((_, j) => j !== i) })}
+                          className="p-1 text-muted-foreground hover:text-red-500"
+                          title="Remove channel"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <ChannelDetails type={draft.type} ch={ch} sources={sources} sourceUnit={ch.expr ? undefined : sources.units[ch.name]} set={(patch) => setChannel(i, patch)} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <label className="block">
+          <span className={LABEL}>{draft.type === 'note' ? 'Text' : 'Note under widget (optional)'}</span>
+          <textarea
+            value={draft.note ?? ''}
+            onChange={(e) => set({ note: e.target.value || undefined })}
+            rows={draft.type === 'note' ? 5 : 2}
+            className={`${INPUT} resize-y`}
+          />
+        </label>
       </div>
-    </div>
+
+      <div className="flex justify-end gap-2 px-4 py-3 border-t border-border flex-shrink-0">
+        <button onClick={onClose} className="px-3 py-1.5 rounded-md text-xs font-medium bg-muted/50 text-foreground hover:bg-muted transition-colors">
+          Cancel
+        </button>
+        <button onClick={save} className="px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+          Apply
+        </button>
+      </div>
+    </Modal>
   );
 }

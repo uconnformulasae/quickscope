@@ -131,6 +131,7 @@ describe('SessionInfoModal', () => {
     durationMs: 65_500,
     lapCount: 0,
     fileName: 'run.xrk',
+    source: 'manual_upload' as const,
   };
 
   it('shows metadata, formatted duration and placeholders for empty fields', () => {

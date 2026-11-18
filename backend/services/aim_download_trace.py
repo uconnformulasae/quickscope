@@ -11,11 +11,19 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.aim_live import decode_frame
 from services.settings_store import DATA_DIR
 from services.trace_file import open_unique
 
 _LOG_DIR = DATA_DIR / "logs" / "aim_download"
+
+
+def log_dir() -> Path:
+    """Directory the download traces are written to."""
+    return _LOG_DIR
+
+
+# How much of the end of a failed stream goes into the trace.
+STREAM_TAIL_BYTES = 256
 
 
 class AimDownloadTrace:
@@ -56,34 +64,17 @@ class AimDownloadTrace:
             fields["opcode"] = chr(frame.payload[24]) if 32 <= frame.payload[24] < 127 else frame.payload[24]
         self.log("frame", **fields)
 
-    def analyze_raw_stream(self, raw: bytes, *, extracted: int, expected: int) -> None:
-        """Summarize STCP frames present in the captured byte stream."""
-        counts: dict[str, int] = {}
-        offset = 0
-        while offset < len(raw):
-            try:
-                frame, consumed = decode_frame(raw, offset)
-            except ValueError as exc:
-                self.log("decode_error", offset=offset, error=str(exc))
-                next_h = raw.find(b"<h", offset + 1)
-                if next_h == -1:
-                    break
-                offset = next_h
-                continue
-            if frame is None or consumed == 0:
-                break
-            key = f"{frame.cmd.decode('ascii', errors='replace')}:{len(frame.payload)}"
-            counts[key] = counts.get(key, 0) + 1
-            offset += consumed
-
-        tail = raw[-256:] if len(raw) > 256 else raw
+    def log_stream_summary(
+        self, *, raw_bytes: int, extracted: int, expected: int, frame_counts: dict[str, int], tail: bytes,
+    ) -> None:
+        """What a failed download's byte stream looked like: frame mix and its last bytes."""
         self.log(
             "stream_analysis",
-            raw_bytes=len(raw),
+            raw_bytes=raw_bytes,
             extracted_bytes=extracted,
             expected_bytes=expected,
-            frame_counts=counts,
-            tail_hex=tail.hex(),
+            frame_counts=frame_counts,
+            tail_hex=bytes(tail[-STREAM_TAIL_BYTES:]).hex(),
         )
 
     def close(self, *, status: str, **fields) -> None:

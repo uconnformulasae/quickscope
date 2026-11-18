@@ -118,7 +118,7 @@ describe('SessionBrowser', () => {
     await screen.findByText('old.xrk');
 
     fireEvent.click(screen.getByText('old.xrk'));
-    await waitFor(() => expect(props.onSessionLoaded).toHaveBeenCalledWith(info, 'old', 'old.xrk', 'manual_upload'));
+    await waitFor(() => expect(props.onSessionLoaded).toHaveBeenCalledWith(info, 'old', 'old.xrk', 'manual_upload', 'old.xrk'));
   });
 
   it('loads a session with the keyboard', async () => {
@@ -150,6 +150,26 @@ describe('SessionBrowser', () => {
 
     fireEvent.click(within(rows()[1]).getByTitle('Delete'));
     await waitFor(() => expect(deleted).toEqual(['DELETE']));
+  });
+
+  it('opens the export menu upward only when there is no room below it in the list', async () => {
+    let buttonBottom = 0;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const bottom = this.id === 'session-list-scroll' ? 500 : buttonBottom;
+      return { bottom, top: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+    renderBrowser();
+    await screen.findByText('old.xrk');
+    const exportButton = within(rows()[1]).getByTitle('Export');
+
+    buttonBottom = 100;
+    fireEvent.click(exportButton);
+    expect(screen.getByTestId('session-export-menu').dataset.placement).toBe('below');
+
+    fireEvent.click(exportButton);
+    buttonBottom = 460;
+    fireEvent.click(exportButton);
+    expect(screen.getByTestId('session-export-menu').dataset.placement).toBe('above');
   });
 
   it('does not delete when the confirmation is cancelled', async () => {
@@ -198,14 +218,14 @@ describe('SessionBrowser', () => {
     const props = renderBrowser();
 
     expect(await screen.findByText('AiM (EVO5 Logger)')).toBeTruthy();
-    fireEvent.click(screen.getByText('Live'));
+    fireEvent.click(screen.getByText('Views'));
     expect(props.onOpenLive).toHaveBeenCalledWith(device);
   });
 
   it('opens Live without a device when AiM is unreachable', async () => {
     const props = renderBrowser();
     await screen.findByText('old.xrk');
-    fireEvent.click(screen.getByText('Live'));
+    fireEvent.click(screen.getByText('Views'));
     expect(props.onOpenLive).toHaveBeenCalledWith(null);
   });
 
@@ -222,7 +242,7 @@ describe('SessionBrowser', () => {
     routes['/api/aim/sessions'] = () => ({ ok: true, sessions: [] });
     renderBrowser();
     await screen.findByText('old.xrk');
-    fireEvent.click(screen.getByText('Pull from AiM'));
+    fireEvent.click(screen.getByText('Pull'));
     expect(screen.getByText('AiM Device Sessions')).toBeTruthy();
   });
 
@@ -301,8 +321,61 @@ describe('SessionBrowser', () => {
     FakeXHR.last.onload?.();
 
     await waitFor(() =>
-      expect(props.onSessionLoaded).toHaveBeenCalledWith({ durationMs: 5, sessionId: 'fresh-id' }, 'fresh-id', 'fresh.xrk', 'manual_upload'),
+      expect(props.onSessionLoaded).toHaveBeenCalledWith(
+        { durationMs: 5, sessionId: 'fresh-id' },
+        'fresh-id',
+        'fresh.xrk',
+        'manual_upload',
+        'fresh.xrk',
+      ),
     );
     expect(screen.queryByText(/Uploading/)).toBeNull();
+  });
+});
+
+describe('one load at a time', () => {
+  // The backend has a single active session; two loads in flight can pair one
+  // session's metadata with another's channel data.
+  const info = { metadata: {}, channels: [], durationMs: 0, totalSamples: 0, lapCount: 0 };
+
+  it('ignores a second session click until the first load has finished', async () => {
+    let finishFirst!: (v: unknown) => void;
+    const loads: string[] = [];
+    routes['/api/sessions/new/load'] = () => { loads.push('new'); return new Promise(r => { finishFirst = r; }); };
+    routes['/api/sessions/old/load'] = () => { loads.push('old'); return info; };
+    const props = renderBrowser();
+    await screen.findByText('Endurance');
+    const [newest, older] = rows();
+
+    fireEvent.click(newest);
+    fireEvent.click(older);
+    await waitFor(() => expect(loads).toEqual(['new']));
+    expect(older.getAttribute('aria-disabled')).toBe('true');
+
+    finishFirst(info);
+    await waitFor(() => expect(props.onSessionLoaded).toHaveBeenCalledTimes(1));
+    expect(props.onSessionLoaded.mock.calls[0][1]).toBe('new');
+
+    await waitFor(() => expect(older.getAttribute('aria-disabled')).toBe('false'));
+    fireEvent.click(older);
+    await waitFor(() => expect(loads).toEqual(['new', 'old']));
+  });
+
+  it('stays blocked while the app is still building the session, and shows its error', async () => {
+    let failBuild!: (e: Error) => void;
+    routes['/api/sessions/new/load'] = () => info;
+    routes['/api/sessions/old/load'] = () => info;
+    const props = renderBrowser();
+    props.onSessionLoaded.mockReturnValue(new Promise((_, reject) => { failBuild = reject; }));
+    await screen.findByText('Endurance');
+    const [newest, older] = rows();
+
+    fireEvent.click(newest);
+    await waitFor(() => expect(props.onSessionLoaded).toHaveBeenCalledTimes(1));
+    fireEvent.click(older);
+    expect(props.onSessionLoaded).toHaveBeenCalledTimes(1);
+
+    failBuild(new Error('Failed to load session: no channel data'));
+    expect(await screen.findByText(/Failed to load session: no channel data/)).toBeTruthy();
   });
 });

@@ -210,6 +210,11 @@ describe('LiveView', () => {
     expect(screen.getByText('Connecting to UConn-EV at 10.0.0.1…')).toBeTruthy();
   });
 
+  it('is titled Views', () => {
+    render(<LiveView onBack={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Views' })).toBeTruthy();
+  });
+
   it('renders the EV dashboard while streaming and supports pause/resume', () => {
     render(<LiveView onBack={() => {}} />);
     ws().receive({ type: 'connected', device: { ip: '10.0.0.1', model: 'EVO5', serial: '740', vehicle: 'UConn-EV' } });
