@@ -42,6 +42,28 @@ def test_read_xrk_export_bytes_decompresses_xrz(tmp_path: Path):
     assert name == "session.xrk"
 
 
+def test_read_xrk_export_bytes_decompresses_xrz_without_end_of_stream(tmp_path: Path):
+    """AiM loggers write .xrz files that stop after a sync flush, with no final block or checksum."""
+    payload = b"uncompressed-xrk-payload" * 1000
+    compressor = zlib.compressobj()
+    unterminated = compressor.compress(payload) + compressor.flush(zlib.Z_SYNC_FLUSH)
+    xrz = tmp_path / "a_0165.xrz"
+    xrz.write_bytes(unterminated)
+
+    out, name = read_xrk_export_bytes(xrz, "a_0165.xrz")
+
+    assert out == payload
+    assert name == "a_0165.xrk"
+
+
+def test_read_xrk_export_bytes_rejects_xrz_with_no_data(tmp_path: Path):
+    header_only = tmp_path / "empty.xrz"
+    header_only.write_bytes(b"\x78\x9c")
+
+    with pytest.raises(ValueError, match="decompress"):
+        read_xrk_export_bytes(header_only)
+
+
 def test_read_xrk_export_bytes_passes_through_xrk(tmp_path: Path):
     xrk = tmp_path / "session.xrk"
     xrk.write_bytes(b"already-xrk")

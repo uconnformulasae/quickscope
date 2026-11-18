@@ -64,7 +64,21 @@ def read_xrk_export_bytes(
     if not is_xrz:
         return raw, name
 
+    return _decompress_xrz(raw), name
+
+
+def _decompress_xrz(raw: bytes) -> bytes:
+    """Inflate XRZ bytes, tolerating a missing end-of-stream.
+
+    AiM loggers stop writing after a sync flush, so the stream has no final
+    block or Adler-32 trailer; strict ``zlib.decompress`` rejects every such
+    file even though all the data is present. Corrupt data still raises.
+    """
+    inflater = zlib.decompressobj()
     try:
-        return zlib.decompress(raw), name
+        data = inflater.decompress(raw)
     except zlib.error as exc:
         raise ValueError("Failed to decompress XRZ file") from exc
+    if not data:
+        raise ValueError("Failed to decompress XRZ file: no data")
+    return data
