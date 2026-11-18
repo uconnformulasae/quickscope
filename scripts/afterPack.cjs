@@ -23,9 +23,11 @@ exports.default = async function (context) {
     return;
   }
 
-  // If building with notarization or an Apple signing certificate, let electron-builder handle signing
-  if (process.env.NOTARIZE === 'true' || process.env.CSC_LINK || process.env.CSC_NAME) {
-    console.log('[afterPack] Apple signing / notarization active; skipping ad-hoc re-sign.');
+  // Don't key off CSC_LINK/CSC_NAME: CI sets them even for unsigned builds where mac.identity is
+  // null and electron-builder signs nothing. With a real identity, electron-builder re-signs after
+  // this hook, replacing the ad-hoc signature.
+  if (process.env.NOTARIZE === 'true') {
+    console.log('[afterPack] Notarized build; leaving signing to electron-builder.');
     return;
   }
 
