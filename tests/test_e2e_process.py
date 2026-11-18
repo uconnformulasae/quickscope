@@ -48,7 +48,8 @@ class Backend:
         self.proc: subprocess.Popen | None = None
         self.base = f"http://127.0.0.1:{self.port}"
 
-    def start(self) -> None:
+    def start(self, *, like_electron: bool = False) -> None:
+        """``like_electron`` mirrors electron/main.cjs: piped stdin plus QUICKSCOPE_EXIT_WITH_PARENT."""
         env = {
             **os.environ,
             "QUICKSCOPE_HOST": "127.0.0.1",
@@ -56,12 +57,15 @@ class Backend:
             "QUICKSCOPE_DATA_DIR": str(self.data_dir),
             "PYTHONUNBUFFERED": "1",
         }
+        if like_electron:
+            env["QUICKSCOPE_EXIT_WITH_PARENT"] = "1"
         self.log_path = self.data_dir / "backend.log"
         self._log = self.log_path.open("ab")
         self.proc = subprocess.Popen(
             [sys.executable, str(ENTRY)],
             cwd=REPO_ROOT / "backend",
             env=env,
+            stdin=subprocess.PIPE if like_electron else None,
             stdout=self._log,
             stderr=subprocess.STDOUT,
         )
@@ -114,6 +118,17 @@ def test_backend_boots_serves_defaults_and_shuts_down_cleanly(backend):
     assert httpx.get(f"{backend.base}/api/channels").status_code == 400
     assert httpx.get(f"{backend.base}/docs").status_code == 200
     assert backend.stop() in STOP_EXIT_CODES
+
+
+def test_backend_starts_when_launched_like_electron(tmp_path):
+    """Regression: on Windows a blocking stdin read in the parent-watch thread
+    froze startup, so the installed app reported "Backend did not start"."""
+    b = Backend(tmp_path)
+    b.start(like_electron=True)
+    try:
+        assert httpx.get(f"{b.base}/api/health").json() == {"app": "quickscope"}
+    finally:
+        b.stop()
 
 
 def test_two_backends_do_not_share_data(tmp_path):
